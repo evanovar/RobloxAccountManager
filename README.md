@@ -1,15 +1,13 @@
 # 🚀 Roblox Account Manager
 
-A fast, lightweight console-based tool for managing multiple Roblox accounts with **ultra-fast browser detection** and secure cookie extraction.
+A fast, lightweight console tool for managing multiple Roblox accounts with secure cookie extraction.
+Created by evanovar · Contact: Discord (same username as on GitHub).
 
 ## ✨ Features
 
-- **⚡ Ultra-Fast Detection** - 25ms login detection speed
-- **🔒 Secure Storage** - Local JSON storage of account credentials
 - **🎮 Game Launching** - Direct game launching with specific Game IDs
 - **✅ Account Validation** - Check account status and validity
 - **🖥️ Simple Console Interface** - Clean, easy-to-use command-line interface
-- **🚀 Instant Browser Closure** - Browser closes immediately after login detection
 
 ## 🛠️ Installation
 
@@ -54,7 +52,7 @@ The following Python packages are required:
 1. **Add Account**: Select "Add new account" from the menu
 2. **Browser Opens**: A clean Chrome browser window opens to Roblox login page
 3. **Login**: Log into your Roblox account normally
-4. **⚡ Instant Detection**: Tool detects successful login in **25ms**
+4. **⚡ Instant Detection**: Tool detects successful login
 5. **🚀 Auto-Close**: Browser closes immediately after detection
 6. **💾 Saved**: Username and authentication cookie are saved locally
 
@@ -175,3 +173,4 @@ Feel free to submit issues, fork the repository, and create pull requests for an
 ## Disclaimer
 
 This tool is for educational and personal use only. Always comply with Roblox's Terms of Service. The developers are not responsible for any misuse of this tool.
+
