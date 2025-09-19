@@ -52,7 +52,7 @@ The following Python packages are required:
 1. **Add Account**: Select "Add new account" from the menu
 2. **Browser Opens**: A clean Chrome browser window opens to Roblox login page
 3. **Login**: Log into your Roblox account normally
-4. **⚡ Instant Detection**: Tool detects successful login
+4. **⚡ Login Detection**: Tool detects successful login
 5. **🚀 Auto-Close**: Browser closes immediately after detection
 6. **💾 Saved**: Username and authentication cookie are saved locally
 
@@ -65,6 +65,14 @@ The following Python packages are required:
 - **5. Launch Roblox game** - Launch specific games or Roblox directly
 - **6. Exit** - Close the application
 
+### Adding an Account
+
+1. Select option 1 from the main menu
+2. Chrome browser opens automatically with optimized performance
+3. Log into your Roblox account normally
+4. Browser automatically closes in **25ms** after login detection
+5. Account saved with username and authentication cookie
+
 ## ⚠️ Disclaimer
 
 This tool is for educational purposes only. Users are responsible for complying with Roblox's Terms of Service. The developers are not responsible for any consequences resulting from the use of this tool.
@@ -76,31 +84,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project is open source and available under the [MIT License](LICENSE).
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-- **ChromeDriver not found**: The tool automatically downloads ChromeDriver, ensure you have an internet connection
-- **Browser doesn't open**: Make sure Chrome is installed and accessible
-- **Login not detected**: Ensure you complete the login process fully before the browser closes
-
-### Support
-
-If you encounter any issues, please open an issue on GitHub with:
-- Your operating system
-- Python version
-- Error message (if any)
-- Steps to reproduce the problem
-5. **Exit**: Close the application
-
-### Adding an Account
-
-1. Select option 1 from the main menu
-2. Chrome browser opens automatically with optimized performance
-3. Log into your Roblox account normally
-4. Browser automatically closes in **25ms** after login detection
-5. Account saved with username and authentication cookie
 
 ## Security Notes
 
