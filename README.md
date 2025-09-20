@@ -20,8 +20,8 @@ Created by evanovar · Contact: Discord (same username as on GitHub).
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/evanovar/roblox-account-manager.git
-   cd roblox-account-manager
+   git clone https://github.com/evanovar/RobloxAccountManagerConsole
+   cd RobloxAccountManagerConsole
    ```
 
 2. **Install dependencies**
