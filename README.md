@@ -148,12 +148,3 @@ Saved accounts are stored in this format:
   }
 }
 ```
-
-## Contributing
-
-Feel free to submit issues, fork the repository, and create pull requests for any improvements.
-
-## Disclaimer
-
-This tool is for educational and personal use only. Always comply with Roblox's Terms of Service. The developers are not responsible for any misuse of this tool.
-
