@@ -1,5 +1,7 @@
 # Roblox Account Manager Console
 
 
-README:
+Read about this program:
 https://github.com/evanovar/RobloxAccountManagerConsole/blob/da6ba96a509aa9c7464f00d79c4977a112a090a0/README.md
+
+I messed up and I have no idea how to reverse a commit in phone
