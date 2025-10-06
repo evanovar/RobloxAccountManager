@@ -1,7 +1,9 @@
 # 🚀 Roblox Account Manager
 
 A fast, lightweight console tool for managing multiple Roblox accounts with secure cookie extraction.
-Created by evanovar · Contact: Discord (same username as on GitHub).
+Created by evanovar
+Contact: Discord (same username as on GitHub).
+⭐ If you like this project, please consider starring the repository! ⭐
 
 ## ✨ Features
 
