@@ -20,7 +20,8 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 1. Go to [Releases](https://github.com/evanovar/RobloxAccountManagerConsole/releases)
 2. Download `RobloxAccountManager.exe` from the latest release
-3. Double-click to run - that's it!
+3. Put it in a folder
+4. Double-click to run - that's it!
 
 **Requirements:**
 - **Google Chrome browser**
