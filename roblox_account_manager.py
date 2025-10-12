@@ -6,6 +6,10 @@ import subprocess
 import threading
 import random
 import warnings
+import ctypes
+import base64
+import hashlib
+import platform
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -16,13 +20,134 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 import requests
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
 
 warnings.filterwarnings("ignore")
 os.environ['WDM_LOG_LEVEL'] = '0'
 
+ctypes.windll.kernel32.SetConsoleTitleW("Roblox Account Manager")
+
+class HardwareEncryption:
+    def __init__(self):
+        self.machine_id = self._get_machine_id()
+        self.key = self._derive_key_from_machine_id()
+    
+    def _get_machine_id(self):
+        identifiers = []
+        
+        try:
+            if platform.system() == "Windows":
+                result = subprocess.check_output("wmic csproduct get uuid", shell=True)
+                uuid = result.decode().split('\n')[1].strip()
+                identifiers.append(uuid)
+                
+                result = subprocess.check_output("wmic cpu get processorid", shell=True)
+                cpu_id = result.decode().split('\n')[1].strip()
+                identifiers.append(cpu_id)
+                
+                result = subprocess.check_output("wmic baseboard get serialnumber", shell=True)
+                board_serial = result.decode().split('\n')[1].strip()
+                identifiers.append(board_serial)
+            else:
+                identifiers.append(platform.node())
+                identifiers.append(str(os.getuid()) if hasattr(os, 'getuid') else "0")
+        except:
+            identifiers.append(platform.node())
+            identifiers.append(platform.machine())
+        
+        machine_string = "-".join(identifiers)
+        return hashlib.sha256(machine_string.encode()).hexdigest()
+    
+    def _derive_key_from_machine_id(self):
+        salt = b'roblox_account_manager_salt_v1'
+        key = PBKDF2(self.machine_id, salt, dkLen=32, count=100000)
+        return key
+    
+    def encrypt_data(self, data):
+        if isinstance(data, dict):
+            data = json.dumps(data, indent=2, ensure_ascii=False)
+        
+        data_bytes = data.encode('utf-8')
+        
+        cipher = AES.new(self.key, AES.MODE_GCM)
+        nonce = cipher.nonce
+        
+        ciphertext, tag = cipher.encrypt_and_digest(data_bytes)
+        
+        encrypted_package = {
+            'nonce': base64.b64encode(nonce).decode('utf-8'),
+            'tag': base64.b64encode(tag).decode('utf-8'),
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8')
+        }
+        
+        return encrypted_package
+    
+    def decrypt_data(self, encrypted_package):
+        try:
+            nonce = base64.b64decode(encrypted_package['nonce'])
+            tag = base64.b64decode(encrypted_package['tag'])
+            ciphertext = base64.b64decode(encrypted_package['ciphertext'])
+            
+            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+            
+            data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+            
+            data_string = data_bytes.decode('utf-8')
+            
+            try:
+                return json.loads(data_string)
+            except:
+                return data_string
+                
+        except Exception as e:
+            raise Exception(f"Decryption failed. This file may have been encrypted on a different machine. Error: {str(e)}")
+
+class EncryptionConfig:
+    def __init__(self, config_file="encryption_config.json"):
+        self.config_file = config_file
+        self.config = self._load_config()
+    
+    def _load_config(self):
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def save_config(self):
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            json.dump(self.config, f, indent=2, ensure_ascii=False)
+    
+    def is_encryption_enabled(self):
+        return self.config.get('encryption_enabled', False)
+    
+    def get_encryption_method(self):
+        return self.config.get('encryption_method', None)
+    
+    def enable_hardware_encryption(self):
+        self.config['encryption_enabled'] = True
+        self.config['encryption_method'] = 'hardware'
+        self.save_config()
+    
+    def disable_encryption(self):
+        self.config['encryption_enabled'] = False
+        self.config['encryption_method'] = None
+        self.save_config()
+
 class RobloxAccountManager:
     def __init__(self):
         self.accounts_file = "saved_accounts.json"
+        self.encryption_config = EncryptionConfig()
+        self.encryptor = None
+        
+        if self.encryption_config.is_encryption_enabled():
+            if self.encryption_config.get_encryption_method() == 'hardware':
+                self.encryptor = HardwareEncryption()
+        
         self.accounts = self.load_accounts()
         self.temp_profile_dir = None
         
@@ -31,15 +156,35 @@ class RobloxAccountManager:
         if os.path.exists(self.accounts_file):
             try:
                 with open(self.accounts_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
+                    data = json.load(f)
+                
+                if self.encryptor and isinstance(data, dict) and data.get('encrypted'):
+                    try:
+                        decrypted_data = self.encryptor.decrypt_data(data['data'])
+                        return decrypted_data
+                    except Exception as e:
+                        print(f"⚠ Decryption failed: {e}")
+                        print("⚠ Your accounts file may be corrupted or from a different machine.")
+                        return {}
+                
+                return data if isinstance(data, dict) else {}
+            except Exception as e:
+                print(f"⚠ Error loading accounts: {e}")
                 return {}
         return {}
     
     def save_accounts(self):
         """Save accounts to JSON file"""
         with open(self.accounts_file, 'w', encoding='utf-8') as f:
-            json.dump(self.accounts, f, indent=2, ensure_ascii=False)
+            if self.encryptor:
+                encrypted_package = self.encryptor.encrypt_data(self.accounts)
+                encrypted_data = {
+                    'encrypted': True,
+                    'data': encrypted_package
+                }
+                json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
+            else:
+                json.dump(self.accounts, f, indent=2, ensure_ascii=False)
     
     def create_temp_profile(self):
         """Create a temporary Chrome profile directory"""
@@ -540,12 +685,60 @@ class RobloxAccountManager:
             print(f"{'='*60}")
             return False
 
+def setup_encryption():
+    """First-time encryption setup"""
+    encryption_config = EncryptionConfig()
+    
+    if not encryption_config.is_encryption_enabled():
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print("="*60)
+        print("🔐 FIRST-TIME SETUP: ENCRYPTION CONFIGURATION")
+        print("="*60)
+        print()
+        print("To protect your account data, please choose an encryption method:")
+        print()
+        print("1. Default Encryption (Hardware-Based)")
+        print("   • Automatic encryption using your computer's hardware")
+        print("   • No password needed")
+        print("   • Data ONLY works on THIS computer")
+        print("   • Cannot be transferred or backed up to cloud")
+        print()
+        print("2. Password Encryption (Coming Soon)")
+        print("   • TBA - Under development")
+        print()
+        print("-" * 60)
+        
+        while True:
+            choice = input("Select encryption method (1): ").strip()
+            
+            if choice == '1':
+                encryption_config.enable_hardware_encryption()
+                print()
+                print("✅ Hardware-based encryption enabled!")
+                print("🔒 Your accounts will be encrypted automatically.")
+                print()
+                input("Press Enter to continue...")
+                os.system('cls' if os.name == 'nt' else 'clear')
+                break
+            elif choice == '2':
+                print("⚠ Password encryption is not yet available. Please select option 1.")
+            else:
+                print("⚠ Invalid choice. Please enter 1.")
+
 def main():
+    setup_encryption()
+    
     manager = RobloxAccountManager()
+    
+    encryption_status = ""
+    if manager.encryption_config.is_encryption_enabled():
+        method = manager.encryption_config.get_encryption_method()
+        if method == 'hardware':
+            encryption_status = " 🔒 [Hardware Encrypted]"
     
     while True:
         print("\n" + "="*50)
-        print("🚀 ROBLOX ACCOUNT MANAGER")
+        print(f"🚀 ROBLOX ACCOUNT MANAGER{encryption_status}")
         print("="*50)
         print("1. Add new account")
         print("2. List saved accounts")
