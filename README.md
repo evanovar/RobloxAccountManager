@@ -60,8 +60,41 @@ The following Python packages are required:
 - `selenium` - Browser automation
 - `requests` - HTTP requests for account validation  
 - `webdriver-manager` - Automatic ChromeDriver management
-- `pycryptodome` - Cookie decryption
+- `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows-specific functionality
+
+## 🔐 Encryption & Security
+
+### First-Time Setup
+
+On first launch, you'll be prompted to choose an encryption method to protect your account data:
+
+**1. Default Encryption (Hardware-Based)** ✅ Available Now
+- ✅ Automatic encryption using your computer's unique hardware ID
+- ✅ No passwords to remember
+- ✅ Zero user interaction needed after setup
+- ⚠️ **Data ONLY works on THIS computer**
+- ⚠️ **Cannot transfer to another machine or backup to cloud**
+- ⚠️ **Hardware changes may make data unrecoverable**
+
+**2. Password Encryption** 🚧 Coming Soon
+- Under development
+- Will support cloud backup and multi-device sync
+
+### How It Works
+
+1. **First Launch**: Choose encryption method (currently only Hardware-Based available)
+2. **Automatic Protection**: All account data in `saved_accounts.json` is encrypted
+3. **Transparent Usage**: Encryption/decryption happens automatically in the background
+4. **Status Display**: Main menu shows `🔒 [Hardware Encrypted]` when active
+
+### Technical Details
+
+- Encryption uses **AES-256-GCM** (military-grade encryption)
+- Hardware fingerprint derived from CPU ID, UUID, and motherboard serial
+- Key derivation uses **PBKDF2** with 100,000 iterations
+- Even if someone steals `saved_accounts.json`, they cannot decrypt it without your exact hardware
+- **Warning**: Reinstalling Windows or changing hardware may result in data loss
 
 ## 🎯 Usage
 
@@ -103,13 +136,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is open source and available under the [MIT License](LICENSE).
 
-## Security Notes
-
-- Accounts are stored locally in `saved_accounts.json`
-- Cookies are stored in plain text (i will add encrypt feature later)
-- Temporary browser profiles are automatically cleaned up
-- No data is sent to external servers
-
 ## Troubleshooting
 
 ### Browser Won't Open
@@ -126,12 +152,11 @@ This project is open source and available under the [MIT License](LICENSE).
 - Install all requirements: `pip install -r requirements.txt`
 - Ensure you're using Python 3.7 or newer
 
-## Security Notes
-
-- Accounts are stored locally in `saved_accounts.json`
-- Cookies are stored in plain text
-- Temporary browser profiles are automatically cleaned up
-- No data is sent to external servers
+### Encryption/Decryption Issues
+- If you get "Decryption failed" error, your data may have been encrypted on a different computer
+- Hardware-based encryption is tied to your specific machine
+- Reinstalling Windows or changing hardware (CPU, motherboard) will break decryption
+- **There is no recovery method** - always backup your unencrypted data before major system changes
 
 ## Advanced Usage
 
@@ -156,7 +181,7 @@ success = manager.add_account()
 
 ### Cookie Format
 
-Saved accounts are stored in this format:
+**Unencrypted** (if encryption is disabled):
 ```json
 {
   "username": {
@@ -166,3 +191,24 @@ Saved accounts are stored in this format:
   }
 }
 ```
+
+**Encrypted** (with hardware-based encryption):
+```json
+{
+  "encrypted": true,
+  "data": {
+    "nonce": "base64_encoded_nonce",
+    "tag": "base64_encoded_tag",
+    "ciphertext": "base64_encoded_encrypted_data"
+  }
+}
+```
+
+## 🛡️ Security Best Practices
+
+- ✅ **Always use encryption** - Choose hardware-based encryption on first launch
+- ✅ **Keep your system secure** - Use Windows Defender and keep it updated
+- ✅ **Don't share the EXE or files** - Your encrypted data is tied to your machine
+- ⚠️ **Backup before hardware changes** - Export accounts before upgrading PC
+- ⚠️ **Never share `saved_accounts.json`** - Even encrypted, it's tied to your hardware
+- ❌ **Don't use on shared computers** - Each user should have their own installation
