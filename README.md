@@ -53,8 +53,6 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
    python roblox_account_manager.py
    ```
    
-   Or on Windows, double-click `run_account_manager.bat`
-
 ## 📋 Requirements
 
 The following Python packages are required:
