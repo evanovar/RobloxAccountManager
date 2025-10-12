@@ -88,14 +88,6 @@ On first launch, you'll be prompted to choose an encryption method to protect yo
 3. **Transparent Usage**: Encryption/decryption happens automatically in the background
 4. **Status Display**: Main menu shows `🔒 [Hardware Encrypted]` when active
 
-### Technical Details
-
-- Encryption uses **AES-256-GCM** (military-grade encryption)
-- Hardware fingerprint derived from CPU ID, UUID, and motherboard serial
-- Key derivation uses **PBKDF2** with 100,000 iterations
-- Even if someone steals `saved_accounts.json`, they cannot decrypt it without your exact hardware
-- **Warning**: Reinstalling Windows or changing hardware may result in data loss
-
 ## 🎯 Usage
 
 ### How It Works
@@ -197,9 +189,9 @@ success = manager.add_account()
 {
   "encrypted": true,
   "data": {
-    "nonce": "base64_encoded_nonce",
-    "tag": "base64_encoded_tag",
-    "ciphertext": "base64_encoded_encrypted_data"
+    "nonce": "nonce",
+    "tag": "tag",
+    "ciphertext": "encrypted_data"
   }
 }
 ```
