@@ -106,7 +106,7 @@ This project is open source and available under the [MIT License](LICENSE).
 ## Security Notes
 
 - Accounts are stored locally in `saved_accounts.json`
-- Cookies are stored in plain text (consider encrypting for production use)
+- Cookies are stored in plain text (i will add encrypt feature later)
 - Temporary browser profiles are automatically cleaned up
 - No data is sent to external servers
 
