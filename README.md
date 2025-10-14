@@ -77,7 +77,7 @@ On first launch, you'll be prompted to choose an encryption method to protect yo
 - ⚠️ **Data ONLY works on THIS computer**
 - ⚠️ **Cannot transfer to another machine or backup to cloud**
 - ⚠️ **Hardware changes may make data unrecoverable**
-- 
+  
 **2. Password Encryption (Reccomended, Portable)**
 - ✅ Encrypt with a password you create
 - ✅ **Can backup to cloud** (Google Drive, Dropbox, OneDrive, etc.)
