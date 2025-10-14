@@ -10,6 +10,7 @@ import ctypes
 import base64
 import hashlib
 import platform
+import msvcrt
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -28,6 +29,34 @@ warnings.filterwarnings("ignore")
 os.environ['WDM_LOG_LEVEL'] = '0'
 
 ctypes.windll.kernel32.SetConsoleTitleW("Roblox Account Manager")
+
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RESET = '\033[0m'
+
+def colored_text(text, color):
+    return f"{color}{text}{Colors.RESET}"
+
+def get_password_with_asterisks(prompt="Enter password: "):
+    print(prompt, end='', flush=True)
+    password = ""
+    while True:
+        char = msvcrt.getch()
+        if char in (b'\r', b'\n'):
+            print()
+            break
+        elif char == b'\x08':
+            if len(password) > 0:
+                password = password[:-1]
+                print('\b \b', end='', flush=True)
+        elif char == b'\x03':
+            raise KeyboardInterrupt
+        else:
+            password += char.decode('utf-8', errors='ignore')
+            print('*', end='', flush=True)
+    return password
 
 class HardwareEncryption:
     def __init__(self):
@@ -104,6 +133,64 @@ class HardwareEncryption:
         except Exception as e:
             raise Exception(f"Decryption failed. This file may have been encrypted on a different machine. Error: {str(e)}")
 
+class PasswordEncryption:
+    def __init__(self, password, salt=None):
+        if salt is None:
+            self.salt = get_random_bytes(32)
+        else:
+            if isinstance(salt, str):
+                self.salt = base64.b64decode(salt)
+            else:
+                self.salt = salt
+        
+        self.key = self._derive_key_from_password(password)
+    
+    def _derive_key_from_password(self, password):
+        key = PBKDF2(password, self.salt, dkLen=32, count=100000)
+        return key
+    
+    def get_salt_b64(self):
+        return base64.b64encode(self.salt).decode('utf-8')
+    
+    def encrypt_data(self, data):
+        if isinstance(data, dict):
+            data = json.dumps(data, indent=2, ensure_ascii=False)
+        
+        data_bytes = data.encode('utf-8')
+        
+        cipher = AES.new(self.key, AES.MODE_GCM)
+        nonce = cipher.nonce
+        
+        ciphertext, tag = cipher.encrypt_and_digest(data_bytes)
+        
+        encrypted_package = {
+            'nonce': base64.b64encode(nonce).decode('utf-8'),
+            'tag': base64.b64encode(tag).decode('utf-8'),
+            'ciphertext': base64.b64encode(ciphertext).decode('utf-8')
+        }
+        
+        return encrypted_package
+    
+    def decrypt_data(self, encrypted_package):
+        try:
+            nonce = base64.b64decode(encrypted_package['nonce'])
+            tag = base64.b64decode(encrypted_package['tag'])
+            ciphertext = base64.b64decode(encrypted_package['ciphertext'])
+            
+            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+            
+            data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+            
+            data_string = data_bytes.decode('utf-8')
+            
+            try:
+                return json.loads(data_string)
+            except:
+                return data_string
+                
+        except Exception as e:
+            raise Exception(f"Decryption failed. Password may be incorrect. Error: {str(e)}")
+
 class EncryptionConfig:
     def __init__(self, config_file="encryption_config.json"):
         self.config_file = config_file
@@ -128,25 +215,53 @@ class EncryptionConfig:
     def get_encryption_method(self):
         return self.config.get('encryption_method', None)
     
+    def get_salt(self):
+        return self.config.get('salt', None)
+    
+    def get_password_hash(self):
+        return self.config.get('password_hash', None)
+    
     def enable_hardware_encryption(self):
         self.config['encryption_enabled'] = True
         self.config['encryption_method'] = 'hardware'
         self.save_config()
     
+    def enable_password_encryption(self, salt, password_hash):
+        self.config['encryption_enabled'] = True
+        self.config['encryption_method'] = 'password'
+        self.config['salt'] = salt
+        self.config['password_hash'] = password_hash
+        self.save_config()
+    
     def disable_encryption(self):
         self.config['encryption_enabled'] = False
         self.config['encryption_method'] = None
+        if 'salt' in self.config:
+            del self.config['salt']
         self.save_config()
 
 class RobloxAccountManager:
-    def __init__(self):
+    def __init__(self, password=None):
         self.accounts_file = "saved_accounts.json"
         self.encryption_config = EncryptionConfig()
         self.encryptor = None
         
         if self.encryption_config.is_encryption_enabled():
-            if self.encryption_config.get_encryption_method() == 'hardware':
+            method = self.encryption_config.get_encryption_method()
+            if method == 'hardware':
                 self.encryptor = HardwareEncryption()
+            elif method == 'password':
+                if password is None:
+                    raise ValueError("Password required for password-based encryption")
+                
+                stored_hash = self.encryption_config.get_password_hash()
+                if stored_hash:
+                    entered_hash = hashlib.sha256(password.encode()).hexdigest()
+                    if entered_hash != stored_hash:
+                        raise ValueError("Invalid password")
+                
+                salt = self.encryption_config.get_salt()
+                self.encryptor = PasswordEncryption(password, salt)
         
         self.accounts = self.load_accounts()
         self.temp_profile_dir = None
@@ -163,13 +278,13 @@ class RobloxAccountManager:
                         decrypted_data = self.encryptor.decrypt_data(data['data'])
                         return decrypted_data
                     except Exception as e:
-                        print(f"⚠ Decryption failed: {e}")
-                        print("⚠ Your accounts file may be corrupted or from a different machine.")
-                        return {}
+                        raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
                 
                 return data if isinstance(data, dict) else {}
+            except ValueError:
+                raise
             except Exception as e:
-                print(f"⚠ Error loading accounts: {e}")
+                print(colored_text(f"[WARNING] Error loading accounts: {e}", Colors.YELLOW))
                 return {}
         return {}
     
@@ -333,9 +448,9 @@ class RobloxAccountManager:
         
         try:
             driver.execute_script(detector_script)
-            print("✅ Detection script injected successfully")
+            print(colored_text("[SUCCESS] Detection script injected successfully", Colors.GREEN))
         except Exception as e:
-            print(f"⚠ Warning: Could not inject detection script: {e}")
+            print(colored_text(f"[WARNING] Warning: Could not inject detection script: {e}", Colors.YELLOW))
         
         start_time = time.time()
         last_debug_time = 0
@@ -346,7 +461,7 @@ class RobloxAccountManager:
                 
                 if result and result.get('detected'):
                     method = result.get('method', 'url_only')
-                    print(f"✅ LOGIN DETECTED! Method: {method} - Closing browser instantly...")
+                    print(colored_text(f"[SUCCESS] LOGIN DETECTED! Method: {method} - Closing browser instantly...", Colors.GREEN))
                     return True
                 
                 current_time = time.time()
@@ -366,7 +481,7 @@ class RobloxAccountManager:
                             '/discover' in current_url or '/friends' in current_url or
                             '/profile' in current_url or '/groups' in current_url or
                             '/develop' in current_url or '/create' in current_url) and '/login' not in current_url:
-                            print("✅ LOGIN DETECTED via manual URL check!")
+                            print(colored_text("[SUCCESS] LOGIN DETECTED via manual URL check!", Colors.GREEN))
                             return True
                                 
                     except Exception as e:
@@ -377,7 +492,7 @@ class RobloxAccountManager:
             except WebDriverException:
                 return False
         
-        print("⚠ Login timeout. Please try again.")
+        print(colored_text("[WARNING] Login timeout. Please try again.", Colors.YELLOW))
         return False
     
     def extract_user_info(self, driver):
@@ -399,7 +514,7 @@ class RobloxAccountManager:
                 result = driver.execute_script("return window.ultraFastDetection;")
                 if result and result.get('username'):
                     username = result.get('username')
-                    print(f"✅ Username detected from page: {username}")
+                    print(colored_text(f"[SUCCESS] Username detected from page: {username}", Colors.GREEN))
             except:
                 pass
             
@@ -498,7 +613,7 @@ class RobloxAccountManager:
     def launch_roblox(self, username, game_id, private_server_id=""):
         """Launch Roblox game with specified account"""
         if username not in self.accounts:
-            print(f"✗ Account '{username}' not found")
+            print(colored_text(f"[ERROR] Account '{username}' not found", Colors.RED))
             return False
         
         cookie = self.accounts[username]['cookie']
@@ -507,10 +622,10 @@ class RobloxAccountManager:
         auth_ticket = self.get_auth_ticket(cookie)
         
         if not auth_ticket:
-            print("✗ Failed to get authentication ticket")
+            print(colored_text("[ERROR] Failed to get authentication ticket", Colors.RED))
             return False
         
-        print(f"✅ Got authentication ticket!")
+        print(colored_text("[SUCCESS] Got authentication ticket!", Colors.GREEN))
         
         browser_tracker_id = random.randint(55393295400, 55393295500)
         launch_time = int(time.time() * 1000)
@@ -540,10 +655,10 @@ class RobloxAccountManager:
         
         try:
             os.system(f'start "" "{url}"')
-            print("✅ Roblox launched successfully!")
+            print(colored_text("[SUCCESS] Roblox launched successfully!", Colors.GREEN))
             return True
         except Exception as e:
-            print(f"✗ Failed to launch Roblox: {e}")
+            print(colored_text(f"[ERROR] Failed to launch Roblox: {e}", Colors.RED))
             return False
     
     def add_account(self):
@@ -567,17 +682,17 @@ class RobloxAccountManager:
                     }
                     self.save_accounts()
                     
-                    print(f"✓ Successfully added account: {username}")
+                    print(colored_text(f"[SUCCESS] Successfully added account: {username}", Colors.GREEN))
                     return True
                 else:
-                    print("✗ Failed to extract account information")
+                    print(colored_text("[ERROR] Failed to extract account information", Colors.RED))
                     return False
             else:
-                print("✗ Login was not completed")
+                print(colored_text("[ERROR] Login was not completed", Colors.RED))
                 return False
                 
         except Exception as e:
-            print(f"Error during account addition: {e}")
+            print(colored_text(f"[ERROR] Error during account addition: {e}", Colors.RED))
             return False
         finally:
             try:
@@ -603,10 +718,10 @@ class RobloxAccountManager:
         if username in self.accounts:
             del self.accounts[username]
             self.save_accounts()
-            print(f"✓ Deleted account: {username}")
+            print(colored_text(f"[SUCCESS] Deleted account: {username}", Colors.GREEN))
             return True
         else:
-            print(f"✗ Account '{username}' not found")
+            print(colored_text(f"[ERROR] Account '{username}' not found", Colors.RED))
             return False
     
     def get_account_cookie(self, username):
@@ -619,7 +734,7 @@ class RobloxAccountManager:
         """Validate if an account's cookie is still valid and show detailed token info"""
         cookie = self.get_account_cookie(username)
         if not cookie:
-            print(f"✗ Account '{username}' not found")
+            print(colored_text(f"[ERROR] Account '{username}' not found", Colors.RED))
             return False
         
         try:
@@ -703,38 +818,132 @@ def setup_encryption():
         print("   • Data ONLY works on THIS computer")
         print("   • Cannot be transferred or backed up to cloud")
         print()
-        print("2. Password Encryption (Coming Soon)")
-        print("   • TBA - Under development")
+        print("2. Password Encryption (Recommended, Portable)")
+        print("   • Encrypt with a password you create")
+        print("   • Can backup to cloud (Google Drive, Dropbox, etc.)")
+        print("   • Works on any computer with the password")
+        print("   • MUST remember your password - no recovery!")
         print()
         print("-" * 60)
         
         while True:
-            choice = input("Select encryption method (1): ").strip()
+            choice = input("Select encryption method (1 or 2): ").strip()
             
             if choice == '1':
                 encryption_config.enable_hardware_encryption()
                 print()
-                print("✅ Hardware-based encryption enabled!")
+                print(colored_text("[SUCCESS] Hardware-based encryption enabled!", Colors.GREEN))
                 print("🔒 Your accounts will be encrypted automatically.")
                 print()
                 input("Press Enter to continue...")
                 os.system('cls' if os.name == 'nt' else 'clear')
-                break
+                return None
+                
             elif choice == '2':
-                print("⚠ Password encryption is not yet available. Please select option 1.")
+                os.system('cls' if os.name == 'nt' else 'clear')
+                print("="*60)
+                print("🔐 PASSWORD ENCRYPTION SETUP")
+                print("="*60)
+                print()
+                print(colored_text("[WARNING] IMPORTANT WARNING", Colors.YELLOW))
+                print("PLEASE SAVE YOUR PASSWORD. DO NOT FORGET IT!")
+                print("There is NO password recovery method.")
+                print("Lost password = permanent data loss!")
+                print()
+                
+                while True:
+                    try:
+                        password1 = get_password_with_asterisks("Enter your password: ")
+                    except KeyboardInterrupt:
+                        print()
+                        return setup_encryption()
+                    
+                    if len(password1) < 8:
+                        print(colored_text("[WARNING] Password must be at least 8 characters long.", Colors.YELLOW))
+                        print()
+                        continue
+                    
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    print("="*60)
+                    print("🔐 PASSWORD ENCRYPTION SETUP")
+                    print("="*60)
+                    print()
+                    
+                    try:
+                        password2 = get_password_with_asterisks("Confirm your password: ")
+                    except KeyboardInterrupt:
+                        print()
+                        return setup_encryption()
+                    
+                    if password1 == password2:
+                        temp_encryptor = PasswordEncryption(password1)
+                        salt_b64 = temp_encryptor.get_salt_b64()
+                        password_hash = hashlib.sha256(password1.encode()).hexdigest()
+                        encryption_config.enable_password_encryption(salt_b64, password_hash)
+                        
+                        os.system('cls' if os.name == 'nt' else 'clear')
+                        print()
+                        print(colored_text("[SUCCESS] Password encryption enabled successfully!", Colors.GREEN))
+                        print("🔒 Your accounts will be encrypted with your password.")
+                        print()
+                        print(colored_text("[WARNING] Remember: Your password is NOT stored anywhere.", Colors.YELLOW))
+                        print("   You will need to enter it every time you start the app.")
+                        print()
+                        input("Press Enter to continue...")
+                        os.system('cls' if os.name == 'nt' else 'clear')
+                        return password1
+                    else:
+                        os.system('cls' if os.name == 'nt' else 'clear')
+                        print()
+                        print(colored_text("[ERROR] Passwords do not match!", Colors.RED))
+                        print(colored_text("[WARNING] Returning to encryption setup...", Colors.YELLOW))
+                        print()
+                        input("Press Enter to continue...")
+                        return setup_encryption()
+                        
             else:
-                print("⚠ Invalid choice. Please enter 1.")
+                print(colored_text("[WARNING] Invalid choice. Please enter 1 or 2.", Colors.YELLOW))
 
 def main():
-    setup_encryption()
+    password = setup_encryption()
     
-    manager = RobloxAccountManager()
+    encryption_config = EncryptionConfig()
+    
+    if encryption_config.is_encryption_enabled() and encryption_config.get_encryption_method() == 'password':
+        if password is None:
+            print()
+            print("🔐 Password-encrypted accounts detected")
+            print()
+            try:
+                password = get_password_with_asterisks("Enter your password to unlock: ")
+            except KeyboardInterrupt:
+                print()
+                print(colored_text("[ERROR] Cancelled by user", Colors.RED))
+                return
+            print()
+    
+    try:
+        manager = RobloxAccountManager(password=password)
+    except ValueError as e:
+        print()
+        print(colored_text("[ERROR] Password is invalid. Please try again.", Colors.RED))
+        print()
+        input("Press Enter to exit...")
+        return
+    except Exception as e:
+        print()
+        print(colored_text(f"[ERROR] Failed to initialize: {e}", Colors.RED))
+        print()
+        input("Press Enter to exit...")
+        return
     
     encryption_status = ""
     if manager.encryption_config.is_encryption_enabled():
         method = manager.encryption_config.get_encryption_method()
         if method == 'hardware':
             encryption_status = " 🔒 [Hardware Encrypted]"
+        elif method == 'password':
+            encryption_status = " 🔐 [Password Encrypted]"
     
     while True:
         print("\n" + "="*50)
