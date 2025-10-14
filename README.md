@@ -207,24 +207,3 @@ A: Your saved cookie will become invalid. You'll need to delete the old account 
 
 **Q: When are you gonna develop a UI version?**  
 A: Developing a UI version is hard, especially for me. If this repository manages to get enough stars and enough attention, I might consider adding a UI version.
-
-## Advanced Usage
-
-### Programmatic Access
-
-You can use the `RobloxAccountManager` class in your own scripts:
-
-```python
-from roblox_account_manager import RobloxAccountManager
-
-manager = RobloxAccountManager()
-
-# Get a saved cookie
-cookie = manager.get_account_cookie("username")
-
-# Validate an account
-is_valid = manager.validate_account("username")
-
-# Add account programmatically
-success = manager.add_account()
-```
