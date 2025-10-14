@@ -4,7 +4,8 @@ A fast, lightweight console tool for managing multiple Roblox accounts with secu
 Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
-<img width="1105" height="623" alt="image" src="https://github.com/user-attachments/assets/659feef4-0a41-4dc7-95d3-eaa573d90334" />
+<img width="1108" height="616" alt="image" src="https://github.com/user-attachments/assets/c638d36b-671c-4b6b-a023-a2f79c075612" />
+
 
 ## ✨ Features
 
