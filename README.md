@@ -168,7 +168,7 @@ A: No! The standalone EXE includes everything you need. Just download and run.
 A: Currently, this tool is optimized for Windows only. Some features (like asterisk password input) use Windows-specific modules (`msvcrt`).
 
 **Q: Will you add Multi Instance Support?**  
-A: No. Developing Multi Instance is hard, and also breaks Roblox's TOS
+A: I’ll add it if I figure out how to make it work. If I can’t, then probably not.
 
 ### Encryption Questions
 
