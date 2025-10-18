@@ -376,7 +376,7 @@ class RobloxAccountManager:
         except Exception as e:
             if 'original_stderr' in locals():
                 sys.stderr = original_stderr
-            print(f"Error setting up Chrome driver: {e}")
+            print(colored_text(f"Error setting up Chrome driver: {e}", Colors.RED))
             print("Please make sure Google Chrome is installed on your system")
             return None
     
@@ -485,7 +485,7 @@ class RobloxAccountManager:
                             return True
                                 
                     except Exception as e:
-                        print(f"   Debug error: {e}")
+                        print(colored_text(f"   Debug error: {e}", Colors.RED))
                 
                 time.sleep(0.025)
                 
@@ -549,7 +549,7 @@ class RobloxAccountManager:
             return username, roblosecurity_cookie
             
         except Exception as e:
-            print(f"Error extracting user info: {e}")
+            print(colored_text(f"Error extracting user info: {e}", Colors.RED))
             return None, None
     
     def get_username_from_api(self, roblosecurity_cookie):
@@ -570,7 +570,7 @@ class RobloxAccountManager:
                 return user_data.get('name', 'Unknown')
             
         except Exception as e:
-            print(f"Error getting username from API: {e}")
+            print(colored_text(f"Error getting username from API: {e}", Colors.RED))
         
         return "Unknown"
     
@@ -607,7 +607,7 @@ class RobloxAccountManager:
                 return None
 
         except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
+            print(colored_text(f"Request failed: {e}", Colors.RED))
             return None
     
     def launch_roblox(self, username, game_id, private_server_id=""):
@@ -812,7 +812,7 @@ def setup_encryption():
         print()
         print("To protect your account data, please choose an encryption method:")
         print()
-        print("1. Default Encryption (Hardware-Based)")
+        print("1. Hardware Encryption (Automatic, Non-Portable)")
         print("   • Automatic encryption using your computer's hardware")
         print("   • No password needed")
         print("   • Data ONLY works on THIS computer")
@@ -824,10 +824,16 @@ def setup_encryption():
         print("   • Works on any computer with the password")
         print("   • MUST remember your password - no recovery!")
         print()
+        print("3. No Encryption (Not Recommended)")
+        print("   • Store accounts without any encryption")
+        print("   • Easy to transfer and backup")
+        print("   • WARNING: Anyone with access to files can see your data")
+        print("   • WARNING: Not secure if computer is compromised")
+        print()
         print("-" * 60)
         
         while True:
-            choice = input("Select encryption method (1 or 2): ").strip()
+            choice = input("Select encryption method (1, 2, or 3): ").strip()
             
             if choice == '1':
                 encryption_config.enable_hardware_encryption()
@@ -901,8 +907,35 @@ def setup_encryption():
                         input("Press Enter to continue...")
                         return setup_encryption()
                         
+            elif choice == '3':
+                os.system('cls' if os.name == 'nt' else 'clear')
+                print()
+                print(colored_text("[WARNING] You are about to disable encryption!", Colors.YELLOW))
+                print()
+                print("Your account data will be stored in PLAIN TEXT.")
+                print("Anyone with access to your files can read your cookies.")
+                print()
+                confirm = input("Are you sure? Type 'YES' to confirm: ").strip()
+                
+                if confirm == 'YES':
+                    encryption_config.disable_encryption()
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    print()
+                    print(colored_text("[SUCCESS] Encryption disabled.", Colors.GREEN))
+                    print("Your accounts will be stored without encryption.")
+                    print()
+                    input("Press Enter to continue...")
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    return None
+                else:
+                    print()
+                    print("Cancelled. Returning to encryption setup...")
+                    print()
+                    input("Press Enter to continue...")
+                    return setup_encryption()
+                        
             else:
-                print(colored_text("[WARNING] Invalid choice. Please enter 1 or 2.", Colors.YELLOW))
+                print(colored_text("[WARNING] Invalid choice. Please enter 1, 2, or 3.", Colors.YELLOW))
 
 def main():
     password = setup_encryption()
@@ -1004,7 +1037,7 @@ def main():
             break
             
         else:
-            print("Invalid option. Please try again.")
+            print(colored_text("[ERROR] Invalid option. Please try again.", Colors.RED))
 
 if __name__ == "__main__":
     main()
