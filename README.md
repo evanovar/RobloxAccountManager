@@ -70,38 +70,20 @@ The following Python packages are required:
 
 On first launch, you'll be prompted to choose an encryption method to protect your account data:
 
-**1. Default Encryption (Hardware-Based)**
+**1. Hardware Encryption (Hardware-Based)**
 - ✅ Automatic encryption using your computer's unique hardware ID
-- ✅ No passwords to remember
-- ✅ Zero user interaction needed after setup
 - ⚠️ **Data ONLY works on THIS computer**
-- ⚠️ **Cannot transfer to another machine or backup to cloud**
 - ⚠️ **Hardware changes may make data unrecoverable**
   
 **2. Password Encryption (Reccomended, Portable)**
 - ✅ Encrypt with a password you create
 - ✅ **Can backup to cloud** (Google Drive, Dropbox, OneDrive, etc.)
-- ✅ **Works on any computer** with the password
-- ✅ Transfer between devices easily
 - ⚠️ **MUST remember your password** - there is NO recovery method!
-- ⚠️ Password required every time you launch the app
 
-### How It Works
-
-**Hardware-Based Encryption:**
-1. **First Launch**: Choose option 1 for Default Encryption
-2. **Automatic Setup**: Encryption enabled instantly with no configuration
-3. **Transparent Usage**: Encryption/decryption happens automatically
-4. **Status Display**: Main menu shows `🔒 [Hardware Encrypted]`
-
-**Password-Based Encryption:**
-1. **First Launch**: Choose option 2 for Password Encryption
-2. **Create Password**: Enter a strong password (minimum 8 characters)
-3. **Confirm Password**: Re-enter password to confirm
-4. **Every Launch**: Enter password to unlock your accounts
-5. **Status Display**: Main menu shows `🔐 [Password Encrypted]`
-
-## 🎯 Usage
+**3. No Encryption (Not Reccomended)**
+- ✅ Store accounts without any encryption
+- ✅ Easy to transfer and backup
+- ⚠️ **NOT SECURE** - Anyone with access to files can see your data
 
 ### Menu Options
 
@@ -111,14 +93,6 @@ On first launch, you'll be prompted to choose an encryption method to protect yo
 - **4. Validate account** - Check if saved account cookies are still valid
 - **5. Launch Roblox game** - Launch specific games or Roblox directly
 - **6. Exit** - Close the application
-
-### Adding an Account
-
-1. Select option 1 from the main menu
-2. Chrome browser opens automatically with optimized performance
-3. Log into your Roblox account normally
-4. Browser automatically closes
-5. Account saved with username and authentication cookie
 
 ## ⚠️ Disclaimer
 
@@ -130,7 +104,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
+This project is open source and available under the [GPL 3.0 License](LICENSE).
 
 ## Troubleshooting
 
