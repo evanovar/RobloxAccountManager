@@ -7,12 +7,6 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 <img width="1108" height="616" alt="image" src="https://github.com/user-attachments/assets/c638d36b-671c-4b6b-a023-a2f79c075612" />
 
 
-## ✨ Features
-
-- **🎮 Game Launching** - Direct game launching with specific Game IDs
-- **✅ Account Validation** - Check account status and validity
-- **🖥️ Simple Console Interface** - Clean, easy-to-use command-line interface
-
 ## 🛠️ Installation
 
 ### Method 1: Direct EXE (Recommended for Users)
@@ -66,9 +60,7 @@ The following Python packages are required:
 
 ## 🔐 Encryption & Security
 
-### First-Time Setup
-
-On first launch, you'll be prompted to choose an encryption method to protect your account data:
+There are 3 Encryption methods:
 
 **1. Hardware Encryption (Hardware-Based)**
 - ✅ Automatic encryption using your computer's unique hardware ID
@@ -105,28 +97,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project is open source and available under the [GPL 3.0 License](LICENSE).
-
-## Troubleshooting
-
-### Browser Won't Open
-- Ensure Google Chrome is installed
-- Check that ChromeDriver is compatible with your Chrome version
-- Restart the application (ChromeDriver auto-updates)
-
-### Login Not Detected
-- Make sure you complete the full login process
-- Wait for the page to fully load after login
-- The detection timeout is 5 minutes (300 seconds)
-
-### Import Errors
-- Install all requirements: `pip install -r requirements.txt`
-- Ensure you're using Python 3.7 or newer
-
-### Encryption/Decryption Issues
-- If you get "Decryption failed" error, your data may have been encrypted on a different computer
-- Hardware-based encryption is tied to your specific machine
-- Reinstalling Windows or changing hardware (CPU, motherboard) will break decryption
-- **There is no recovery method** - always backup your unencrypted data before major system changes
 
 ## 📚 Frequently Asked Questions (FAQ)
 
