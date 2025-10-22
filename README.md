@@ -46,7 +46,7 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 3. **Run the application**
    ```bash
-   python roblox_account_manager.py
+   python main.py
    ```
    
 ## 📋 Requirements
@@ -56,7 +56,6 @@ The following Python packages are required:
 - `requests` - HTTP requests for account validation  
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
-- `pywin32` - Windows-specific functionality
 
 ## 🔐 Encryption & Security
 
