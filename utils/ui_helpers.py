@@ -11,7 +11,10 @@ class Colors:
     RED = '\033[91m'
     GREEN = '\033[92m'
     YELLOW = '\033[93m'
+<<<<<<< HEAD
     CYAN = '\033[96m'
+=======
+>>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
     RESET = '\033[0m'
 
 

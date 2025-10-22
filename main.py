@@ -9,8 +9,11 @@ browser automation for account addition, and game launching capabilities.
 import os
 import ctypes
 import warnings
+<<<<<<< HEAD
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+=======
+>>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
 
 warnings.filterwarnings("ignore")
 os.environ['WDM_LOG_LEVEL'] = '0'
@@ -22,6 +25,7 @@ except:
 
 from classes import RobloxAccountManager
 from classes.encryption import EncryptionConfig
+<<<<<<< HEAD
 from utils.encryption_setup import setup_encryption
 from utils.version_selector import VersionSelector
 from utils.ui_helpers import Colors, colored_text, get_password_with_asterisks
@@ -29,6 +33,46 @@ from utils.ui_helpers import Colors, colored_text, get_password_with_asterisks
 
 def main_console(manager):
     """Console version main loop"""
+=======
+from utils.ui_helpers import Colors, colored_text, get_password_with_asterisks
+from utils.encryption_setup import setup_encryption
+
+
+def main():
+    """Main application loop"""
+    password = setup_encryption()
+    
+    encryption_config = EncryptionConfig()
+    
+    if encryption_config.is_encryption_enabled() and encryption_config.get_encryption_method() == 'password':
+        if password is None:
+            print()
+            print("🔐 Password-encrypted accounts detected")
+            print()
+            try:
+                password = get_password_with_asterisks("Enter your password to unlock: ")
+            except KeyboardInterrupt:
+                print()
+                print(colored_text("[ERROR] Cancelled by user", Colors.RED))
+                return
+            print()
+    
+    try:
+        manager = RobloxAccountManager(password=password)
+    except ValueError as e:
+        print()
+        print(colored_text("[ERROR] Password is invalid. Please try again.", Colors.RED))
+        print()
+        input("Press Enter to exit...")
+        return
+    except Exception as e:
+        print()
+        print(colored_text(f"[ERROR] Failed to initialize: {e}", Colors.RED))
+        print()
+        input("Press Enter to exit...")
+        return
+    
+>>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
     encryption_status = ""
     if manager.encryption_config.is_encryption_enabled():
         method = manager.encryption_config.get_encryption_method()
@@ -112,6 +156,7 @@ def main_console(manager):
             print(colored_text("[ERROR] Invalid option. Please try again.", Colors.RED))
 
 
+<<<<<<< HEAD
 def main_ui(manager):
     """UI version main loop"""
     from utils.ui import AccountManagerUI
@@ -193,5 +238,7 @@ def main():
         main_ui(manager)
 
 
+=======
+>>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
 if __name__ == "__main__":
     main()
