@@ -380,11 +380,21 @@ class RobloxAccountManager:
             print("No accounts saved.")
             return
         
-        print("\nSaved Accounts:")
+        print("\n📋 Saved Accounts:")
         print("-" * 50)
         for i, (username, data) in enumerate(self.accounts.items(), 1):
             added_date = data.get('added_date', 'Unknown')
             print(f"{i}. {username} (Added: {added_date})")
+    
+    def get_account_by_number(self, number):
+        """Get account username by its numbered position"""
+        try:
+            number = int(number)
+            if 1 <= number <= len(self.accounts):
+                return list(self.accounts.keys())[number - 1]
+            return None
+        except (ValueError, IndexError):
+            return None
     
     def delete_account(self, username):
         """Delete a saved account"""

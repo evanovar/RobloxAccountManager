@@ -90,33 +90,46 @@ def main():
         elif choice == '3':
             manager.list_accounts()
             if manager.accounts:
-                username = input("\nEnter username to delete: ").strip()
-                manager.delete_account(username)
+                account_num = input("\n🔢 Enter account number to delete: ").strip()
+                username = manager.get_account_by_number(account_num)
+                if username:
+                    confirm = input(f"⚠️ Are you sure you want to delete '{username}'? (y/n): ").strip().lower()
+                    if confirm == 'y':
+                        manager.delete_account(username)
+                    else:
+                        print("❌ Deletion cancelled.")
+                else:
+                    print(colored_text("[ERROR] Invalid account number", Colors.RED))
             
         elif choice == '4':
             manager.list_accounts()
             if manager.accounts:
-                username = input("\nEnter username to validate: ").strip()
-                is_valid = manager.validate_account(username)
+                account_num = input("\n🔢 Enter account number to validate: ").strip()
+                username = manager.get_account_by_number(account_num)
+                if username:
+                    is_valid = manager.validate_account(username)
+                else:
+                    print(colored_text("[ERROR] Invalid account number", Colors.RED))
             else:
                 print("No accounts to validate.")
             
         elif choice == '5':
             manager.list_accounts()
             if manager.accounts:
-                username = input("\nEnter username to launch with: ").strip()
-                if username in manager.accounts:
-                    game_id = input("Enter Game/Place ID: ").strip()
-                    private_server = input("Enter Private Server ID (leave blank for public): ").strip()
+                account_num = input("\n🔢 Enter account number to launch with: ").strip()
+                username = manager.get_account_by_number(account_num)
+                if username:
+                    game_id = input("🎮 Enter Game/Place ID: ").strip()
+                    private_server = input("🔑 Enter Private Server ID (leave blank for public): ").strip()
                     
                     if game_id.isdigit():
                         success = manager.launch_roblox(username, game_id, private_server)
                         if success:
                             print("🎮 Check your desktop - Roblox should be launching!")
                     else:
-                        print("✗ Invalid Game ID. Please enter a valid number.")
+                        print(colored_text("[ERROR] Invalid Game ID. Please enter a valid number.", Colors.RED))
                 else:
-                    print(f"✗ Account '{username}' not found")
+                    print(colored_text("[ERROR] Invalid account number", Colors.RED))
             else:
                 print("No accounts available to launch with.")
             
