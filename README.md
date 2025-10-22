@@ -46,7 +46,7 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 3. **Run the application**
    ```bash
-   python roblox_account_manager.py
+   python main.py
    ```
    
 ## 📋 Requirements
