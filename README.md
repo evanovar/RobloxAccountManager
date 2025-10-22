@@ -79,7 +79,6 @@ The following Python packages are required:
 - `requests` - HTTP requests for account validation and game info
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
-- `tkinter` - GUI interface (usually included with Python)
 
 ## 🔐 Encryption & Security
 
