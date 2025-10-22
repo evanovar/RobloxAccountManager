@@ -1,11 +1,34 @@
 # 🚀 Roblox Account Manager
 
-A fast, lightweight console tool for managing multiple Roblox accounts with secure cookie extraction. <br>
+A powerful tool for managing multiple Roblox accounts with secure cookie extraction, featuring both Console and UI modes. <br>
 Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
-<img width="1108" height="616" alt="image" src="https://github.com/user-attachments/assets/c638d36b-671c-4b6b-a023-a2f79c075612" />
+## ✨ Features
 
+### 🎨 Dual Interface
+- **Console Mode**: Fast, lightweight text-based interface
+- **UI Mode**: Modern graphical interface with advanced features
+- Choose your preferred mode on first launch
+
+### 🖥️ UI Mode Features
+- **Modern Dark Theme**: Easy on the eyes with a sleek dark interface
+- **Account Management**: Visual list of all your accounts with encryption status
+- **Game List**: Save up to 10 recently played games with Place IDs
+- **Private Server Support**: Save and launch private servers with [P] indicator
+- **Real-time Game Names**: Automatically fetches game names from Roblox API
+- **Quick Actions**: Validate accounts, refresh lists, and more
+- **Launch Options**: 
+  - Launch Roblox to home page via Chrome (with account logged in)
+  - Join specific games with Place ID
+  - Join private servers with link codes
+- **Persistent Settings**: Automatically saves Place IDs, Private Server codes, and game list
+
+### 📦 Console Mode Features
+- Fast and responsive performance
+- Low resource usage
+- All core account management features
+- Perfect for automation and scripting
 
 ## 🛠️ Installation
 
@@ -53,9 +76,36 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 The following Python packages are required:
 - `selenium` - Browser automation
-- `requests` - HTTP requests for account validation  
+- `requests` - HTTP requests for account validation and game info
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
+- `tkinter` - GUI interface (usually included with Python)
+
+## 🎮 Usage
+
+### First Launch
+On first launch, you'll be prompted to choose between:
+1. **Console Mode** - Text-based interface in terminal
+2. **UI Mode** - Graphical interface with advanced features
+
+Your choice will be saved. To change it later, simply delete `version_config.json`.
+
+### UI Mode Controls
+- **Add Account**: Opens Chrome for secure login via browser automation
+- **Remove**: Delete selected account (with confirmation)
+- **Launch Home**: Opens Chrome with account logged in to Roblox home page
+- **Validate Account**: Check if account cookie is still valid
+- **Join Place ID**: Launch Roblox client directly to specified game
+- **Game List**: Click any saved game to auto-fill Place ID and Private Server
+- **Delete Selected**: Remove game from your saved list (max 10 games)
+
+### Console Mode Controls
+1. Add new account
+2. List saved accounts
+3. Delete account
+4. Validate account
+5. Launch Roblox game
+6. Exit
 
 ## 🔐 Encryption & Security
 
@@ -75,15 +125,6 @@ There are 3 Encryption methods:
 - ✅ Store accounts without any encryption
 - ✅ Easy to transfer and backup
 - ⚠️ **NOT SECURE** - Anyone with access to files can see your data
-
-### Menu Options
-
-- **1. Add new account** - Ultra-fast browser automation for account addition
-- **2. List saved accounts** - View all saved accounts with registration dates  
-- **3. Delete account** - Remove accounts from the manager
-- **4. Validate account** - Check if saved account cookies are still valid
-- **5. Launch Roblox game** - Launch specific games or Roblox directly
-- **6. Exit** - Close the application
 
 ## ⚠️ Disclaimer
 
@@ -110,8 +151,22 @@ A: No! The standalone EXE includes everything you need. Just download and run.
 **Q: Can I use this on Mac or Linux?**  
 A: Currently, this tool is optimized for Windows only. Some features (like asterisk password input) use Windows-specific modules (`msvcrt`).
 
+**Q: What's the difference between Console and UI mode?**  
+A: 
+- **Console Mode**: Fast, text-based interface. Uses less resources, ideal for automation.
+- **UI Mode**: Graphical interface with extra features like game list, real-time game names, visual account management, and persistent settings.
+
+**Q: Can I switch between Console and UI mode?**  
+A: Yes! Just delete `version_config.json` and restart the program. You'll be asked to choose again.
+
+**Q: What is the Game List feature?**  
+A: UI mode automatically saves the last 10 games you've launched (with Place IDs and Private Server codes). Click any game in the list to quickly load it again.
+
+**Q: What does [P] mean in the game list?**  
+A: [P] indicates that the game was saved with a private server link code. Clicking it will load both the Place ID and Private Server ID.
+
 **Q: Will you add Multi Instance Support?**  
-A: I’ll add it if I figure out how to make it work. If I can’t, then probably not.
+A: I'll add it if I figure out how to make it work. If I can't, then probably not.
 
 ### Encryption Questions
 
@@ -147,6 +202,3 @@ A:
 
 **Q: What happens if I change my Roblox password?**  
 A: Your saved cookie will become invalid. You'll need to delete the old account from the manager and re-add it with the new login.
-
-**Q: When are you gonna develop a UI version?**  
-A: Developing a UI version is hard, especially for me. If this repository manages to get enough stars and enough attention, I might consider adding a UI version.
