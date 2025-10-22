@@ -85,7 +85,6 @@ class RobloxAPI:
         
         print(colored_text("[SUCCESS] Got authentication ticket!", Colors.GREEN))
         
-<<<<<<< HEAD
         # If no game_id, launch Roblox home page
         if not game_id or game_id == "":
             url = f"roblox://authentication?ticket={auth_ticket}"
@@ -99,8 +98,6 @@ class RobloxAPI:
                 print(colored_text(f"[ERROR] Failed to launch Roblox: {e}", Colors.RED))
                 return False
         
-=======
->>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
         browser_tracker_id = random.randint(55393295400, 55393295500)
         launch_time = int(time.time() * 1000)
 

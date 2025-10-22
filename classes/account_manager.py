@@ -422,7 +422,6 @@ class RobloxAccountManager:
         
         return RobloxAPI.validate_account(username, cookie)
     
-<<<<<<< HEAD
     def launch_home(self, username):
         """Launch Chrome to Roblox home with account logged in"""
         if username not in self.accounts:
@@ -492,8 +491,6 @@ class RobloxAccountManager:
             print(colored_text(f"[ERROR] Failed to launch Chrome: {e}", Colors.RED))
             return False
     
-=======
->>>>>>> 92165eb640e67b763f344b7abc43872e26f530f0
     def launch_roblox(self, username, game_id, private_server_id=""):
         """Launch Roblox game with specified account"""
         if username not in self.accounts:
