@@ -81,32 +81,6 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `tkinter` - GUI interface (usually included with Python)
 
-## 🎮 Usage
-
-### First Launch
-On first launch, you'll be prompted to choose between:
-1. **Console Mode** - Text-based interface in terminal
-2. **UI Mode** - Graphical interface with advanced features
-
-Your choice will be saved. To change it later, simply delete `version_config.json`.
-
-### UI Mode Controls
-- **Add Account**: Opens Chrome for secure login via browser automation
-- **Remove**: Delete selected account (with confirmation)
-- **Launch Home**: Opens Chrome with account logged in to Roblox home page
-- **Validate Account**: Check if account cookie is still valid
-- **Join Place ID**: Launch Roblox client directly to specified game
-- **Game List**: Click any saved game to auto-fill Place ID and Private Server
-- **Delete Selected**: Remove game from your saved list (max 10 games)
-
-### Console Mode Controls
-1. Add new account
-2. List saved accounts
-3. Delete account
-4. Validate account
-5. Launch Roblox game
-6. Exit
-
 ## 🔐 Encryption & Security
 
 There are 3 Encryption methods:
