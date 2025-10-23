@@ -1,7 +1,3 @@
-"""
-Utility functions module
-"""
-
 from .ui_helpers import Colors, colored_text, get_password_with_asterisks
 
 __all__ = [
