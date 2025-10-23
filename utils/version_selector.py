@@ -11,7 +11,10 @@ class VersionSelector:
     """Handles version preference storage and selection"""
     
     def __init__(self):
-        self.config_file = "version_config.json"
+        self.data_folder = "AccountManagerData"
+        if not os.path.exists(self.data_folder):
+            os.makedirs(self.data_folder)
+        self.config_file = os.path.join(self.data_folder, "version_config.json")
         self.config = self.load_config()
     
     def load_config(self):

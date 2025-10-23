@@ -19,7 +19,11 @@ class AccountManagerUI:
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
-        self.settings_file = "ui_settings.json"
+        self.data_folder = "AccountManagerData"
+        if not os.path.exists(self.data_folder):
+            os.makedirs(self.data_folder)
+        
+        self.settings_file = os.path.join(self.data_folder, "ui_settings.json")
         self.load_settings()
         
         self.multi_roblox_handle = None
@@ -125,14 +129,13 @@ class AccountManagerUI:
 
         ttk.Button(action_frame, text="Validate Account", style="Dark.TButton", command=self.validate_account).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Import Cookie", style="Dark.TButton", command=self.import_cookie).pack(fill="x", pady=2)
 
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
 
         ttk.Button(bottom_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", expand=True, padx=5)
         ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", expand=True, padx=5)
-        ttk.Button(bottom_frame, text="Launch Home", style="Dark.TButton", command=self.launch_home).pack(side="left", expand=True, padx=5)
+        ttk.Button(bottom_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", expand=True, padx=5)
         ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", expand=True, padx=5)
 
         self.refresh_accounts()
@@ -317,10 +320,9 @@ class AccountManagerUI:
             messagebox.showerror("Error", f"Failed to add account: {str(e)}")
     
     def import_cookie(self):
-        """Import account from cookie"""
         import_window = tk.Toplevel(self.root)
         import_window.title("Import Cookie")
-        import_window.geometry("500x300")
+        import_window.geometry("450x250")
         import_window.configure(bg=self.BG_DARK)
         import_window.resizable(False, False)
         
@@ -330,9 +332,9 @@ class AccountManagerUI:
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
         
-        x = main_x + (main_width - 500) // 2
-        y = main_y + (main_height - 300) // 2
-        import_window.geometry(f"500x300+{x}+{y}")
+        x = main_x + (main_width - 450) // 2
+        y = main_y + (main_height - 250) // 2
+        import_window.geometry(f"450x250+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
             import_window.attributes("-topmost", True)
@@ -349,10 +351,6 @@ class AccountManagerUI:
             style="Dark.TLabel",
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 15))
-        
-        ttk.Label(main_frame, text="Username:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        username_entry = ttk.Entry(main_frame, style="Dark.TEntry", width=50)
-        username_entry.pack(fill="x", pady=(0, 10))
         
         ttk.Label(main_frame, text="Cookie (.ROBLOSECURITY):", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
         
@@ -374,15 +372,14 @@ class AccountManagerUI:
         cookie_text.config(yscrollcommand=cookie_scrollbar.set)
         
         def do_import():
-            username = username_entry.get().strip()
             cookie = cookie_text.get("1.0", "end-1c").strip()
             
-            if not username or not cookie:
-                messagebox.showwarning("Missing Information", "Please enter both username and cookie.")
+            if not cookie:
+                messagebox.showwarning("Missing Information", "Please enter the cookie.")
                 return
             
             try:
-                success = self.manager.import_cookie_account(username, cookie)
+                success, username = self.manager.import_cookie_account(cookie)
                 if success:
                     self.refresh_accounts()
                     messagebox.showinfo("Success", f"Account '{username}' imported successfully!")
@@ -438,7 +435,7 @@ class AccountManagerUI:
         try:
             success = self.manager.launch_home(username)
             if success:
-                messagebox.showinfo("Success", "Chrome launched with your account! Browser will stay open.")
+                messagebox.showinfo("Success", "Chrome launched with your account!")
             else:
                 messagebox.showerror("Error", "Failed to launch Chrome.")
         except Exception as e:
@@ -577,7 +574,7 @@ class AccountManagerUI:
         main_height = self.root.winfo_height()
         
         settings_width = 300
-        settings_height = 350
+        settings_height = 320
         
         x = main_x + (main_width - settings_width) // 2
         y = main_y + (main_height - settings_height) // 2
@@ -588,7 +585,7 @@ class AccountManagerUI:
         settings_window.grab_set()
         
         main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
         title_label = ttk.Label(
             main_frame, 
@@ -596,7 +593,7 @@ class AccountManagerUI:
             style="Dark.TLabel", 
             font=("Segoe UI", 14, "bold")
         )
-        title_label.pack(anchor="w", pady=(0, 20))
+        title_label.pack(anchor="w", pady=(0, 10))
         
         topmost_var = tk.BooleanVar(value=self.settings.get("enable_topmost", False))
         multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
@@ -641,7 +638,7 @@ class AccountManagerUI:
             style="Dark.TCheckbutton",
             command=auto_save_setting("enable_topmost", topmost_var)
         )
-        topmost_check.pack(anchor="w", pady=5)
+        topmost_check.pack(anchor="w", pady=2)
         
         multi_roblox_check = ttk.Checkbutton(
             main_frame,
@@ -650,7 +647,7 @@ class AccountManagerUI:
             style="Dark.TCheckbutton",
             command=on_multi_roblox_toggle
         )
-        multi_roblox_check.pack(anchor="w", pady=5)
+        multi_roblox_check.pack(anchor="w", pady=2)
         
         confirm_check = ttk.Checkbutton(
             main_frame,
@@ -659,12 +656,12 @@ class AccountManagerUI:
             style="Dark.TCheckbutton",
             command=auto_save_setting("confirm_before_launch", confirm_launch_var)
         )
-        confirm_check.pack(anchor="w", pady=5)
+        confirm_check.pack(anchor="w", pady=2)
         
-        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=10)
+        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=5)
         
         max_games_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        max_games_frame.pack(fill="x", pady=5)
+        max_games_frame.pack(fill="x", pady=2)
         
         ttk.Label(
             max_games_frame, 
@@ -698,10 +695,20 @@ class AccountManagerUI:
         )
         max_games_spinner.pack(side="right")
         
+        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
+        
+        import_cookie_button = ttk.Button(
+            main_frame,
+            text="Import Cookie",
+            style="Dark.TButton",
+            command=lambda: [settings_window.destroy(), self.import_cookie()]
+        )
+        import_cookie_button.pack(fill="x", pady=(3, 0))
+        
         close_button = ttk.Button(
             main_frame,
             text="Close",
             style="Dark.TButton",
             command=settings_window.destroy
         )
-        close_button.pack(fill="x", pady=(20, 0))
+        close_button.pack(fill="x", pady=(3, 0))

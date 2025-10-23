@@ -22,11 +22,14 @@ from utils.ui_helpers import Colors, colored_text
 
 
 class RobloxAccountManager:
-    """Main account manager class"""
     
     def __init__(self, password=None):
-        self.accounts_file = "saved_accounts.json"
-        self.encryption_config = EncryptionConfig()
+        self.data_folder = "AccountManagerData"
+        if not os.path.exists(self.data_folder):
+            os.makedirs(self.data_folder)
+        
+        self.accounts_file = os.path.join(self.data_folder, "saved_accounts.json")
+        self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.encryptor = None
         
         if self.encryption_config.is_encryption_enabled():
@@ -396,24 +399,27 @@ class RobloxAccountManager:
         except (ValueError, IndexError):
             return None
     
-    def import_cookie_account(self, username, cookie):
-        """Import an account directly from cookie without browser"""
-        if not username or not cookie:
-            print(colored_text("[ERROR] Username and cookie are required", Colors.RED))
-            return False
+    def import_cookie_account(self, cookie):
+        if not cookie:
+            print(colored_text("[ERROR] Cookie is required", Colors.RED))
+            return False, None
         
         cookie = cookie.strip()
-        username = username.strip()
         
         if not cookie.startswith('_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|'):
             print(colored_text("[ERROR] Invalid cookie format", Colors.RED))
-            return False
+            return False, None
         
         try:
+            username = RobloxAPI.get_username_from_api(cookie)
+            if not username or username == "Unknown":
+                print(colored_text("[ERROR] Failed to get username from cookie", Colors.RED))
+                return False, None
+            
             is_valid = RobloxAPI.validate_account(username, cookie)
             if not is_valid:
                 print(colored_text("[ERROR] Cookie is invalid or expired", Colors.RED))
-                return False
+                return False, None
             
             self.accounts[username] = {
                 'username': username,
@@ -423,11 +429,11 @@ class RobloxAccountManager:
             self.save_accounts()
             
             print(colored_text(f"[SUCCESS] Successfully imported account: {username}", Colors.GREEN))
-            return True
+            return True, username
             
         except Exception as e:
             print(colored_text(f"[ERROR] Failed to import account: {e}", Colors.RED))
-            return False
+            return False, None
     
     def delete_account(self, username):
         """Delete a saved account"""
@@ -508,7 +514,6 @@ class RobloxAccountManager:
             driver.get("https://www.roblox.com/home")
             
             print(colored_text(f"[SUCCESS] Chrome launched with {username} logged in!", Colors.GREEN))
-            print(colored_text("[NOTE] Chrome will remain open for you to use", Colors.YELLOW))
             return True
             
         except Exception as e:
