@@ -4,7 +4,8 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
-<img width="360" height="424" alt="image" src="https://github.com/user-attachments/assets/51eb93a6-417b-4fa6-8e7c-2c5ddf76d712" />
+<img width="446" height="528" alt="image" src="https://github.com/user-attachments/assets/e01fabc2-473a-4da8-9853-1729ebbf5561" />
+<img width="298" height="347" alt="image" src="https://github.com/user-attachments/assets/686747b4-1caf-47db-a1f6-8f06469c65d2" />
 
 
 ## ✨ Features
@@ -17,15 +18,17 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 ### 🖥️ UI Mode Features
 - **Modern Dark Theme**: Easy on the eyes with a sleek dark interface
 - **Account Management**: Visual list of all your accounts with encryption status
-- **Game List**: Save up to 10 recently played games with Place IDs
+- **Settings Window**: Customize your experience
+  - Enable Topmost - Keep window above all others
+  - Enable Multi Roblox + 773 fix - Run multiple Roblox instances in one device.
+  - Confirm Before Launch - Get confirmation dialog before launching games
+  - Max Recent Games - Control how many games to remember (5-50)
+  - Import Cookie - Add accounts directly from Roblox security cookie
+- **Multi Roblox Support**: Run multiple Roblox instances on the same device.
+- **Import Cookie Feature**: Add accounts quickly using `.ROBLOSECURITY` cookie
+- **Game List**: Save up to 50 recently played games with Place IDs (configurable)
 - **Private Server Support**: Save and launch private servers with [P] indicator
-- **Real-time Game Names**: Automatically fetches game names from Roblox API
-- **Quick Actions**: Validate accounts, refresh lists, and more
-- **Launch Options**: 
-  - Launch Roblox to home page via Chrome (with account logged in)
-  - Join specific games with Place ID
-  - Join private servers with link codes
-- **Persistent Settings**: Automatically saves Place IDs, Private Server codes, and game list
+- **Persistent Settings**: Automatically saves Place IDs, Private Server codes, game list, and preferences
 
 ### 📦 Console Mode Features
 - Fast and responsive performance
@@ -82,6 +85,7 @@ The following Python packages are required:
 - `requests` - HTTP requests for account validation and game info
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
+- `pywin32` - Windows API access for Multi Roblox feature
 
 ## 🔐 Encryption & Security
 
@@ -133,16 +137,26 @@ A:
 - **UI Mode**: Graphical interface with extra features like game list, real-time game names, visual account management, and persistent settings.
 
 **Q: Can I switch between Console and UI mode?**  
-A: Yes! Just delete `version_config.json` and restart the program. You'll be asked to choose again.
+A: Yes! Just delete `AccountManagerData/version_config.json` and restart the program. You'll be asked to choose again.
 
 **Q: What is the Game List feature?**  
-A: UI mode automatically saves the last 10 games you've launched (with Place IDs and Private Server codes). Click any game in the list to quickly load it again.
+A: UI mode automatically saves your recently launched games (with Place IDs and Private Server codes). You can configure how many games to remember (5-50) in the Settings window. Click any game in the list to quickly load it again.
 
 **Q: What does [P] mean in the game list?**  
 A: [P] indicates that the game was saved with a private server link code. Clicking it will load both the Place ID and Private Server ID.
 
-**Q: Will you add Multi Instance Support?**  
-A: I'll add it if I figure out how to make it work. If I can't, then probably not.
+**Q: What is Multi Roblox?**  
+A: Multi Roblox allows you to run multiple Roblox instances simultaneously on the same machine. Enable it in Settings, and you can launch multiple games at once. The tool automatically handles the technical requirements (mutex and file locking).
+
+**Q: How do I import accounts using cookies?**  
+A: Open Settings window and click "Import Cookie". Paste your `.ROBLOSECURITY` cookie from Chrome/browser, and the tool will automatically fetch the username and add the account. The cookie is encrypted and stored securely.
+
+**Q: Where are my data files stored?**  
+A: All configuration and account data are stored in the `AccountManagerData` folder in the same directory as the program. This includes:
+- `saved_accounts.json` - Your encrypted account data
+- `encryption_config.json` - Encryption settings
+- `ui_settings.json` - UI preferences and game list
+- `version_config.json` - Console/UI mode preference
 
 ### Encryption Questions
 
@@ -161,7 +175,7 @@ A:
 A: Hardware-based encryption is permanently tied to your original hardware configuration. If you changed CPU/motherboard/UUID, the data is unrecoverable. This is why we recommend password encryption for long-term use.
 
 **Q: Can I access my password-encrypted accounts on another computer?**  
-A: Yes! Simply copy `saved_accounts.json` and `encryption_config.json` to the new computer, install the app, and enter your password.
+A: Yes! Simply copy the entire `AccountManagerData` folder to the new computer, install the app, and enter your password. This folder contains `saved_accounts.json` and `encryption_config.json`.
 
 ### Account Management Questions
 
@@ -174,7 +188,7 @@ A: Roblox cookies can expire after long periods of inactivity or if you change y
 **Q: Can I transfer accounts between different instances of the tool?**  
 A: 
 - **Hardware encryption**: No, tied to one machine only
-- **Password encryption**: Yes, copy both `saved_accounts.json` and `encryption_config.json`, then use same password
+- **Password encryption**: Yes, copy the entire `AccountManagerData` folder, then use same password
 
 **Q: What happens if I change my Roblox password?**  
 A: Your saved cookie will become invalid. You'll need to delete the old account from the manager and re-add it with the new login.
