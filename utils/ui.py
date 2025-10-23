@@ -135,7 +135,6 @@ class AccountManagerUI:
         ttk.Button(bottom_frame, text="Launch Home", style="Dark.TButton", command=self.launch_home).pack(side="left", expand=True, padx=5)
         ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", expand=True, padx=5)
 
-        # Load accounts and game list
         self.refresh_accounts()
         self.refresh_game_list()
         self.update_game_name()
@@ -167,13 +166,10 @@ class AccountManagerUI:
                 "max_recent_games": 10
             }
         
-        # Apply topmost setting
         if self.settings.get("enable_topmost", False):
             self.root.attributes("-topmost", True)
         
-        # Apply Multi Roblox setting on startup
         if self.settings.get("enable_multi_roblox", False):
-            # Schedule the Multi Roblox check after UI is loaded
             self.root.after(100, self.initialize_multi_roblox)
 
     def save_settings(self):
@@ -203,7 +199,6 @@ class AccountManagerUI:
             return None
         
         try:
-            # First, get the universe ID from the place ID
             place_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
             place_response = requests.get(place_url, timeout=5)
             
@@ -212,7 +207,6 @@ class AccountManagerUI:
                 universe_id = place_data.get("universeId")
                 
                 if universe_id:
-                    # Now get the game details using universe ID
                     game_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
                     game_response = requests.get(game_url, timeout=5)
                     
@@ -238,19 +232,16 @@ class AccountManagerUI:
 
     def add_game_to_list(self, place_id, game_name, private_server=""):
         """Add a game to the saved list (max based on settings)"""
-        # Check if already exists with same place_id and private_server
         for game in self.settings["game_list"]:
             if game["place_id"] == place_id and game.get("private_server", "") == private_server:
-                return  # Already in list
+                return
         
-        # Add new game
         self.settings["game_list"].insert(0, {
             "place_id": place_id,
             "name": game_name,
             "private_server": private_server
         })
         
-        # Keep only max recent games based on settings
         max_games = self.settings.get("max_recent_games", 10)
         if len(self.settings["game_list"]) > max_games:
             self.settings["game_list"] = self.settings["game_list"][:max_games]
@@ -277,7 +268,6 @@ class AccountManagerUI:
             self.place_entry.insert(0, game["place_id"])
             self.settings["last_place_id"] = game["place_id"]
             
-            # Load private server if it exists
             private_server = game.get("private_server", "")
             self.private_server_entry.delete(0, tk.END)
             self.private_server_entry.insert(0, private_server)
@@ -471,7 +461,6 @@ class AccountManagerUI:
 
         private_server = self.private_server_entry.get().strip()
 
-        # Confirm before launch if enabled
         if self.settings.get("confirm_before_launch", False):
             game_name = self.get_game_name(game_id)
             if not game_name:
