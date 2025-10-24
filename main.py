@@ -40,6 +40,7 @@ def main_console(manager):
     while True:
         print("\n" + "="*50)
         print(f"🚀 ROBLOX ACCOUNT MANAGER{encryption_status}")
+        print("Made by evanovar")
         print("="*50)
         print("1. Add new account")
         print("2. List saved accounts")

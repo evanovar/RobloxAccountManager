@@ -14,7 +14,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.root.title("Roblox Account Manager")
+        self.root.title("Roblox Account Manager - Made by evanovar")
         self.root.geometry("450x500")
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
