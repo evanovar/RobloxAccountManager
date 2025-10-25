@@ -43,7 +43,7 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 > ⚠️ Windows Defender may flag the EXE as untrusted since it's not signed. Click "More info" → "Run anyway" to proceed.
 
-### Method 2: Clone Repository (For Developers)
+### Method 2: Clone Repository (For Developers, or for people that dont trust the EXE)
 
 **Full source code access and customization**
 
