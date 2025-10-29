@@ -508,9 +508,9 @@ class AccountManagerUI:
         
         try:
             result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                  capture_output=True, text=True)
-            
-            if 'RobloxPlayerBeta.exe' in result.stdout:
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+            if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
                 response = messagebox.askquestion(
                     "Roblox Already Running",
                     "A Roblox instance is already running.\n\n"
@@ -521,7 +521,7 @@ class AccountManagerUI:
                 
                 if response == 'yes':
                     subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
-                                 capture_output=True)
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace')
                     messagebox.showinfo("Success", "All Roblox instances have been closed.")
                 else:
                     return False
