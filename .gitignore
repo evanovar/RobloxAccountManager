@@ -19,7 +19,7 @@ dist/
 
 # Account data (SENSITIVE - DO NOT COMMIT!)
 saved_accounts.json
-encryption_config.json
+AccountManagerData/
 
 # IDE and editor files
 .vscode/
