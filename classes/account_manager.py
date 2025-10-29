@@ -166,8 +166,7 @@ class RobloxAccountManager:
     
     def wait_for_login(self, driver, timeout=300):
         """Ultra-fast login detection using ONLY URL method"""
-        print("🚀 Please log into your Roblox account - Browser will close upon login!")
-        print("🔍 Using URL-only detection for maximum speed...")
+        print("Please log into your Roblox account")
         
         detector_script = """
         window.ultraFastDetection = {
@@ -253,12 +252,12 @@ class RobloxAccountManager:
                     last_debug_time = current_time
                     try:
                         current_url = driver.current_url
-                        print(f"🔍 Still checking... Current URL: {current_url}")
+                        print(f"Still checking... Current URL: {current_url}")
                         
                         if result and result.get('debug'):
                             recent_debug = result.get('debug', [])[-3:]
                             for debug_msg in recent_debug:
-                                print(f"   Debug: {debug_msg}")
+                                print(f"Debug: {debug_msg}")
                         
                         if ('/home' in current_url or '/games' in current_url or 
                             '/catalog' in current_url or '/avatar' in current_url or
@@ -269,7 +268,7 @@ class RobloxAccountManager:
                             return True
                                 
                     except Exception as e:
-                        print(f"   Debug error: {e}")
+                        print(f"Debug error: {e}")
                 
                 time.sleep(0.025)
                 
@@ -376,28 +375,6 @@ class RobloxAccountManager:
                 pass
             self.cleanup_temp_profile()
     
-    def list_accounts(self):
-        """List all saved accounts"""
-        if not self.accounts:
-            print("No accounts saved.")
-            return
-        
-        print("\n📋 Saved Accounts:")
-        print("-" * 50)
-        for i, (username, data) in enumerate(self.accounts.items(), 1):
-            added_date = data.get('added_date', 'Unknown')
-            print(f"{i}. {username} (Added: {added_date})")
-    
-    def get_account_by_number(self, number):
-        """Get account username by its numbered position"""
-        try:
-            number = int(number)
-            if 1 <= number <= len(self.accounts):
-                return list(self.accounts.keys())[number - 1]
-            return None
-        except (ValueError, IndexError):
-            return None
-    
     def import_cookie_account(self, cookie):
         if not cookie:
             print("[ERROR] Cookie is required")
@@ -474,7 +451,7 @@ class RobloxAccountManager:
             from selenium.webdriver.chrome.options import Options
             from webdriver_manager.chrome import ChromeDriverManager
             
-            print(f"🌐 Launching Chrome for {username}...")
+            print(f"Launching Chrome for {username}...")
             
             chrome_options = Options()
             chrome_options.add_argument("--disable-blink-features=AutomationControlled")

@@ -1,6 +1,6 @@
 """
 Roblox API interaction utilities
-Handles authentication, user info, and game launching
+Handles authentication, info, and game launching
 """
 
 import os
@@ -76,7 +76,7 @@ class RobloxAPI:
     @staticmethod
     def launch_roblox(username, cookie, game_id, private_server_id=""):
         """Launch Roblox game with specified account"""
-        print(f"🎮 Getting authentication ticket for {username}...")
+        print(f"Getting authentication ticket for {username}...")
         auth_ticket = RobloxAPI.get_auth_ticket(cookie)
         
         if not auth_ticket:
@@ -87,8 +87,8 @@ class RobloxAPI:
         
         if not game_id or game_id == "":
             url = f"roblox://authentication?ticket={auth_ticket}"
-            print(f"🚀 Launching Roblox Home...")
-            print(f"   Account: {username}")
+            print(f"Launching Roblox Home...")
+            print(f"Account: {username}")
             try:
                 os.system(f'start "" "{url}"')
                 print("[SUCCESS] Roblox home launched successfully!")
@@ -117,12 +117,12 @@ class RobloxAPI:
             "+robloxLocale:en_us+gameLocale:en_us"
         )
 
-        print(f"🚀 Launching Roblox...")
-        print(f"   Account: {username}")
-        print(f"   Game ID: {game_id}")
+        print(f"Launching Roblox...")
+        print(f"Account: {username}")
+        print(f"Game ID: {game_id}")
         if private_server_id:
-            print(f"   Private Server: {private_server_id}")
-        
+            print(f"Private Server: {private_server_id}")
+
         try:
             os.system(f'start "" "{url}"')
             print("[SUCCESS] Roblox launched successfully!")
