@@ -14,7 +14,7 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 - **Dark Theme**: Sleek, modern interface easy on the eyes
 - **Visual Account Management**: See all your accounts at a glance
 
-### 🖥️ Feature-Rich Interface
+### 🖥️ Interface Features
 - **Account Management**: List of all your accounts with encryption status
 - **Multi Roblox Support**: Run multiple Roblox instances on the same device
 - **Import Cookie Feature**: Add accounts quickly using `.ROBLOSECURITY` cookie
