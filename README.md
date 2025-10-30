@@ -12,14 +12,10 @@ Created by evanovar · Contact: Discord (same username as on GitHub). <br>
 
 ### 🎨 Modern UI Interface
 - **Dark Theme**: Sleek, modern interface easy on the eyes
-- **Encryption Status Display**: Color-coded status showing your security level
-  - 🔐 **[PASSWORD ENCRYPTED]** - Light blue
-  - 🔒 **[HARDWARE ENCRYPTED]** - Light green
-  - ⚠️ **[NOT ENCRYPTED]** - Light pink
 - **Visual Account Management**: See all your accounts at a glance
 
 ### 🖥️ Feature-Rich Interface
-- **Account Management**: Visual list of all your accounts with encryption status
+- **Account Management**: List of all your accounts with encryption status
 - **Multi Roblox Support**: Run multiple Roblox instances on the same device
 - **Import Cookie Feature**: Add accounts quickly using `.ROBLOSECURITY` cookie
 - **Game List**: Save up to 50 recently played games with Place IDs (configurable)
@@ -81,15 +77,10 @@ The following Python packages are required:
 
 ## 🔐 Encryption & Security
 
-On first launch, you'll be prompted to choose an encryption method through a modern UI:
-
-### Encryption Methods
-
 **1. Hardware Encryption (Not Portable)**
 - ✅ Automatic encryption using your computer's unique hardware ID
-- ✅ No password needed - completely automatic
+- ✅ No password needed, completely automatic
 - ⚠️ **Data ONLY works on THIS computer**
-- ⚠️ **Cannot be backed up to cloud**
   
 **2. Password Encryption (Portable, Recommended)**
 - ✅ Encrypt with a password you create
@@ -120,9 +111,6 @@ This project is open source and available under the [GPL 3.0 License](LICENSE).
 **Q: Is this tool safe to use?**  
 A: Yes, the tool runs entirely locally on your computer. No data is sent to external servers. However, you're responsible for following Roblox's Terms of Service.
 
-**Q: Do I need Python installed to use the EXE version?**  
-A: No! The standalone EXE includes everything you need. Just download and run.
-
 **Q: Can I use this on Mac or Linux?**  
 A: Currently, this tool is optimized for Windows only.
 
@@ -132,14 +120,8 @@ A: [P] indicates that the game was saved with a private server link code. Clicki
 **Q: What is Multi Roblox?**  
 A: Multi Roblox allows you to run multiple Roblox instances simultaneously on the same machine. Enable it in Settings, and you can launch multiple games at once.
 
-**Q: How do I import accounts using cookies?**  
-A: Open Settings window and click "Import Cookie". Paste your `.ROBLOSECURITY` cookie from Chrome/browser, and the tool will automatically get the username and add the account. The cookie is encrypted and stored securely.
-
 **Q: Where are my data files stored?**  
-A: All configuration and account data are stored in the `AccountManagerData` folder in the same directory as the program. This includes:
-- `saved_accounts.json` - Your encrypted account data
-- `encryption_config.json` - Encryption settings
-- `ui_settings.json` - UI preferences and game list
+A: All configuration and account data are stored in the `AccountManagerData` folder in the same directory as the program.
 
 ### Encryption Questions
 
@@ -151,11 +133,9 @@ A: Currently, there is no safe method. I will add this soon probably
 
 **Q: Which encryption method should I choose?**  
 A:
-- **Choose Hardware Encryption if**: You only use one computer, want zero hassle, don't need cloud backups
-- **Choose Password Encryption if**: You use multiple computers, want cloud backups, need portability
-
-**Q: I changed my computer hardware and now can't access my accounts. What do I do?**  
-A: Hardware-based encryption is permanently tied to your original hardware configuration. If you changed CPU/motherboard/UUID, the data is unrecoverable. This is why we recommend password encryption for long-term use.
+- **Hardware Encryption**: You only use one computer, want zero hassle, don't need cloud backups
+- **Password Encryption**: You use multiple computers, want cloud backups, need portability
+- **No Encrpytion**: You don't care about security
 
 **Q: Can I access my password-encrypted accounts on another computer?**  
 A: Yes! Simply copy the entire `AccountManagerData` folder to the new computer, install the app, and enter your password. This folder contains `saved_accounts.json` and `encryption_config.json`.
@@ -165,13 +145,11 @@ A: Yes! Simply copy the entire `AccountManagerData` folder to the new computer, 
 **Q: How many accounts can I save?**  
 A: There's no hard limit. You can save as many accounts as you need.
 
-**Q: Do saved accounts expire?**  
-A: Roblox cookies can expire after long periods of inactivity or if you change your password on Roblox's website. Use the "Validate account" feature to check if an account is still valid.
+**Q: Why is my token invalid?**  
+A: Roblox cookies can expire after long periods of inactivity or if you change your account password. Use the "Validate account" feature to check if an account is still valid.
 
 **Q: Can I transfer accounts between different instances of the tool?**  
 A: 
 - **Hardware encryption**: No, tied to one machine only
 - **Password encryption**: Yes, copy the entire `AccountManagerData` folder, then use same password
-
-**Q: What happens if I change my Roblox password?**  
-A: Your saved cookie will become invalid. You'll need to delete the old account from the manager and re-add it with the new login.
+- **No encryption**: Yes, copy the entire `AccountManagerData` folder
