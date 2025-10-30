@@ -8,6 +8,8 @@ import json
 import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
+import threading
+import msvcrt
 
 
 class AccountManagerUI:
@@ -329,15 +331,33 @@ class AccountManagerUI:
 
     def add_account(self):
         """Add a new account using browser automation"""
-        try:
-            messagebox.showinfo("Add Account", "Browser will open for account login.\nPlease log in and wait for the process to complete.")
-            self.manager.add_account()
+        messagebox.showinfo("Add Account", "Browser will open for account login.\nPlease log in and wait for the process to complete.")
+        
+        def add_account_thread():
+            """Thread function to add account without blocking UI"""
+            try:
+                success = self.manager.add_account()
+                self.root.after(0, lambda: self._add_account_complete(success))
+            except Exception as e:
+                self.root.after(0, lambda: self._add_account_error(str(e)))
+        
+        thread = threading.Thread(target=add_account_thread, daemon=True)
+        thread.start()
+    
+    def _add_account_complete(self, success):
+        """Called when account addition completes (on main thread)"""
+        if success:
             self.refresh_accounts()
             messagebox.showinfo("Success", "Account added successfully!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add account: {str(e)}")
+        else:
+            messagebox.showerror("Error", "Failed to add account.\nPlease make sure you completed the login process.")
+    
+    def _add_account_error(self, error_msg):
+        """Called when account addition encounters an error (on main thread)"""
+        messagebox.showerror("Error", f"Failed to add account: {error_msg}")
     
     def import_cookie(self):
+        """Import an account using a .ROBLOSECURITY cookie"""
         import_window = tk.Toplevel(self.root)
         import_window.title("Import Cookie")
         import_window.geometry("450x250")
@@ -501,17 +521,22 @@ class AccountManagerUI:
             messagebox.showerror("Error", f"Failed to launch: {str(e)}")
 
     def enable_multi_roblox(self):
-        """Enable Multi Roblox + 773 fix (Python implementation) - called when checkbox is checked"""
+        """Enable Multi Roblox + 773 fix"""
+        # hello programmers! I know you're reading this code, because you want to know how did I implement this feature in Python. (and most importantly, the 773 fix)
+        # because of that, I'll leave some comments here to help you understand.
         import subprocess
         import win32event
         import win32api
         
+        # first, we check if roblox is running, this is very important.
+        # if roblox is running, we cannot enable multi roblox, because the mutex is already created by the running instance.
+        # so we ask the user for permission to close all roblox processes.
         try:
             result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                  capture_output=True, text=True, encoding='utf-8', errors='replace')
-
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace') # checks running processes
+            
             if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
-                response = messagebox.askquestion(
+                response = messagebox.askquestion( # ask user for permission
                     "Roblox Already Running",
                     "A Roblox instance is already running.\n\n"
                     "To use Multi Roblox, you need to close all Roblox instances first.\n\n"
@@ -521,13 +546,19 @@ class AccountManagerUI:
                 
                 if response == 'yes':
                     subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
-                                 capture_output=True, text=True, encoding='utf-8', errors='replace')
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace') # closes roblox
                     messagebox.showinfo("Success", "All Roblox instances have been closed.")
                 else:
                     return False
             
-            mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
+            # then here's the magic:
+            # to enable multi roblox, we create the mutex before roblox creates it.
+            # this means, when roblox starts, it cannot be created by roblox again.
+            # thus, allowing multiple instances to run. Simple, right? (doesn't fix 773 yet)
+            mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent") 
             
+            # now let's get over on the 773 fix part
+            # first, we need to find the RobloxCookies.dat file
             cookies_path = os.path.join(
                 os.getenv('LOCALAPPDATA'),
                 r'Roblox\LocalStorage\RobloxCookies.dat'
@@ -536,10 +567,19 @@ class AccountManagerUI:
             cookie_file = None
             if os.path.exists(cookies_path):
                 try:
+                    # to actually apply the 773 fix, we need to lock the cookies file
+                    # this prevents roblox from accessing it, which causes error 773 to not appear
+                    # and there, you have it, multi roblox + 773 fix!
                     cookie_file = open(cookies_path, 'r+b')
-                except:
-                    pass
-            
+                    msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
+                    print("[INFO] Error 773 fix applied.")
+
+                except OSError:
+                    print("[ERROR] Could not lock RobloxCookies.dat. It may already be locked.")
+
+            else:
+                print("[ERROR] Cookies file not found. 773 fix skipped.")
+
             self.multi_roblox_handle = {'mutex': mutex, 'file': cookie_file}
             return True
         except Exception as e:
@@ -582,6 +622,9 @@ class AccountManagerUI:
         settings_window.configure(bg=self.BG_DARK)
         settings_window.resizable(False, False)
         
+        settings_window.transient(self.root)
+        settings_window.grab_set()
+        
         if self.settings.get("enable_topmost", False):
             settings_window.attributes("-topmost", True)
         
@@ -598,9 +641,6 @@ class AccountManagerUI:
         y = main_y + (main_height - settings_height) // 2
         
         settings_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
-        
-        settings_window.transient(self.root)
-        settings_window.grab_set()
         
         main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=20, pady=15)
@@ -631,6 +671,7 @@ class AccountManagerUI:
                 
                 if setting_name == "enable_topmost":
                     self.root.attributes("-topmost", var.get())
+                    settings_window.attributes("-topmost", var.get())
                 
                 self.save_settings()
             return save
@@ -729,4 +770,4 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=settings_window.destroy
         )
-        close_button.pack(fill="x", pady=(3, 0))
+        close_button.pack(fill="x", pady=(3, 0)) 
