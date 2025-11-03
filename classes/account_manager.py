@@ -61,10 +61,15 @@ class RobloxAccountManager:
                 if self.encryptor and isinstance(data, dict) and data.get('encrypted'):
                     try:
                         decrypted_data = self.encryptor.decrypt_data(data['data'])
+                        # Migrate old accounts to include 'note' field
+                        self._migrate_accounts(decrypted_data)
                         return decrypted_data
                     except Exception as e:
                         raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
                 
+                # Migrate old accounts to include 'note' field
+                if isinstance(data, dict):
+                    self._migrate_accounts(data)
                 return data if isinstance(data, dict) else {}
             except ValueError:
                 raise
@@ -72,6 +77,13 @@ class RobloxAccountManager:
                 print(f"[WARNING] Error loading accounts: {e}")
                 return {}
         return {}
+    
+    def _migrate_accounts(self, accounts):
+        """Migrate old account data to include new fields"""
+        for username, account_data in accounts.items():
+            if isinstance(account_data, dict):
+                if 'note' not in account_data:
+                    account_data['note'] = ''
     
     def save_accounts(self):
         """Save accounts to JSON file"""
@@ -352,7 +364,8 @@ class RobloxAccountManager:
                     self.accounts[username] = {
                         'username': username,
                         'cookie': cookie,
-                        'added_date': time.strftime('%Y-%m-%d %H:%M:%S')
+                        'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'note': ''
                     }
                     self.save_accounts()
                     
@@ -400,7 +413,8 @@ class RobloxAccountManager:
             self.accounts[username] = {
                 'username': username,
                 'cookie': cookie,
-                'added_date': time.strftime('%Y-%m-%d %H:%M:%S')
+                'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'note': ''
             }
             self.save_accounts()
             
@@ -506,3 +520,20 @@ class RobloxAccountManager:
         
         cookie = self.accounts[username]['cookie']
         return RobloxAPI.launch_roblox(username, cookie, game_id, private_server_id)
+    
+    def set_account_note(self, username, note):
+        """Set or update note for an account"""
+        if username not in self.accounts:
+            print(f"[ERROR] Account '{username}' not found")
+            return False
+        
+        self.accounts[username]['note'] = note
+        self.save_accounts()
+        print(f"[SUCCESS] Note updated for account: {username}")
+        return True
+    
+    def get_account_note(self, username):
+        """Get note for a specific account"""
+        if username in self.accounts:
+            return self.accounts[username].get('note', '')
+        return ''
