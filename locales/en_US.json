@@ -1,0 +1,96 @@
+{
+  "app_title": "Roblox Account Manager - Made by doug",
+  "window_titles": {
+    "import_cookie": "Import Cookie",
+    "edit_note": "Edit Note - {username}",
+    "settings": "Settings"
+  },
+  "labels": {
+    "accounts": "Accounts ({count})",
+    "accounts_filtered": "Accounts ({filtered}/{total})",
+    "place_id": "Place ID",
+    "private_server": "Private Server (Optional)",
+    "recent_games": "Recent Games",
+    "quick_actions": "Quick Actions",
+    "note": "Note:",
+    "account": "Account: {username}",
+    "cookie_label": "Cookie (.ROBLOSECURITY):",
+    "max_recent_games": "Max Recent Games:",
+    "current_game": "Current: {game_name}"
+  },
+  "buttons": {
+    "join_game": "🎮 Join Game",
+    "delete_selected": "Delete Selected",
+    "validate": "✓ Validate",
+    "edit_note": "📝 Edit Note",
+    "copy_cookie": "📋 Copy Cookie",
+    "refresh": "🔄 Refresh",
+    "add_account": "➕ Add Account",
+    "remove": "🗑️ Remove",
+    "launch_browser": "🌐 Launch Browser",
+    "settings": "⚙️ Settings",
+    "import": "✓ Import",
+    "cancel": "✕ Cancel",
+    "save": "💾 Save",
+    "close": "✕ Close",
+    "import_cookie": "📥 Import Cookie"
+  },
+  "settings": {
+    "title": "⚙️ Settings",
+    "keep_on_top": "📌 Keep window on top",
+    "enable_multi_roblox": "🎮 Enable Multi-Roblox + 773 fix",
+    "confirm_before_launch": "⚠️ Confirm before launching",
+    "language": "🌐 Language:"
+  },
+  "encryption_status": {
+    "hardware": "🔒 HARDWARE",
+    "password": "🔒 PASSWORD",
+    "not_encrypted": "🔓 NOT ENCRYPTED"
+  },
+  "messages": {
+    "add_account_info": "Browser will open for account login.\nPlease log in and wait for the process to complete.",
+    "add_account_success": "Account added successfully!",
+    "add_account_error": "Failed to add account.\nPlease make sure you completed the login process.",
+    "add_account_error_detail": "Failed to add account: {error}",
+    "missing_cookie": "Please enter the cookie.",
+    "import_success": "Account '{username}' imported successfully!",
+    "import_error": "Failed to import account. Please check the cookie.",
+    "import_error_detail": "Failed to import account: {error}",
+    "delete_confirm": "Are you sure you want to delete '{username}'?\n\nThis action cannot be undone.",
+    "delete_success": "Account '{username}' deleted successfully!",
+    "validate_success": "Account '{username}' is valid! ✓",
+    "validate_error": "Account '{username}' is invalid or expired.",
+    "cookie_copied": "Cookie for '{username}' copied to clipboard!\n\n⚠️ Keep this secure and never share it.",
+    "cookie_error": "Could not retrieve cookie for '{username}'",
+    "note_updated": "Note updated for '{username}'!",
+    "browser_success": "Chrome launched with your account!",
+    "browser_error": "Failed to launch Chrome.",
+    "launch_error": "Failed to launch: {error}",
+    "missing_place_id": "Please enter a Place ID.",
+    "invalid_place_id": "Place ID must be a valid number.",
+    "launch_confirm": "Are you sure you want to join {game_name}?",
+    "game_launched": "Roblox is launching! Check your desktop.",
+    "roblox_running": "A Roblox instance is already running.\n\nTo use Multi Roblox, you need to close all Roblox instances first.\n\nDo you want to close all Roblox instances now?",
+    "roblox_closed": "All Roblox instances have been closed.",
+    "multi_roblox_error": "Failed to enable Multi Roblox: {error}",
+    "restart_required": "Language changed to {language}!\n\nPlease restart the application for changes to take effect."
+  },
+  "dialog_titles": {
+    "add_account": "Add Account",
+    "success": "Success",
+    "error": "Error",
+    "confirm_delete": "Confirm Delete",
+    "validation": "Validation",
+    "copied": "Copied!",
+    "missing_info": "Missing Info",
+    "invalid_input": "Invalid Input",
+    "confirm_launch": "Confirm Launch",
+    "roblox_running": "Roblox Already Running",
+    "missing_information": "Missing Information",
+    "language_changed": "Language Changed"
+  },
+  "dialogs": {
+    "import_title": "🔐 Import Account from Cookie",
+    "edit_note_title": "📝 Edit Note"
+  }
+}

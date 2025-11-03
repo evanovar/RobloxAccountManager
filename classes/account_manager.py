@@ -84,6 +84,8 @@ class RobloxAccountManager:
             if isinstance(account_data, dict):
                 if 'note' not in account_data:
                     account_data['note'] = ''
+                if 'last_used' not in account_data:
+                    account_data['last_used'] = None
     
     def save_accounts(self):
         """Save accounts to JSON file"""
@@ -365,7 +367,8 @@ class RobloxAccountManager:
                         'username': username,
                         'cookie': cookie,
                         'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                        'note': ''
+                        'note': '',
+                        'last_used': None
                     }
                     self.save_accounts()
                     
@@ -414,7 +417,8 @@ class RobloxAccountManager:
                 'username': username,
                 'cookie': cookie,
                 'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'note': ''
+                'note': '',
+                'last_used': None
             }
             self.save_accounts()
             
@@ -517,6 +521,10 @@ class RobloxAccountManager:
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
             return False
+        
+        # Update last used timestamp
+        self.accounts[username]['last_used'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        self.save_accounts()
         
         cookie = self.accounts[username]['cookie']
         return RobloxAPI.launch_roblox(username, cookie, game_id, private_server_id)

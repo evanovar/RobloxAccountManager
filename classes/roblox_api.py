@@ -132,8 +132,14 @@ class RobloxAPI:
             return False
     
     @staticmethod
-    def validate_account(username, cookie):
-        """Validate if an account's cookie is still valid and show detailed token info"""
+    def validate_account(username, cookie, verbose=False):
+        """Validate if an account's cookie is still valid
+        
+        Args:
+            username: The username to validate
+            cookie: The .ROBLOSECURITY cookie
+            verbose: If True, print detailed information
+        """
         try:
             headers = {
                 'Cookie': f'.ROBLOSECURITY={cookie}'
@@ -147,52 +153,55 @@ class RobloxAPI:
             
             is_valid = response.status_code == 200
             
-            print(f"\n{'='*60}")
-            print(f"ACCOUNT VALIDATION: {username}")
-            print(f"{'='*60}")
-            print(f"Valid: {'Yes' if is_valid else 'No'}")
-            
-            if cookie:
-                if len(cookie) > 60:
-                    token_preview = f"{cookie[:50]}...{cookie[-10:]}"
+            if verbose:
+                print(f"\n{'='*60}")
+                print(f"ACCOUNT VALIDATION: {username}")
+                print(f"{'='*60}")
+                print(f"Valid: {'Yes' if is_valid else 'No'}")
+                
+                if cookie:
+                    if len(cookie) > 60:
+                        token_preview = f"{cookie[:50]}...{cookie[-10:]}"
+                    else:
+                        token_preview = cookie
+                    print(f"Token: {token_preview}")
+                    print(f"Token Length: {len(cookie)} characters")
                 else:
-                    token_preview = cookie
-                print(f"Token: {token_preview}")
-                print(f"Token Length: {len(cookie)} characters")
-            else:
-                print("Token: (No token found)")
-            
-            if is_valid and response.status_code == 200:
-                try:
-                    user_data = response.json()
-                    print(f"User ID: {user_data.get('id', 'Unknown')}")
-                    print(f"Display Name: {user_data.get('displayName', 'Unknown')}")
-                    print(f"Username: {user_data.get('name', 'Unknown')}")
-                except:
-                    print("Additional info: Could not retrieve user details")
-            else:
-                print(f"Status Code: {response.status_code}")
-                if response.status_code == 401:
-                    print("Reason: Token expired or invalid")
-                elif response.status_code == 403:
-                    print("Reason: Access forbidden")
+                    print("Token: (No token found)")
+                
+                if is_valid and response.status_code == 200:
+                    try:
+                        user_data = response.json()
+                        print(f"User ID: {user_data.get('id', 'Unknown')}")
+                        print(f"Display Name: {user_data.get('displayName', 'Unknown')}")
+                        print(f"Username: {user_data.get('name', 'Unknown')}")
+                    except:
+                        print("Additional info: Could not retrieve user details")
                 else:
-                    print("Reason: Unknown error")
+                    print(f"Status Code: {response.status_code}")
+                    if response.status_code == 401:
+                        print("Reason: Token expired or invalid")
+                    elif response.status_code == 403:
+                        print("Reason: Access forbidden")
+                    else:
+                        print("Reason: Unknown error")
+                
+                print(f"{'='*60}")
             
-            print(f"{'='*60}")
             return is_valid
             
         except Exception as e:
-            print(f"\n{'='*60}")
-            print(f"ACCOUNT VALIDATION: {username}")
-            print(f"{'='*60}")
-            print(f"Valid: No")
-            if cookie:
-                if len(cookie) > 60:
-                    token_preview = f"{cookie[:50]}...{cookie[-10:]}"
-                else:
-                    token_preview = cookie
-                print(f"Token: {token_preview}")
-            print(f"Error: {str(e)}")
-            print(f"{'='*60}")
+            if verbose:
+                print(f"\n{'='*60}")
+                print(f"ACCOUNT VALIDATION: {username}")
+                print(f"{'='*60}")
+                print(f"Valid: No")
+                if cookie:
+                    if len(cookie) > 60:
+                        token_preview = f"{cookie[:50]}...{cookie[-10:]}"
+                    else:
+                        token_preview = cookie
+                    print(f"Token: {token_preview}")
+                print(f"Error: {str(e)}")
+                print(f"{'='*60}")
             return False

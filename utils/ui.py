@@ -10,17 +10,15 @@ from tkinter import ttk, messagebox
 import requests
 import threading
 import msvcrt
+from utils.localization import init_localization, get_localization
 
 
 class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.root.title("Roblox Account Manager - Made by evanovar")
-        self.root.geometry("450x580")
-        self.root.configure(bg="#2b2b2b")
-        self.root.resizable(False, False)
         
+        # Load settings first to get language preference
         self.data_folder = "AccountManagerData"
         if not os.path.exists(self.data_folder):
             os.makedirs(self.data_folder)
@@ -28,22 +26,75 @@ class AccountManagerUI:
         self.settings_file = os.path.join(self.data_folder, "ui_settings.json")
         self.load_settings()
         
+        # Initialize localization with saved language
+        language = self.settings.get("language", "en_US")
+        init_localization(language)
+        self.loc = get_localization()
+        
+        self.root.title(self.loc.get("app_title"))
+        
+        # Modern color palette - Define first
+        self.BG_DARK = "#1e1e2e"
+        self.BG_MID = "#2a2a3e"
+        self.BG_LIGHT = "#363654"
+        self.BG_HOVER = "#424264"
+        self.FG_TEXT = "#e0e0e0"
+        self.FG_SECONDARY = "#a0a0b0"
+        self.FG_ACCENT = "#7289da"
+        self.FG_ACCENT_HOVER = "#5b6eae"
+        self.FG_SUCCESS = "#43b581"
+        self.FG_WARNING = "#faa61a"
+        self.FG_ERROR = "#f04747"
+        self.BORDER_COLOR = "#40405a"
+        
+        self.root.geometry("450x620")
+        self.root.configure(bg=self.BG_DARK)
+        self.root.resizable(False, False)
+        
         self.multi_roblox_handle = None
-
-        self.BG_DARK = "#2b2b2b"
-        self.BG_MID = "#3a3a3a"
-        self.BG_LIGHT = "#4b4b4b"
-        self.FG_TEXT = "white"
-        self.FG_ACCENT = "#0078D7"
+        
+        # Debounce timers for performance optimization
+        self.save_timer = None
+        self.game_name_timer = None
+        self.search_timer = None
 
         style = ttk.Style()
         style.theme_use("clam")
 
+        # Modern rounded button style
         style.configure("Dark.TFrame", background=self.BG_DARK)
         style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=("Segoe UI", 10))
-        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 9))
-        style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
-        style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
+        style.configure("Dark.TButton", 
+            background=self.BG_LIGHT, 
+            foreground=self.FG_TEXT, 
+            font=("Segoe UI", 9),
+            borderwidth=0,
+            focuscolor='none',
+            relief="flat"
+        )
+        style.map("Dark.TButton", 
+            background=[("active", self.BG_HOVER), ("pressed", self.FG_ACCENT)]
+        )
+        style.configure("Accent.TButton",
+            background=self.FG_ACCENT,
+            foreground="white",
+            font=("Segoe UI", 9, "bold"),
+            borderwidth=0,
+            focuscolor='none',
+            relief="flat"
+        )
+        style.map("Accent.TButton",
+            background=[("active", self.FG_ACCENT_HOVER), ("pressed", "#4a5a8e")]
+        )
+        style.configure("Dark.TEntry", 
+            fieldbackground=self.BG_MID, 
+            background=self.BG_MID, 
+            foreground=self.FG_TEXT,
+            bordercolor=self.BORDER_COLOR,
+            lightcolor=self.BORDER_COLOR,
+            darkcolor=self.BORDER_COLOR,
+            insertcolor=self.FG_TEXT
+        )
 
         main_frame = ttk.Frame(self.root, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -52,23 +103,29 @@ class AccountManagerUI:
         left_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         header_frame = ttk.Frame(left_frame, style="Dark.TFrame")
-        header_frame.pack(fill="x", anchor="w")
+        header_frame.pack(fill="x", anchor="w", pady=(0, 10))
         
-        ttk.Label(header_frame, text="Account List", style="Dark.TLabel").pack(side="left")
+        self.account_count_label = ttk.Label(
+            header_frame, 
+            text=self.loc.get("labels.accounts", count=0), 
+            style="Dark.TLabel",
+            font=("Segoe UI Semibold", 11)
+        )
+        self.account_count_label.pack(side="left")
         
         encryption_status = ""
         encryption_color = self.FG_TEXT
         if self.manager.encryption_config.is_encryption_enabled():
             method = self.manager.encryption_config.get_encryption_method()
             if method == 'hardware':
-                encryption_status = "[HARDWARE ENCRYPTED]"
-                encryption_color = "#90EE90"
+                encryption_status = self.loc.get("encryption_status.hardware")
+                encryption_color = self.FG_SUCCESS
             elif method == 'password':
-                encryption_status = "[PASSWORD ENCRYPTED]"
+                encryption_status = self.loc.get("encryption_status.password")
                 encryption_color = "#87CEEB"
         else:
-            encryption_status = "[NOT ENCRYPTED]"
-            encryption_color = "#FFB6C1"
+            encryption_status = self.loc.get("encryption_status.not_encrypted")
+            encryption_color = self.FG_WARNING
             
         status_label = tk.Label(
             header_frame,
@@ -78,19 +135,66 @@ class AccountManagerUI:
             font=("Segoe UI", 8, "bold")
         )
         status_label.pack(side="right", padx=(5, 0))
+        
+        # Search box for filtering accounts
+        search_frame = ttk.Frame(left_frame, style="Dark.TFrame")
+        search_frame.pack(fill="x", pady=(0, 8))
+        
+        search_container = tk.Frame(search_frame, bg=self.BG_MID, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        search_container.pack(fill="x")
+        
+        ttk.Label(search_container, text="🔍", style="Dark.TLabel", font=("Segoe UI", 10), background=self.BG_MID).pack(side="left", padx=(8, 5))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.on_search_change)
+        
+        self.search_entry = tk.Entry(
+            search_container,
+            textvariable=self.search_var,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            border=0,
+            insertbackground=self.FG_ACCENT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white"
+        )
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 5), pady=6)
+        
+        # Clear search button with modern style
+        clear_btn = tk.Button(
+            search_container,
+            text="✕",
+            bg=self.BG_MID,
+            fg=self.FG_SECONDARY,
+            activebackground=self.BG_HOVER,
+            activeforeground=self.FG_ERROR,
+            font=("Segoe UI", 9, "bold"),
+            border=0,
+            cursor="hand2",
+            command=self.clear_search,
+            pady=2,
+            padx=8
+        )
+        clear_btn.pack(side="right")
 
         list_frame = ttk.Frame(left_frame, style="Dark.TFrame")
         list_frame.pack(fill="both", expand=True)
 
+        # Modern listbox with custom styling
         self.account_list = tk.Listbox(
             list_frame,
             bg=self.BG_MID,
             fg=self.FG_TEXT,
             selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
+            selectforeground="white",
+            highlightthickness=1,
+            highlightbackground=self.BORDER_COLOR,
+            highlightcolor=self.FG_ACCENT,
             border=0,
             font=("Segoe UI", 10),
             width=20,
+            activestyle='none'
         )
         self.account_list.pack(side="left", fill="both", expand=True)
 
@@ -101,24 +205,72 @@ class AccountManagerUI:
         right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         right_frame.pack(side="right", fill="y")
         
-        self.game_name_label = ttk.Label(right_frame, text="", style="Dark.TLabel", font=("Segoe UI", 9))
+        self.game_name_label = ttk.Label(
+            right_frame, 
+            text="", 
+            style="Dark.TLabel", 
+            font=("Segoe UI", 9),
+            foreground=self.FG_SECONDARY
+        )
         self.game_name_label.pack(anchor="w", pady=(0, 5))
         
-        ttk.Label(right_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.place_entry = ttk.Entry(right_frame, style="Dark.TEntry")
-        self.place_entry.pack(fill="x", pady=(0, 5))
+        ttk.Label(
+            right_frame, 
+            text=self.loc.get("labels.place_id"), 
+            style="Dark.TLabel", 
+            font=("Segoe UI Semibold", 9)
+        ).pack(anchor="w")
+        
+        # Modern entry with border
+        place_container = tk.Frame(right_frame, bg=self.BG_MID, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        place_container.pack(fill="x", pady=(2, 8))
+        
+        self.place_entry = tk.Entry(
+            place_container,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            border=0,
+            insertbackground=self.FG_ACCENT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white"
+        )
+        self.place_entry.pack(fill="x", padx=8, pady=6)
         self.place_entry.insert(0, self.settings.get("last_place_id", ""))
         self.place_entry.bind("<KeyRelease>", self.on_place_id_change)
 
-        ttk.Label(right_frame, text="Private Server ID (Optional)", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.private_server_entry = ttk.Entry(right_frame, style="Dark.TEntry")
-        self.private_server_entry.pack(fill="x", pady=(0, 5))
+        ttk.Label(
+            right_frame, 
+            text=self.loc.get("labels.private_server"), 
+            style="Dark.TLabel", 
+            font=("Segoe UI Semibold", 9)
+        ).pack(anchor="w")
+        
+        server_container = tk.Frame(right_frame, bg=self.BG_MID, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        server_container.pack(fill="x", pady=(2, 8))
+        
+        self.private_server_entry = tk.Entry(
+            server_container,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            border=0,
+            insertbackground=self.FG_ACCENT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white"
+        )
+        self.private_server_entry.pack(fill="x", padx=8, pady=6)
         self.private_server_entry.insert(0, self.settings.get("last_private_server", ""))
         self.private_server_entry.bind("<KeyRelease>", self.on_private_server_change)
 
-        ttk.Button(right_frame, text="Join Place ID", style="Dark.TButton", command=self.launch_game).pack(fill="x", pady=(0, 10))
+        ttk.Button(right_frame, text=self.loc.get("buttons.join_game"), style="Accent.TButton", command=self.launch_game).pack(fill="x", pady=(0, 12))
         
-        ttk.Label(right_frame, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 2))
+        ttk.Label(
+            right_frame, 
+            text=self.loc.get("labels.recent_games"), 
+            style="Dark.TLabel", 
+            font=("Segoe UI Semibold", 9)
+        ).pack(anchor="w", pady=(12, 5))
         
         game_list_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         game_list_frame.pack(fill="both", expand=True)
@@ -128,10 +280,14 @@ class AccountManagerUI:
             bg=self.BG_MID,
             fg=self.FG_TEXT,
             selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
+            selectforeground="white",
+            highlightthickness=1,
+            highlightbackground=self.BORDER_COLOR,
+            highlightcolor=self.FG_ACCENT,
             border=0,
             font=("Segoe UI", 9),
             height=5,
+            activestyle='none'
         )
         self.game_list.pack(side="left", fill="both", expand=True)
         self.game_list.bind("<<ListboxSelect>>", self.on_game_select)
@@ -140,16 +296,22 @@ class AccountManagerUI:
         game_scrollbar.pack(side="right", fill="y")
         self.game_list.config(yscrollcommand=game_scrollbar.set)
         
-        ttk.Button(right_frame, text="Delete Selected", style="Dark.TButton", command=self.delete_game_from_list).pack(fill="x", pady=(5, 0))
+        ttk.Button(right_frame, text=self.loc.get("buttons.delete_selected"), style="Dark.TButton", command=self.delete_game_from_list).pack(fill="x", pady=(5, 0))
 
-        ttk.Label(right_frame, text="Quick Actions", style="Dark.TLabel").pack(anchor="w", pady=(10, 5))
+        ttk.Label(
+            right_frame, 
+            text=self.loc.get("labels.quick_actions"), 
+            style="Dark.TLabel",
+            font=("Segoe UI Semibold", 9)
+        ).pack(anchor="w", pady=(12, 5))
 
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
 
-        ttk.Button(action_frame, text="Validate Account", style="Dark.TButton", command=self.validate_account).pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text=self.loc.get("buttons.validate"), style="Dark.TButton", command=self.validate_account).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text=self.loc.get("buttons.edit_note"), style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text=self.loc.get("buttons.copy_cookie"), style="Dark.TButton", command=self.copy_account_cookie).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text=self.loc.get("buttons.refresh"), style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -158,15 +320,15 @@ class AccountManagerUI:
         top_button_frame = ttk.Frame(bottom_frame, style="Dark.TFrame")
         top_button_frame.pack(fill="x", pady=(0, 5))
         
-        ttk.Button(top_button_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(top_button_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        ttk.Button(top_button_frame, text=self.loc.get("buttons.add_account"), style="Accent.TButton", command=self.add_account).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(top_button_frame, text=self.loc.get("buttons.remove"), style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=(2, 0))
         
         # Segunda linha de botões
         bottom_button_frame = ttk.Frame(bottom_frame, style="Dark.TFrame")
         bottom_button_frame.pack(fill="x")
         
-        ttk.Button(bottom_button_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(bottom_button_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        ttk.Button(bottom_button_frame, text=self.loc.get("buttons.launch_browser"), style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(bottom_button_frame, text=self.loc.get("buttons.settings"), style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         self.refresh_accounts()
         self.refresh_game_list()
@@ -186,7 +348,8 @@ class AccountManagerUI:
                     "enable_topmost": False,
                     "enable_multi_roblox": False,
                     "confirm_before_launch": False,
-                    "max_recent_games": 10
+                    "max_recent_games": 10,
+                    "language": "en_US"
                 }
         except:
             self.settings = {
@@ -196,7 +359,8 @@ class AccountManagerUI:
                 "enable_topmost": False,
                 "enable_multi_roblox": False,
                 "confirm_before_launch": False,
-                "max_recent_games": 10
+                "max_recent_games": 10,
+                "language": "en_US"
             }
         
         if self.settings.get("enable_topmost", False):
@@ -205,8 +369,19 @@ class AccountManagerUI:
         if self.settings.get("enable_multi_roblox", False):
             self.root.after(100, self.initialize_multi_roblox)
 
-    def save_settings(self):
-        """Save UI settings to file"""
+    def save_settings(self, debounce=False):
+        """Save UI settings to file with optional debouncing"""
+        if debounce:
+            # Cancel previous timer if exists
+            if self.save_timer:
+                self.root.after_cancel(self.save_timer)
+            # Schedule save after 500ms of inactivity
+            self.save_timer = self.root.after(500, self._do_save_settings)
+        else:
+            self._do_save_settings()
+    
+    def _do_save_settings(self):
+        """Actually perform the save operation"""
         try:
             with open(self.settings_file, 'w') as f:
                 json.dump(self.settings, f, indent=2)
@@ -217,14 +392,18 @@ class AccountManagerUI:
         """Called when place ID changes"""
         place_id = self.place_entry.get().strip()
         self.settings["last_place_id"] = place_id
-        self.save_settings()
-        self.update_game_name()
+        self.save_settings(debounce=True)
+        
+        # Debounce game name fetch to avoid excessive API calls
+        if self.game_name_timer:
+            self.root.after_cancel(self.game_name_timer)
+        self.game_name_timer = self.root.after(800, self.update_game_name)
 
     def on_private_server_change(self, event=None):
         """Called when private server ID changes"""
         private_server = self.private_server_entry.get().strip()
         self.settings["last_private_server"] = private_server
-        self.save_settings()
+        self.save_settings(debounce=True)
 
     def get_game_name(self, place_id):
         """Fetch game name from Roblox API"""
@@ -257,7 +436,7 @@ class AccountManagerUI:
         if place_id and place_id.isdigit():
             game_name = self.get_game_name(place_id)
             if game_name:
-                self.game_name_label.config(text=f"Current: {game_name}")
+                self.game_name_label.config(text=self.loc.get("labels.current_game", game_name=game_name))
             else:
                 self.game_name_label.config(text="")
         else:
@@ -325,15 +504,54 @@ class AccountManagerUI:
             self.refresh_game_list()
             messagebox.showinfo("Success", "Game removed from list!")
 
-    def refresh_accounts(self):
-        """Refresh the account list"""
+    def refresh_accounts(self, keep_selection=False):
+        """Refresh the account list with optional alphabetical sorting and filtering"""
+        # Save current selection
+        current_selection = None
+        if keep_selection:
+            sel = self.account_list.curselection()
+            if sel:
+                current_selection = self.get_selected_username()
+        
         self.account_list.delete(0, tk.END)
-        for username, data in self.manager.accounts.items():
+        
+        # Get search filter
+        search_term = self.search_var.get().lower().strip()
+        
+        # Sort accounts alphabetically and filter by search
+        sorted_accounts = sorted(self.manager.accounts.items())
+        displayed_count = 0
+        selection_index = None
+        
+        for username, data in sorted_accounts:
             note = data.get('note', '') if isinstance(data, dict) else ''
             display_text = f"{username}"
             if note:
                 display_text += f" • {note}"
+            
+            # Filter by search term
+            if search_term and search_term not in username.lower() and search_term not in note.lower():
+                continue
+            
             self.account_list.insert(tk.END, display_text)
+            
+            # Track index for re-selection
+            if keep_selection and current_selection == username:
+                selection_index = displayed_count
+            
+            displayed_count += 1
+        
+        # Update account count
+        total = len(self.manager.accounts)
+        if search_term:
+            self.account_count_label.config(text=self.loc.get("labels.accounts_filtered", filtered=displayed_count, total=total))
+        else:
+            self.account_count_label.config(text=self.loc.get("labels.accounts", count=total))
+        
+        # Restore selection
+        if selection_index is not None:
+            self.account_list.selection_set(selection_index)
+            self.account_list.see(selection_index)
     
     def get_selected_username(self):
         """Get the currently selected username"""
@@ -346,10 +564,22 @@ class AccountManagerUI:
         display_text = self.account_list.get(selection[0])
         username = display_text.split(' • ')[0]
         return username
+    
+    def clear_search(self):
+        """Clear the search box"""
+        self.search_var.set('')
+        self.search_entry.focus_set()
+    
+    def on_search_change(self, *args):
+        """Called when search text changes"""
+        # Debounce search to avoid excessive filtering
+        if self.search_timer:
+            self.root.after_cancel(self.search_timer)
+        self.search_timer = self.root.after(300, lambda: self.refresh_accounts(keep_selection=False))
 
     def add_account(self):
         """Add a new account using browser automation"""
-        messagebox.showinfo("Add Account", "Browser will open for account login.\nPlease log in and wait for the process to complete.")
+        messagebox.showinfo(self.loc.get("dialog_titles.add_account"), self.loc.get("messages.add_account_info"))
         
         def add_account_thread():
             """Thread function to add account without blocking UI"""
@@ -365,22 +595,23 @@ class AccountManagerUI:
     def _add_account_complete(self, success):
         """Called when account addition completes (on main thread)"""
         if success:
-            self.refresh_accounts()
-            messagebox.showinfo("Success", "Account added successfully!")
+            self.refresh_accounts(keep_selection=True)
+            messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.add_account_success"))
         else:
-            messagebox.showerror("Error", "Failed to add account.\nPlease make sure you completed the login process.")
+            messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.add_account_error"))
     
     def _add_account_error(self, error_msg):
         """Called when account addition encounters an error (on main thread)"""
-        messagebox.showerror("Error", f"Failed to add account: {error_msg}")
+        messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.add_account_error_detail", error=error_msg))
     
     def import_cookie(self):
         """Import an account using a .ROBLOSECURITY cookie"""
         import_window = tk.Toplevel(self.root)
-        import_window.title("Import Cookie")
-        import_window.geometry("450x250")
+        import_window.title(self.loc.get("window_titles.import_cookie"))
+        import_window.geometry("480x320")
         import_window.configure(bg=self.BG_DARK)
-        import_window.resizable(False, False)
+        import_window.resizable(True, True)
+        import_window.minsize(400, 280)
         
         self.root.update_idletasks()
         main_x = self.root.winfo_x()
@@ -388,9 +619,9 @@ class AccountManagerUI:
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
         
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 250) // 2
-        import_window.geometry(f"450x250+{x}+{y}")
+        x = main_x + (main_width - 480) // 2
+        y = main_y + (main_height - 320) // 2
+        import_window.geometry(f"480x320+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
             import_window.attributes("-topmost", True)
@@ -403,27 +634,36 @@ class AccountManagerUI:
         
         ttk.Label(
             main_frame,
-            text="Import Account from Cookie",
+            text=self.loc.get("dialogs.import_title"),
             style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
+            font=("Segoe UI Semibold", 13)
         ).pack(anchor="w", pady=(0, 15))
         
-        ttk.Label(main_frame, text="Cookie (.ROBLOSECURITY):", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            main_frame, 
+            text=self.loc.get("labels.cookie_label"), 
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(0, 5))
         
-        cookie_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        cookie_frame.pack(fill="both", expand=True, pady=(0, 15))
+        cookie_frame_container = tk.Frame(main_frame, bg=self.BG_MID, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        cookie_frame_container.pack(fill="both", expand=True, pady=(0, 15))
         
         cookie_text = tk.Text(
-            cookie_frame,
+            cookie_frame_container,
             bg=self.BG_MID,
             fg=self.FG_TEXT,
-            font=("Segoe UI", 9),
+            font=("Consolas", 9),
             height=5,
-            wrap="word"
+            wrap="word",
+            border=0,
+            insertbackground=self.FG_ACCENT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white"
         )
-        cookie_text.pack(side="left", fill="both", expand=True)
+        cookie_text.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         
-        cookie_scrollbar = ttk.Scrollbar(cookie_frame, command=cookie_text.yview)
+        cookie_scrollbar = ttk.Scrollbar(cookie_frame_container, command=cookie_text.yview)
         cookie_scrollbar.pack(side="right", fill="y")
         cookie_text.config(yscrollcommand=cookie_scrollbar.set)
         
@@ -431,33 +671,33 @@ class AccountManagerUI:
             cookie = cookie_text.get("1.0", "end-1c").strip()
             
             if not cookie:
-                messagebox.showwarning("Missing Information", "Please enter the cookie.")
+                messagebox.showwarning(self.loc.get("dialog_titles.missing_information"), self.loc.get("messages.missing_cookie"))
                 return
             
             try:
                 success, username = self.manager.import_cookie_account(cookie)
                 if success:
-                    self.refresh_accounts()
-                    messagebox.showinfo("Success", f"Account '{username}' imported successfully!")
+                    self.refresh_accounts(keep_selection=True)
+                    messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.import_success", username=username))
                     import_window.destroy()
                 else:
-                    messagebox.showerror("Error", "Failed to import account. Please check the cookie.")
+                    messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.import_error"))
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to import account: {str(e)}")
+                messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.import_error_detail", error=str(e)))
         
         button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
+        button_frame.pack(fill="x", pady=(0, 0))
         
         ttk.Button(
             button_frame,
-            text="Import",
-            style="Dark.TButton",
+            text=self.loc.get("buttons.import"),
+            style="Accent.TButton",
             command=do_import
         ).pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         ttk.Button(
             button_frame,
-            text="Cancel",
+            text=self.loc.get("buttons.cancel"),
             style="Dark.TButton",
             command=import_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
@@ -466,11 +706,11 @@ class AccountManagerUI:
         """Remove the selected account"""
         username = self.get_selected_username()
         if username:
-            confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{username}'?")
+            confirm = messagebox.askyesno(self.loc.get("dialog_titles.confirm_delete"), self.loc.get("messages.delete_confirm", username=username))
             if confirm:
                 self.manager.delete_account(username)
                 self.refresh_accounts()
-                messagebox.showinfo("Success", f"Account '{username}' deleted successfully!")
+                messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.delete_success", username=username))
 
     def validate_account(self):
         """Validate the selected account"""
@@ -478,9 +718,26 @@ class AccountManagerUI:
         if username:
             is_valid = self.manager.validate_account(username)
             if is_valid:
-                messagebox.showinfo("Validation", f"Account '{username}' is valid! ✓")
+                messagebox.showinfo(self.loc.get("dialog_titles.validation"), self.loc.get("messages.validate_success", username=username))
             else:
-                messagebox.showwarning("Validation", f"Account '{username}' is invalid or expired.")
+                messagebox.showwarning(self.loc.get("dialog_titles.validation"), self.loc.get("messages.validate_error", username=username))
+    
+    def copy_account_cookie(self):
+        """Copy the selected account's cookie to clipboard"""
+        username = self.get_selected_username()
+        if not username:
+            return
+        
+        cookie = self.manager.get_account_cookie(username)
+        if cookie:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(cookie)
+            self.root.update()
+            
+            # Visual feedback
+            messagebox.showinfo(self.loc.get("dialog_titles.copied"), self.loc.get("messages.cookie_copied", username=username))
+        else:
+            messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.cookie_error", username=username))
     
     def edit_account_note(self):
         """Edit note for the selected account"""
@@ -491,10 +748,11 @@ class AccountManagerUI:
         current_note = self.manager.get_account_note(username)
         
         note_window = tk.Toplevel(self.root)
-        note_window.title(f"Edit Note - {username}")
-        note_window.geometry("400x200")
+        note_window.title(self.loc.get("window_titles.edit_note", username=username))
+        note_window.geometry("420x280")
         note_window.configure(bg=self.BG_DARK)
-        note_window.resizable(False, False)
+        note_window.resizable(True, True)
+        note_window.minsize(350, 240)
         
         self.root.update_idletasks()
         main_x = self.root.winfo_x()
@@ -502,9 +760,9 @@ class AccountManagerUI:
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
         
-        x = main_x + (main_width - 400) // 2
-        y = main_y + (main_height - 200) // 2
-        note_window.geometry(f"400x200+{x}+{y}")
+        x = main_x + (main_width - 420) // 2
+        y = main_y + (main_height - 280) // 2
+        note_window.geometry(f"420x280+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
             note_window.attributes("-topmost", True)
@@ -517,45 +775,65 @@ class AccountManagerUI:
         
         ttk.Label(
             main_frame,
-            text=f"Edit note for '{username}'",
+            text=self.loc.get("dialogs.edit_note_title"),
             style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
+            font=("Segoe UI Semibold", 13)
+        ).pack(anchor="w", pady=(0, 5))
         
-        ttk.Label(main_frame, text="Note:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            main_frame,
+            text=self.loc.get("labels.account", username=username),
+            style="Dark.TLabel",
+            font=("Segoe UI", 9),
+            foreground=self.FG_SECONDARY
+        ).pack(anchor="w", pady=(0, 15))
+        
+        ttk.Label(
+            main_frame, 
+            text=self.loc.get("labels.note"), 
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(0, 5))
+        
+        note_container = tk.Frame(main_frame, bg=self.BG_MID, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        note_container.pack(fill="both", expand=True, pady=(0, 15))
         
         note_text = tk.Text(
-            main_frame,
+            note_container,
             bg=self.BG_MID,
             fg=self.FG_TEXT,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 10),
             height=4,
-            wrap="word"
+            wrap="word",
+            border=0,
+            insertbackground=self.FG_ACCENT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white"
         )
-        note_text.pack(fill="both", expand=True, pady=(0, 10))
+        note_text.pack(fill="both", expand=True, padx=8, pady=8)
         note_text.insert("1.0", current_note)
         note_text.focus_set()
         
         def save_note():
             new_note = note_text.get("1.0", "end-1c").strip()
             self.manager.set_account_note(username, new_note)
-            self.refresh_accounts()
-            messagebox.showinfo("Success", f"Note updated for '{username}'!")
+            self.refresh_accounts(keep_selection=True)
+            messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.note_updated", username=username))
             note_window.destroy()
         
         button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
+        button_frame.pack(fill="x", pady=(0, 0))
         
         ttk.Button(
             button_frame,
-            text="Save",
-            style="Dark.TButton",
+            text=self.loc.get("buttons.save"),
+            style="Accent.TButton",
             command=save_note
         ).pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         ttk.Button(
             button_frame,
-            text="Cancel",
+            text=self.loc.get("buttons.cancel"),
             style="Dark.TButton",
             command=note_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
@@ -569,11 +847,11 @@ class AccountManagerUI:
         try:
             success = self.manager.launch_home(username)
             if success:
-                messagebox.showinfo("Success", "Chrome launched with your account!")
+                messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.browser_success"))
             else:
-                messagebox.showerror("Error", "Failed to launch Chrome.")
+                messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.browser_error"))
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch: {str(e)}")
+            messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.launch_error", error=str(e)))
 
     def launch_game(self):
         """Launch Roblox game with the selected account"""
@@ -583,11 +861,11 @@ class AccountManagerUI:
 
         game_id = self.place_entry.get().strip()
         if not game_id:
-            messagebox.showwarning("Missing Info", "Please enter a Place ID.")
+            messagebox.showwarning(self.loc.get("dialog_titles.missing_info"), self.loc.get("messages.missing_place_id"))
             return
 
         if not game_id.isdigit():
-            messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
+            messagebox.showerror(self.loc.get("dialog_titles.invalid_input"), self.loc.get("messages.invalid_place_id"))
             return
 
         private_server = self.private_server_entry.get().strip()
@@ -597,7 +875,7 @@ class AccountManagerUI:
             if not game_name:
                 game_name = f"Place {game_id}"
             
-            confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join {game_name}?")
+            confirm = messagebox.askyesno(self.loc.get("dialog_titles.confirm_launch"), self.loc.get("messages.launch_confirm", game_name=game_name))
             if not confirm:
                 return
 
@@ -610,11 +888,11 @@ class AccountManagerUI:
                 else:
                     self.add_game_to_list(game_id, f"Place {game_id}", private_server)
                 
-                messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
+                messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.game_launched"))
             else:
-                messagebox.showerror("Error", "Failed to launch Roblox.")
+                messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.browser_error"))
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch: {str(e)}")
+            messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.launch_error", error=str(e)))
 
     def enable_multi_roblox(self):
         """Enable Multi Roblox + 773 fix"""
@@ -633,17 +911,15 @@ class AccountManagerUI:
             
             if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
                 response = messagebox.askquestion( # ask user for permission
-                    "Roblox Already Running",
-                    "A Roblox instance is already running.\n\n"
-                    "To use Multi Roblox, you need to close all Roblox instances first.\n\n"
-                    "Do you want to close all Roblox instances now?",
+                    self.loc.get("dialog_titles.roblox_running"),
+                    self.loc.get("messages.roblox_running"),
                     icon='warning'
                 )
                 
                 if response == 'yes':
                     subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
                                  capture_output=True, text=True, encoding='utf-8', errors='replace') # closes roblox
-                    messagebox.showinfo("Success", "All Roblox instances have been closed.")
+                    messagebox.showinfo(self.loc.get("dialog_titles.success"), self.loc.get("messages.roblox_closed"))
                 else:
                     return False
             
@@ -679,7 +955,7 @@ class AccountManagerUI:
             self.multi_roblox_handle = {'mutex': mutex, 'file': cookie_file}
             return True
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to enable Multi Roblox: {str(e)}")
+            messagebox.showerror(self.loc.get("dialog_titles.error"), self.loc.get("messages.multi_roblox_error", error=str(e)))
             return False
     
     def disable_multi_roblox(self):
@@ -713,10 +989,11 @@ class AccountManagerUI:
     def open_settings(self):
         """Open the Settings window"""
         settings_window = tk.Toplevel(self.root)
-        settings_window.title("Settings")
-        settings_window.geometry("300x300")
+        settings_window.title(self.loc.get("window_titles.settings"))
+        settings_window.geometry("340x480")
         settings_window.configure(bg=self.BG_DARK)
-        settings_window.resizable(False, False)
+        settings_window.resizable(True, True)
+        settings_window.minsize(320, 420)
         
         settings_window.transient(self.root)
         settings_window.grab_set()
@@ -730,8 +1007,8 @@ class AccountManagerUI:
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
         
-        settings_width = 300
-        settings_height = 320
+        settings_width = 340
+        settings_height = 480
         
         x = main_x + (main_width - settings_width) // 2
         y = main_y + (main_height - settings_height) // 2
@@ -739,27 +1016,44 @@ class AccountManagerUI:
         settings_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
         
         main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
         title_label = ttk.Label(
             main_frame, 
-            text="Settings", 
+            text=self.loc.get("settings.title"), 
             style="Dark.TLabel", 
-            font=("Segoe UI", 14, "bold")
+            font=("Segoe UI Semibold", 14)
         )
-        title_label.pack(anchor="w", pady=(0, 10))
+        title_label.pack(anchor="w", pady=(0, 20))
         
         topmost_var = tk.BooleanVar(value=self.settings.get("enable_topmost", False))
         multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
         confirm_launch_var = tk.BooleanVar(value=self.settings.get("confirm_before_launch", False))
         
-        checkbox_style = ttk.Style()
-        checkbox_style.configure(
-            "Dark.TCheckbutton",
-            background=self.BG_DARK,
-            foreground="white",
-            font=("Segoe UI", 10)
-        )
+        # Custom checkbox style
+        checkbox_frame_bg = self.BG_MID
+        
+        def create_checkbox_container(parent, var, text, command):
+            container = tk.Frame(parent, bg=checkbox_frame_bg, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+            container.pack(fill="x", pady=3)
+            
+            check = tk.Checkbutton(
+                container,
+                text=text,
+                variable=var,
+                command=command,
+                bg=checkbox_frame_bg,
+                fg=self.FG_TEXT,
+                activebackground=checkbox_frame_bg,
+                activeforeground=self.FG_TEXT,
+                selectcolor=self.BG_LIGHT,
+                font=("Segoe UI", 10),
+                border=0,
+                highlightthickness=0,
+                cursor="hand2"
+            )
+            check.pack(anchor="w", padx=10, pady=8)
+            return container
         
         def auto_save_setting(setting_name, var):
             def save():
@@ -786,43 +1080,100 @@ class AccountManagerUI:
             
             self.save_settings()
         
-        topmost_check = ttk.Checkbutton(
+        create_checkbox_container(
             main_frame,
-            text="Enable Topmost",
-            variable=topmost_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("enable_topmost", topmost_var)
+            topmost_var,
+            self.loc.get("settings.keep_on_top"),
+            auto_save_setting("enable_topmost", topmost_var)
         )
-        topmost_check.pack(anchor="w", pady=2)
         
-        multi_roblox_check = ttk.Checkbutton(
+        create_checkbox_container(
             main_frame,
-            text="Enable Multi Roblox + 773 fix",
-            variable=multi_roblox_var,
-            style="Dark.TCheckbutton",
-            command=on_multi_roblox_toggle
+            multi_roblox_var,
+            self.loc.get("settings.enable_multi_roblox"),
+            on_multi_roblox_toggle
         )
-        multi_roblox_check.pack(anchor="w", pady=2)
         
-        confirm_check = ttk.Checkbutton(
+        create_checkbox_container(
             main_frame,
-            text="Confirm Before Launch",
-            variable=confirm_launch_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("confirm_before_launch", confirm_launch_var)
+            confirm_launch_var,
+            self.loc.get("settings.confirm_before_launch"),
+            auto_save_setting("confirm_before_launch", confirm_launch_var)
         )
-        confirm_check.pack(anchor="w", pady=2)
         
-        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=5)
+        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=8)
         
-        max_games_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        max_games_frame.pack(fill="x", pady=2)
+        # Language selector
+        language_frame = tk.Frame(main_frame, bg=checkbox_frame_bg, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        language_frame.pack(fill="x", pady=3)
+        
+        inner_lang_frame = tk.Frame(language_frame, bg=checkbox_frame_bg)
+        inner_lang_frame.pack(fill="x", padx=10, pady=8)
         
         ttk.Label(
-            max_games_frame, 
-            text="Max Recent Games:", 
+            inner_lang_frame, 
+            text=self.loc.get("settings.language"), 
             style="Dark.TLabel",
-            font=("Segoe UI", 10)
+            font=("Segoe UI", 10),
+            background=checkbox_frame_bg
+        ).pack(side="left")
+        
+        # Get available languages
+        available_languages = self.loc.get_available_languages()
+        current_language = self.settings.get("language", "en_US")
+        
+        language_var = tk.StringVar(value=current_language)
+        
+        def on_language_change(*args):
+            new_language = language_var.get()
+            if new_language != self.settings.get("language"):
+                self.settings["language"] = new_language
+                self.save_settings()
+                
+                # Show restart message
+                lang_name = available_languages.get(new_language, new_language)
+                messagebox.showinfo(
+                    self.loc.get("dialog_titles.language_changed"),
+                    self.loc.get("messages.restart_required", language=lang_name)
+                )
+        
+        language_combo = ttk.Combobox(
+            inner_lang_frame,
+            textvariable=language_var,
+            values=list(available_languages.values()),
+            state="readonly",
+            width=18,
+            font=("Segoe UI", 9)
+        )
+        
+        # Map display names back to codes
+        lang_code_map = {v: k for k, v in available_languages.items()}
+        current_display = available_languages.get(current_language, "English")
+        language_combo.set(current_display)
+        
+        def on_combo_select(event):
+            selected_display = language_combo.get()
+            selected_code = lang_code_map.get(selected_display, "en_US")
+            language_var.set(selected_code)
+            on_language_change()
+        
+        language_combo.bind("<<ComboboxSelected>>", on_combo_select)
+        language_combo.pack(side="right")
+        
+        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=8)
+        
+        max_games_frame = tk.Frame(main_frame, bg=checkbox_frame_bg, highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        max_games_frame.pack(fill="x", pady=3)
+        
+        inner_frame = tk.Frame(max_games_frame, bg=checkbox_frame_bg)
+        inner_frame.pack(fill="x", padx=10, pady=8)
+        
+        ttk.Label(
+            inner_frame, 
+            text=self.loc.get("labels.max_recent_games"), 
+            style="Dark.TLabel",
+            font=("Segoe UI", 10),
+            background=checkbox_frame_bg
         ).pack(side="left")
         
         max_games_var = tk.IntVar(value=self.settings.get("max_recent_games", 10))
@@ -837,33 +1188,39 @@ class AccountManagerUI:
                 self.refresh_game_list()
         
         max_games_spinner = tk.Spinbox(
-            max_games_frame,
+            inner_frame,
             from_=5,
             to=50,
             textvariable=max_games_var,
             width=8,
-            bg=self.BG_MID,
-            fg="white",
-            buttonbackground=self.BG_LIGHT,
+            bg=self.BG_LIGHT,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_HOVER,
             font=("Segoe UI", 9),
-            command=on_max_games_change
+            command=on_max_games_change,
+            border=1,
+            relief="solid",
+            highlightthickness=0
         )
         max_games_spinner.pack(side="right")
         
-        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
+        # Spacer to push buttons down
+        ttk.Frame(main_frame, style="Dark.TFrame", height=15).pack(pady=5)
         
-        import_cookie_button = ttk.Button(
-            main_frame,
-            text="Import Cookie",
+        # Button container to ensure visibility
+        button_container = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_container.pack(fill="x", side="bottom")
+        
+        ttk.Button(
+            button_container,
+            text=self.loc.get("buttons.import_cookie"),
             style="Dark.TButton",
             command=lambda: [settings_window.destroy(), self.import_cookie()]
-        )
-        import_cookie_button.pack(fill="x", pady=(3, 0))
+        ).pack(fill="x", pady=(0, 5))
         
-        close_button = ttk.Button(
-            main_frame,
-            text="Close",
+        ttk.Button(
+            button_container,
+            text=self.loc.get("buttons.close"),
             style="Dark.TButton",
             command=settings_window.destroy
-        )
-        close_button.pack(fill="x", pady=(3, 0)) 
+        ).pack(fill="x", pady=(0, 0)) 

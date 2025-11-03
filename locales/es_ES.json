@@ -1,0 +1,96 @@
+{
+  "app_title": "Administrador de Cuentas Roblox - Hecho por doug",
+  "window_titles": {
+    "import_cookie": "Importar Cookie",
+    "edit_note": "Editar Nota - {username}",
+    "settings": "Configuración"
+  },
+  "labels": {
+    "accounts": "Cuentas ({count})",
+    "accounts_filtered": "Cuentas ({filtered}/{total})",
+    "place_id": "ID del Lugar",
+    "private_server": "Servidor Privado (Opcional)",
+    "recent_games": "Juegos Recientes",
+    "quick_actions": "Acciones Rápidas",
+    "note": "Nota:",
+    "account": "Cuenta: {username}",
+    "cookie_label": "Cookie (.ROBLOSECURITY):",
+    "max_recent_games": "Máx. Juegos Recientes:",
+    "current_game": "Actual: {game_name}"
+  },
+  "buttons": {
+    "join_game": "🎮 Unirse al Juego",
+    "delete_selected": "Eliminar Seleccionado",
+    "validate": "✓ Validar",
+    "edit_note": "📝 Editar Nota",
+    "copy_cookie": "📋 Copiar Cookie",
+    "refresh": "🔄 Actualizar",
+    "add_account": "➕ Añadir Cuenta",
+    "remove": "🗑️ Eliminar",
+    "launch_browser": "🌐 Abrir Navegador",
+    "settings": "⚙️ Configuración",
+    "import": "✓ Importar",
+    "cancel": "✕ Cancelar",
+    "save": "💾 Guardar",
+    "close": "✕ Cerrar",
+    "import_cookie": "📥 Importar Cookie"
+  },
+  "settings": {
+    "title": "⚙️ Configuración",
+    "keep_on_top": "📌 Mantener ventana al frente",
+    "enable_multi_roblox": "🎮 Activar Multi-Roblox + corrección 773",
+    "confirm_before_launch": "⚠️ Confirmar antes de abrir",
+    "language": "🌐 Idioma:"
+  },
+  "encryption_status": {
+    "hardware": "🔒 HARDWARE",
+    "password": "🔒 CONTRASEÑA",
+    "not_encrypted": "🔓 NO ENCRIPTADO"
+  },
+  "messages": {
+    "add_account_info": "Se abrirá el navegador para iniciar sesión.\nPor favor, inicie sesión y espere a que se complete el proceso.",
+    "add_account_success": "¡Cuenta añadida exitosamente!",
+    "add_account_error": "Error al añadir cuenta.\nAsegúrese de haber completado el proceso de inicio de sesión.",
+    "add_account_error_detail": "Error al añadir cuenta: {error}",
+    "missing_cookie": "Por favor, ingrese la cookie.",
+    "import_success": "¡Cuenta '{username}' importada exitosamente!",
+    "import_error": "Error al importar cuenta. Verifique la cookie.",
+    "import_error_detail": "Error al importar cuenta: {error}",
+    "delete_confirm": "¿Está seguro de que desea eliminar '{username}'?\n\nEsta acción no se puede deshacer.",
+    "delete_success": "¡Cuenta '{username}' eliminada exitosamente!",
+    "validate_success": "¡La cuenta '{username}' es válida! ✓",
+    "validate_error": "La cuenta '{username}' es inválida o ha expirado.",
+    "cookie_copied": "¡Cookie de '{username}' copiada al portapapeles!\n\n⚠️ Manténgala segura y nunca la comparta.",
+    "cookie_error": "No se pudo obtener la cookie de '{username}'",
+    "note_updated": "¡Nota actualizada para '{username}'!",
+    "browser_success": "¡Chrome abierto con su cuenta!",
+    "browser_error": "Error al abrir Chrome.",
+    "launch_error": "Error al abrir: {error}",
+    "missing_place_id": "Por favor, ingrese un ID de Lugar.",
+    "invalid_place_id": "El ID del Lugar debe ser un número válido.",
+    "launch_confirm": "¿Está seguro de que desea unirse a {game_name}?",
+    "game_launched": "¡Roblox se está abriendo! Revise su escritorio.",
+    "roblox_running": "Ya hay una instancia de Roblox en ejecución.\n\nPara usar Multi Roblox, debe cerrar todas las instancias primero.\n\n¿Desea cerrar todas las instancias de Roblox ahora?",
+    "roblox_closed": "Todas las instancias de Roblox han sido cerradas.",
+    "multi_roblox_error": "Error al activar Multi Roblox: {error}",
+    "restart_required": "¡Idioma cambiado a {language}!\n\nPor favor, reinicie la aplicación para aplicar los cambios."
+  },
+  "dialog_titles": {
+    "add_account": "Añadir Cuenta",
+    "success": "Éxito",
+    "error": "Error",
+    "confirm_delete": "Confirmar Eliminación",
+    "validation": "Validación",
+    "copied": "¡Copiado!",
+    "missing_info": "Información Faltante",
+    "invalid_input": "Entrada Inválida",
+    "confirm_launch": "Confirmar Apertura",
+    "roblox_running": "Roblox en Ejecución",
+    "missing_information": "Información Faltante",
+    "language_changed": "Idioma Cambiado"
+  },
+  "dialogs": {
+    "import_title": "🔐 Importar Cuenta desde Cookie",
+    "edit_note_title": "📝 Editar Nota"
+  }
+}
