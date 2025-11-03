@@ -17,7 +17,7 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.root.title("Roblox Account Manager - Made by evanovar")
-        self.root.geometry("450x580")
+        self.root.geometry("450x520")
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
@@ -154,19 +154,10 @@ class AccountManagerUI:
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-        # Primeira linha de botões
-        top_button_frame = ttk.Frame(bottom_frame, style="Dark.TFrame")
-        top_button_frame.pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(top_button_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(top_button_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        
-        # Segunda linha de botões
-        bottom_button_frame = ttk.Frame(bottom_frame, style="Dark.TFrame")
-        bottom_button_frame.pack(fill="x")
-        
-        ttk.Button(bottom_button_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(bottom_button_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        ttk.Button(bottom_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(bottom_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         self.refresh_accounts()
         self.refresh_game_list()
@@ -492,7 +483,7 @@ class AccountManagerUI:
         
         note_window = tk.Toplevel(self.root)
         note_window.title(f"Edit Note - {username}")
-        note_window.geometry("400x200")
+        note_window.geometry("450x220")
         note_window.configure(bg=self.BG_DARK)
         note_window.resizable(False, False)
         
@@ -502,9 +493,9 @@ class AccountManagerUI:
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
         
-        x = main_x + (main_width - 400) // 2
-        y = main_y + (main_height - 200) // 2
-        note_window.geometry(f"400x200+{x}+{y}")
+        x = main_x + (main_width - 450) // 2
+        y = main_y + (main_height - 220) // 2
+        note_window.geometry(f"450x220+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
             note_window.attributes("-topmost", True)
@@ -529,10 +520,10 @@ class AccountManagerUI:
             bg=self.BG_MID,
             fg=self.FG_TEXT,
             font=("Segoe UI", 9),
-            height=4,
+            height=3,
             wrap="word"
         )
-        note_text.pack(fill="both", expand=True, pady=(0, 10))
+        note_text.pack(fill="both", expand=True, pady=(0, 15))
         note_text.insert("1.0", current_note)
         note_text.focus_set()
         
