@@ -17,7 +17,7 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.root.title("Roblox Account Manager - Made by evanovar")
-        self.root.geometry("450x500")
+        self.root.geometry("450x520")
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
@@ -41,7 +41,7 @@ class AccountManagerUI:
 
         style.configure("Dark.TFrame", background=self.BG_DARK)
         style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=("Segoe UI", 10))
-        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 10))
+        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 9))
         style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
         style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
 
@@ -131,7 +131,7 @@ class AccountManagerUI:
             highlightthickness=0,
             border=0,
             font=("Segoe UI", 9),
-            height=6,
+            height=5,
         )
         self.game_list.pack(side="left", fill="both", expand=True)
         self.game_list.bind("<<ListboxSelect>>", self.on_game_select)
@@ -148,15 +148,16 @@ class AccountManagerUI:
         action_frame.pack(fill="x")
 
         ttk.Button(action_frame, text="Validate Account", style="Dark.TButton", command=self.validate_account).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-        ttk.Button(bottom_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", expand=True, padx=5)
-        ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", expand=True, padx=5)
-        ttk.Button(bottom_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", expand=True, padx=5)
-        ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", expand=True, padx=5)
+        ttk.Button(bottom_frame, text="Add Account", style="Dark.TButton", command=self.add_account).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(bottom_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         self.refresh_accounts()
         self.refresh_game_list()
@@ -318,16 +319,24 @@ class AccountManagerUI:
     def refresh_accounts(self):
         """Refresh the account list"""
         self.account_list.delete(0, tk.END)
-        for username in self.manager.accounts.keys():
-            self.account_list.insert(tk.END, username)
-
+        for username, data in self.manager.accounts.items():
+            note = data.get('note', '') if isinstance(data, dict) else ''
+            display_text = f"{username}"
+            if note:
+                display_text += f" • {note}"
+            self.account_list.insert(tk.END, display_text)
+    
     def get_selected_username(self):
         """Get the currently selected username"""
         selection = self.account_list.curselection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select an account first.")
             return None
-        return self.account_list.get(selection[0])
+        
+        # Extract username from display text (before the bullet if note exists)
+        display_text = self.account_list.get(selection[0])
+        username = display_text.split(' • ')[0]
+        return username
 
     def add_account(self):
         """Add a new account using browser automation"""
@@ -435,14 +444,14 @@ class AccountManagerUI:
             text="Import",
             style="Dark.TButton",
             command=do_import
-        ).pack(side="left", expand=True, padx=(0, 5))
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         ttk.Button(
             button_frame,
             text="Cancel",
             style="Dark.TButton",
             command=import_window.destroy
-        ).pack(side="right", expand=True, padx=(5, 0))
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def remove_account(self):
         """Remove the selected account"""
@@ -463,6 +472,84 @@ class AccountManagerUI:
                 messagebox.showinfo("Validation", f"Account '{username}' is valid! ✓")
             else:
                 messagebox.showwarning("Validation", f"Account '{username}' is invalid or expired.")
+    
+    def edit_account_note(self):
+        """Edit note for the selected account"""
+        username = self.get_selected_username()
+        if not username:
+            return
+        
+        current_note = self.manager.get_account_note(username)
+        
+        note_window = tk.Toplevel(self.root)
+        note_window.title(f"Edit Note - {username}")
+        note_window.geometry("450x220")
+        note_window.configure(bg=self.BG_DARK)
+        note_window.resizable(False, False)
+        
+        self.root.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        
+        x = main_x + (main_width - 450) // 2
+        y = main_y + (main_height - 220) // 2
+        note_window.geometry(f"450x220+{x}+{y}")
+        
+        if self.settings.get("enable_topmost", False):
+            note_window.attributes("-topmost", True)
+        
+        note_window.transient(self.root)
+        note_window.grab_set()
+        
+        main_frame = ttk.Frame(note_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ttk.Label(
+            main_frame,
+            text=f"Edit note for '{username}'",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(main_frame, text="Note:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        
+        note_text = tk.Text(
+            main_frame,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            height=3,
+            wrap="word"
+        )
+        note_text.pack(fill="both", expand=True, pady=(0, 15))
+        note_text.insert("1.0", current_note)
+        note_text.focus_set()
+        
+        def save_note():
+            new_note = note_text.get("1.0", "end-1c").strip()
+            self.manager.set_account_note(username, new_note)
+            self.refresh_accounts()
+            messagebox.showinfo("Success", f"Note updated for '{username}'!")
+            note_window.destroy()
+        
+        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x")
+        
+        ttk.Button(
+            button_frame,
+            text="Save",
+            style="Dark.TButton",
+            command=save_note
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            style="Dark.TButton",
+            command=note_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def launch_home(self):
         """Launch Chrome to Roblox home with the selected account logged in"""
