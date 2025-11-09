@@ -1,3 +1,6 @@
+[![Version](https://img.shields.io/github/v/release/evanovar/RobloxAccountManager)](https://github.com/evanovar/RobloxAccountManager/releases/latest)
+![License](https://img.shields.io/github/license/evanovar/RobloxAccountManager)<br>
+[![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/download/v2.2.4/RobloxAccountManager.exe)
 # 🚀 Roblox Account Manager
 
 A powerful tool for managing multiple Roblox accounts with secure cookie extraction and modern UI interface. <br>
