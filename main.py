@@ -2,6 +2,9 @@
 Roblox Account Manager
 Main entry point for the application
 """
+# hello guys! Do you wanna know how does the Multi Instance work?
+# check out utils/ui.py, enable_multi_roblox function. Have a nice day!
+# if you find it helpful, consider starring the repo!
 
 import os
 import warnings

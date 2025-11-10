@@ -177,7 +177,9 @@ class RobloxAccountManager:
             return None
     
     def wait_for_login(self, driver, timeout=300):
-        """Ultra-fast login detection using ONLY URL method"""
+        """
+        Ultra-fast login detection using ONLY URL method
+        """
         print("Please log into your Roblox account")
         
         detector_script = """
@@ -194,8 +196,8 @@ class RobloxAccountManager:
             const url = window.location.href.toLowerCase();
             window.ultraFastDetection.debug.push('Current URL: ' + url);
             
-            if (url.includes('/login') || url.includes('/signup')) {
-                window.ultraFastDetection.debug.push('Still on login/signup page - not logged in');
+            if (url.includes('/login') || url.includes('/signup') || url.includes('/createaccount')) {
+                window.ultraFastDetection.debug.push('Still on login/signup/create page - not logged in');
                 return false;
             }
             
@@ -275,7 +277,7 @@ class RobloxAccountManager:
                             '/catalog' in current_url or '/avatar' in current_url or
                             '/discover' in current_url or '/friends' in current_url or
                             '/profile' in current_url or '/groups' in current_url or
-                            '/develop' in current_url or '/create' in current_url) and '/login' not in current_url:
+                            '/develop' in current_url or '/create' in current_url) and '/login' not in current_url and '/createaccount' not in current_url.lower():
                             print("[SUCCESS] LOGIN DETECTED via manual URL check!")
                             return True
                                 
@@ -347,46 +349,123 @@ class RobloxAccountManager:
             print(f"Error extracting user info: {e}")
             return None, None
     
-    def add_account(self):
-        """Add a new account through browser login"""
-        driver = self.setup_chrome_driver()
-        if not driver:
-            return False
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript=""):
+        """
+        Add accounts through browser login with optional Javascript execution
+        amount: number of browser instances to open (max 10)
+        website: URL to navigate to
+        javascript: Javascript code to execute after page load
+        """
+        if amount > 10:
+            print("[WARNING] Maximum 10 instances allowed. Setting to 10.")
+            amount = 10
+        
+        success_count = 0
+        drivers = []
         
         try:
-            print("Opening Roblox login page...")
-            driver.get("https://www.roblox.com/login")
+            print(f"Launching {amount} browser instance(s)...")
             
-            if self.wait_for_login(driver):
-                username, cookie = self.extract_user_info(driver)
+            for i in range(amount):
+                driver = self.setup_chrome_driver()
+                if not driver:
+                    print(f"[ERROR] Failed to setup Chrome driver for instance {i + 1}")
+                    continue
                 
-                if username and cookie:
-                    self.accounts[username] = {
-                        'username': username,
-                        'cookie': cookie,
-                        'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                        'note': ''
-                    }
-                    self.save_accounts()
+                window_width = 500
+                window_height = 600
+                
+                screen_width = driver.execute_script("return screen.width;")
+                screen_height = driver.execute_script("return screen.height;")
+                
+                grid_cols = min(3, amount)
+                grid_rows = (amount + grid_cols - 1) // grid_cols
+                
+                col = i % grid_cols
+                row = i // grid_cols
+                
+                x = col * (screen_width // grid_cols) + 10
+                y = row * ((screen_height - 100) // grid_rows) + 10
+                
+                driver.set_window_position(x, y)
+                driver.set_window_size(window_width, window_height)
+                
+                drivers.append(driver)
+                
+                try:
+                    print(f"Opening {website} (instance {i + 1}/{amount})...")
+                    driver.get(website)
                     
-                    print(f"[SUCCESS] Successfully added account: {username}")
-                    return True
-                else:
-                    print("[ERROR] Failed to extract account information")
-                    return False
-            else:
-                print("[ERROR] Login was not completed")
-                return False
+                    if javascript:
+                        print(f"Executing Javascript for instance {i + 1}...")
+                        try:
+                            driver.execute_script(javascript)
+                            print(f"[SUCCESS] Javascript executed for instance {i + 1}")
+                        except Exception as js_error:
+                            print(f"[WARNING] Javascript execution failed for instance {i + 1}: {js_error}")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error opening browser for instance {i + 1}: {e}")
+            
+            print(f"All {len(drivers)} browser(s) opened. Waiting for logins...")
+            
+            completed = [False] * len(drivers)
+            
+            import threading
+            
+            def wait_for_instance(driver_index):
+                driver = drivers[driver_index]
+                try:
+                    if self.wait_for_login(driver):
+                        username, cookie = self.extract_user_info(driver)
+                        
+                        if username and cookie:
+                            self.accounts[username] = {
+                                'username': username,
+                                'cookie': cookie,
+                                'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'note': ''
+                            }
+                            self.save_accounts()
+                            
+                            print(f"[SUCCESS] Successfully added account: {username}")
+                            nonlocal success_count
+                            success_count += 1
+                        else:
+                            print(f"[ERROR] Failed to extract account information for instance {driver_index + 1}")
+                    else:
+                        print(f"[WARNING] Login timeout for instance {driver_index + 1}")
+                except Exception as e:
+                    print(f"[ERROR] Error waiting for login on instance {driver_index + 1}: {e}")
+                finally:
+                    completed[driver_index] = True
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+            
+            threads = []
+            for i in range(len(drivers)):
+                thread = threading.Thread(target=wait_for_instance, args=(i,))
+                thread.start()
+                threads.append(thread)
+            
+            for thread in threads:
+                thread.join()
+            
+            for driver in drivers:
+                self.cleanup_temp_profile()
+            
+            return success_count > 0
                 
         except Exception as e:
             print(f"[ERROR] Error during account addition: {e}")
+            for driver in drivers:
+                try:
+                    driver.quit()
+                except:
+                    pass
             return False
-        finally:
-            try:
-                driver.quit()
-            except:
-                pass
-            self.cleanup_temp_profile()
     
     def import_cookie_account(self, cookie):
         if not cookie:

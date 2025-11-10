@@ -10,6 +10,48 @@ from tkinter import ttk, messagebox, simpledialog
 from classes.encryption import EncryptionConfig, PasswordEncryption
 
 
+class ToolTip:
+    """
+    Create a tooltip for a given widget
+    """
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+    
+    def show_tooltip(self, event=None):
+        if self.tooltip_window or not self.text:
+            return
+        
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify='left',
+            background="#2b2b2b",
+            foreground="white",
+            relief='solid',
+            borderwidth=1,
+            font=("Segoe UI", 9),
+            padx=10,
+            pady=5
+        )
+        label.pack()
+    
+    def hide_tooltip(self, event=None):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+
 class EncryptionSetupUI:
     """UI for encryption setup"""
     
@@ -89,6 +131,7 @@ class EncryptionSetupUI:
             **button_style
         )
         btn_hardware.pack(pady=8)
+        ToolTip(btn_hardware, "Encrypted with your computer's hardware\nNo password required • Fully automatic\nNot portable to other computers")
         
         btn_password = tk.Button(
             main_frame,
@@ -97,6 +140,7 @@ class EncryptionSetupUI:
             **button_style
         )
         btn_password.pack(pady=8)
+        ToolTip(btn_password, "Encrypted with your password\nPortable across computers\nNo password recovery available")
         
         btn_none = tk.Button(
             main_frame,
@@ -105,6 +149,7 @@ class EncryptionSetupUI:
             **button_style
         )
         btn_none.pack(pady=8)
+        ToolTip(btn_none, "No encryption applied\nEasy to transfer files\nNot secure - cookies stored in plain text")
         
         root.mainloop()
         
