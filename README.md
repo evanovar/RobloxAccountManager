@@ -1,7 +1,12 @@
+[![Version](https://img.shields.io/github/v/release/evanovar/RobloxAccountManager)](https://github.com/evanovar/RobloxAccountManager/releases/lates[t)
+![License](https://img.shields.io/github/license/evanovar/RobloxAccountManager)
+[![Discord](https://img.shields.io/discord/1436930121897476140?label=Discord)](https://discord.gg/TYnJXyEhgY)<br>
+[![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
+
 # 🚀 Roblox Account Manager
 
 A powerful tool for managing multiple Roblox accounts with secure cookie extraction and modern UI interface. <br>
-Created by evanovar · Contact: Discord (same username as on GitHub). <br>
+Created by evanovar · Contact: [Discord Server](https://discord.gg/TYnJXyEhgY) <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
 <img width="446" height="528" alt="image" src="https://github.com/user-attachments/assets/e01fabc2-473a-4da8-9853-1729ebbf5561" />
