@@ -413,7 +413,6 @@ class AccountManagerUI:
 
     def update_game_name(self):
         """Debounced, non-blocking update of the game name label"""
-        # Cancel any pending job
         if self._game_name_after_id is not None:
             try:
                 self.root.after_cancel(self._game_name_after_id)
@@ -429,14 +428,12 @@ class AccountManagerUI:
 
             def worker(pid):
                 name = self.get_game_name(pid)
-                # Update UI on main thread, but only if the entry hasn't changed drastically
                 self.root.after(0, lambda: self.game_name_label.config(
                     text=f"Current: {name}" if name else ""
                 ))
 
             threading.Thread(target=worker, args=(place_id,), daemon=True).start()
 
-        # Debounce by 350ms to avoid request storm while typing
         self._game_name_after_id = self.root.after(350, schedule_fetch)
 
     def add_game_to_list(self, place_id, game_name, private_server=""):
@@ -540,7 +537,6 @@ class AccountManagerUI:
         """
         Add a new account using browser automation
         """
-        # Friendly warning if Chrome isn't installed
         if not self.is_chrome_installed():
             messagebox.showwarning(
                 "Google Chrome Required",
@@ -1055,7 +1051,6 @@ class AccountManagerUI:
 
     def launch_home(self):
         """Launch Chrome to Roblox home with the selected account(s) logged in (non-blocking)"""
-        # Chrome requirement check
         if not self.is_chrome_installed():
             messagebox.showwarning(
                 "Google Chrome Required",
@@ -1089,7 +1084,6 @@ class AccountManagerUI:
                         success_count += 1
                 except Exception as e:
                     print(f"Failed to launch browser for {uname}: {e}")
-            # Notify on main thread
             if success_count > 0:
                 self.root.after(0, lambda: messagebox.showinfo("Success", f"Launched {success_count} browser(s)!"))
             else:
@@ -1119,7 +1113,6 @@ class AccountManagerUI:
         private_server = self.private_server_entry.get().strip()
 
         if self.settings.get("confirm_before_launch", False):
-            # Fetch name asynchronously to avoid blocking; show generic confirm while typing
             game_name = self.get_game_name(game_id)
             if not game_name:
                 game_name = f"Place {game_id}"
@@ -1419,7 +1412,6 @@ class AccountManagerUI:
         )
         close_button.pack(fill="x", pady=(3, 0)) 
 
-        # Version label below Close button, right aligned
         version_label = ttk.Label(
             main_frame,
             text=f"Version: {self.APP_VERSION}",
