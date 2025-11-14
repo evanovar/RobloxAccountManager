@@ -17,6 +17,8 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
+        self.APP_VERSION = "2.2.6"
+        self._game_name_after_id = None
         
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -351,6 +353,26 @@ class AccountManagerUI:
         except Exception as e:
             print(f"Failed to save settings: {e}")
 
+    def is_chrome_installed(self):
+        """Best-effort check to see if Google Chrome is installed (Windows)."""
+        try:
+            candidates = []
+            pf = os.environ.get('ProgramFiles')
+            pfx86 = os.environ.get('ProgramFiles(x86)')
+            localapp = os.environ.get('LOCALAPPDATA')
+            if pf:
+                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if pfx86:
+                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if localapp:
+                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            for path in candidates:
+                if path and os.path.exists(path):
+                    return True
+        except Exception:
+            pass
+        return False
+
     def on_place_id_change(self, event=None):
         """Called when place ID changes"""
         place_id = self.place_entry.get().strip()
@@ -390,16 +412,32 @@ class AccountManagerUI:
         return None
 
     def update_game_name(self):
-        """Update the game name label"""
-        place_id = self.place_entry.get().strip()
-        if place_id and place_id.isdigit():
-            game_name = self.get_game_name(place_id)
-            if game_name:
-                self.game_name_label.config(text=f"Current: {game_name}")
-            else:
+        """Debounced, non-blocking update of the game name label"""
+        # Cancel any pending job
+        if self._game_name_after_id is not None:
+            try:
+                self.root.after_cancel(self._game_name_after_id)
+            except Exception:
+                pass
+            self._game_name_after_id = None
+
+        def schedule_fetch():
+            place_id = self.place_entry.get().strip()
+            if not place_id or not place_id.isdigit():
                 self.game_name_label.config(text="")
-        else:
-            self.game_name_label.config(text="")
+                return
+
+            def worker(pid):
+                name = self.get_game_name(pid)
+                # Update UI on main thread, but only if the entry hasn't changed drastically
+                self.root.after(0, lambda: self.game_name_label.config(
+                    text=f"Current: {name}" if name else ""
+                ))
+
+            threading.Thread(target=worker, args=(place_id,), daemon=True).start()
+
+        # Debounce by 350ms to avoid request storm while typing
+        self._game_name_after_id = self.root.after(350, schedule_fetch)
 
     def add_game_to_list(self, place_id, game_name, private_server=""):
         """Add a game to the saved list (max based on settings)"""
@@ -502,6 +540,15 @@ class AccountManagerUI:
         """
         Add a new account using browser automation
         """
+        # Friendly warning if Chrome isn't installed
+        if not self.is_chrome_installed():
+            messagebox.showwarning(
+                "Google Chrome Required",
+                "Add Account requires Google Chrome to be installed.\n"
+                "Please install Google Chrome and try again."
+            )
+            return
+
         messagebox.showinfo("Add Account", "Browser will open for account login.\nPlease log in and wait for the process to complete.")
         
         def add_account_thread():
@@ -1007,46 +1054,51 @@ class AccountManagerUI:
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def launch_home(self):
-        """Launch Chrome to Roblox home with the selected account(s) logged in"""
+        """Launch Chrome to Roblox home with the selected account(s) logged in (non-blocking)"""
+        # Chrome requirement check
+        if not self.is_chrome_installed():
+            messagebox.showwarning(
+                "Google Chrome Required",
+                "Launching browser requires Google Chrome to be installed.\n"
+                "Please install Google Chrome and try again."
+            )
+            return
+
         if self.settings.get("enable_multi_select", False):
             usernames = self.get_selected_usernames()
             if not usernames:
                 return
-            
             if len(usernames) >= 3:
-                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to launch {len(usernames)} browser windows?\n\nThis will open multiple Chrome instances.")
+                confirm = messagebox.askyesno(
+                    "Confirm Launch",
+                    f"Are you sure you want to launch {len(usernames)} browser windows?\n\nThis will open multiple Chrome instances."
+                )
                 if not confirm:
                     return
-            
-            success_count = 0
-            for username in usernames:
-                try:
-                    success = self.manager.launch_home(username)
-                    if success:
-                        success_count += 1
-                except Exception as e:
-                    print(f"Failed to launch browser for {username}: {e}")
-            
-            if success_count > 0:
-                messagebox.showinfo("Success", f"Launched {success_count} browser(s)!")
-            else:
-                messagebox.showerror("Error", "Failed to launch any browsers.")
         else:
             username = self.get_selected_username()
             if not username:
                 return
+            usernames = [username]
 
-            try:
-                success = self.manager.launch_home(username)
-                if success:
-                    messagebox.showinfo("Success", "Chrome launched with your account!")
-                else:
-                    messagebox.showerror("Error", "Failed to launch Chrome.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to launch: {str(e)}")
+        def worker(selected_usernames):
+            success_count = 0
+            for uname in selected_usernames:
+                try:
+                    if self.manager.launch_home(uname):
+                        success_count += 1
+                except Exception as e:
+                    print(f"Failed to launch browser for {uname}: {e}")
+            # Notify on main thread
+            if success_count > 0:
+                self.root.after(0, lambda: messagebox.showinfo("Success", f"Launched {success_count} browser(s)!"))
+            else:
+                self.root.after(0, lambda: messagebox.showerror("Error", "Failed to launch any browsers."))
+
+        threading.Thread(target=worker, args=(usernames,), daemon=True).start()
 
     def launch_game(self):
-        """Launch Roblox game with the selected account(s)"""
+        """Launch Roblox game with the selected account(s) (non-blocking)"""
         if self.settings.get("enable_multi_select", False):
             usernames = self.get_selected_usernames()
             if not usernames:
@@ -1061,48 +1113,49 @@ class AccountManagerUI:
         if not game_id:
             messagebox.showwarning("Missing Info", "Please enter a Place ID.")
             return
-
         if not game_id.isdigit():
             messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
             return
-
         private_server = self.private_server_entry.get().strip()
 
         if self.settings.get("confirm_before_launch", False):
+            # Fetch name asynchronously to avoid blocking; show generic confirm while typing
             game_name = self.get_game_name(game_id)
             if not game_name:
                 game_name = f"Place {game_id}"
-            
             if len(usernames) == 1:
                 confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join {game_name}?")
             else:
                 confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join {game_name} with {len(usernames)} accounts?")
-            
             if not confirm:
                 return
 
-        success_count = 0
-        for username in usernames:
-            try:
-                success = self.manager.launch_roblox(username, game_id, private_server)
-                if success:
-                    success_count += 1
-            except Exception as e:
-                print(f"Failed to launch game for {username}: {e}")
-        
-        if success_count > 0:
-            game_name = self.get_game_name(game_id)
-            if game_name:
-                self.add_game_to_list(game_id, game_name, private_server)
-            else:
-                self.add_game_to_list(game_id, f"Place {game_id}", private_server)
-            
-            if len(usernames) == 1:
-                messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
-            else:
-                messagebox.showinfo("Success", f"Roblox is launching for {success_count} account(s)! Check your desktop.")
-        else:
-            messagebox.showerror("Error", "Failed to launch Roblox.")
+        def worker(selected_usernames, pid, psid):
+            success_count = 0
+            for uname in selected_usernames:
+                try:
+                    if self.manager.launch_roblox(uname, pid, psid):
+                        success_count += 1
+                except Exception as e:
+                    print(f"Failed to launch game for {uname}: {e}")
+
+            def on_done():
+                if success_count > 0:
+                    gname = self.get_game_name(pid)
+                    if gname:
+                        self.add_game_to_list(pid, gname, psid)
+                    else:
+                        self.add_game_to_list(pid, f"Place {pid}", psid)
+                    if len(selected_usernames) == 1:
+                        messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
+                    else:
+                        messagebox.showinfo("Success", f"Roblox is launching for {success_count} account(s)! Check your desktop.")
+                else:
+                    messagebox.showerror("Error", "Failed to launch Roblox.")
+
+            self.root.after(0, on_done)
+
+        threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
 
     def enable_multi_roblox(self):
         """Enable Multi Roblox + 773 fix"""
@@ -1219,7 +1272,7 @@ class AccountManagerUI:
         main_height = self.root.winfo_height()
         
         settings_width = 300
-        settings_height = 300
+        settings_height = 320
         
         x = main_x + (main_width - settings_width) // 2
         y = main_y + (main_height - settings_height) // 2
@@ -1365,3 +1418,12 @@ class AccountManagerUI:
             command=settings_window.destroy
         )
         close_button.pack(fill="x", pady=(3, 0)) 
+
+        # Version label below Close button, right aligned
+        version_label = ttk.Label(
+            main_frame,
+            text=f"Version: {self.APP_VERSION}",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        )
+        version_label.pack(anchor="e", pady=(6, 0))
