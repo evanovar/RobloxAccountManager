@@ -17,7 +17,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.2.6"
+        self.APP_VERSION = "2.2.7"
         self._game_name_after_id = None
         
         try:
