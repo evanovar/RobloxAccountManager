@@ -24,7 +24,7 @@ class RobloxAPI:
             response = requests.get(
                 'https://users.roblox.com/v1/users/authenticated',
                 headers=headers,
-                timeout=10
+                timeout=3
             )
             
             if response.status_code == 200:
@@ -49,7 +49,7 @@ class RobloxAPI:
         }
 
         try:
-            response = requests.post(url, headers=headers, timeout=10)
+            response = requests.post(url, headers=headers, timeout=5)
             if response.status_code == 403 and "x-csrf-token" in response.headers:
                 csrf_token = response.headers["x-csrf-token"]
             else:
@@ -57,7 +57,7 @@ class RobloxAPI:
                 return None
 
             headers["X-CSRF-TOKEN"] = csrf_token
-            response2 = requests.post(url, headers=headers, timeout=10)
+            response2 = requests.post(url, headers=headers, timeout=5)
             if response2.status_code == 200:
                 auth_ticket = response2.headers.get("rbx-authentication-ticket")
                 if auth_ticket:
@@ -85,8 +85,16 @@ class RobloxAPI:
         
         print("[SUCCESS] Got authentication ticket!")
         
+        browser_tracker_id = random.randint(55393295400, 55393295500)
+        launch_time = int(time.time() * 1000)
+        
         if not game_id or game_id == "":
-            url = f"roblox://authentication?ticket={auth_ticket}"
+            url = (
+                "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
+                "+launchtime:" + str(launch_time) +
+                "+browsertrackerid:" + str(browser_tracker_id) +
+                "+robloxLocale:en_us+gameLocale:en_us"
+            )
             print(f"Launching Roblox Home...")
             print(f"Account: {username}")
             try:
@@ -96,9 +104,6 @@ class RobloxAPI:
             except Exception as e:
                 print(f"[ERROR] Failed to launch Roblox: {e}")
                 return False
-        
-        browser_tracker_id = random.randint(55393295400, 55393295500)
-        launch_time = int(time.time() * 1000)
 
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
@@ -142,7 +147,7 @@ class RobloxAPI:
             response = requests.get(
                 'https://users.roblox.com/v1/users/authenticated',
                 headers=headers,
-                timeout=10
+                timeout=3
             )
             
             is_valid = response.status_code == 200

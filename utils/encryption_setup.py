@@ -160,13 +160,21 @@ class EncryptionSetupUI:
     
     def select_hardware_encryption(self, root):
         """Handle hardware encryption selection"""
-        self.encryption_config.enable_hardware_encryption()
-        messagebox.showinfo(
-            "Success",
-            "Hardware-based encryption enabled!\n\n🔒 Your accounts will be encrypted automatically."
+        confirm = messagebox.askyesno(
+            "⚠️ Confirm Hardware Encryption",
+            "This method is tied to your computer's hardware and does not require a password.\n"
+            "It is NOT portable to other computers.\n\n"
+            "Are you sure you want to enable hardware-based encryption?"
         )
-        self.result = None
-        root.destroy()
+
+        if confirm:
+            self.encryption_config.enable_hardware_encryption()
+            messagebox.showinfo(
+                "Success",
+                "Hardware-based encryption enabled!\n\n🔒 Your accounts will be encrypted automatically."
+            )
+            self.result = None
+            root.destroy()
     
     def select_password_encryption(self, root):
         """Handle password encryption selection - Step 1: Enter Password"""

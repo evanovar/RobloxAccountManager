@@ -17,7 +17,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.2.7"
+        self.APP_VERSION = "2.2.8"
         self._game_name_after_id = None
         
         try:
@@ -181,7 +181,7 @@ class AccountManagerUI:
         self.add_account_dropdown_visible = False
         
         ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(bottom_frame, text="Launch Browser", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(bottom_frame, text="Launch Roblox Home", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
         
         self.root.bind("<Button-1>", self.hide_dropdown_on_click_outside)
@@ -428,9 +428,14 @@ class AccountManagerUI:
 
             def worker(pid):
                 name = self.get_game_name(pid)
-                self.root.after(0, lambda: self.game_name_label.config(
-                    text=f"Current: {name}" if name else ""
-                ))
+                if name:
+                    max_name_length = 20
+                    if len(name) > max_name_length:
+                        name = name[:max_name_length-2] + ".."
+                    display_text = f"Current: {name}"
+                else:
+                    display_text = ""
+                self.root.after(0, lambda: self.game_name_label.config(text=display_text))
 
             threading.Thread(target=worker, args=(place_id,), daemon=True).start()
 
@@ -1050,15 +1055,7 @@ class AccountManagerUI:
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def launch_home(self):
-        """Launch Chrome to Roblox home with the selected account(s) logged in (non-blocking)"""
-        if not self.is_chrome_installed():
-            messagebox.showwarning(
-                "Google Chrome Required",
-                "Launching browser requires Google Chrome to be installed.\n"
-                "Please install Google Chrome and try again."
-            )
-            return
-
+        """Launch Roblox application to home page with the selected account(s) logged in (non-blocking)"""
         if self.settings.get("enable_multi_select", False):
             usernames = self.get_selected_usernames()
             if not usernames:
@@ -1066,7 +1063,7 @@ class AccountManagerUI:
             if len(usernames) >= 3:
                 confirm = messagebox.askyesno(
                     "Confirm Launch",
-                    f"Are you sure you want to launch {len(usernames)} browser windows?\n\nThis will open multiple Chrome instances."
+                    f"Are you sure you want to launch {len(usernames)} Roblox instances to home?\n\nThis will open multiple Roblox windows."
                 )
                 if not confirm:
                     return
@@ -1080,14 +1077,21 @@ class AccountManagerUI:
             success_count = 0
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_home(uname):
+                    if self.manager.launch_roblox(uname, "", ""):
                         success_count += 1
                 except Exception as e:
-                    print(f"Failed to launch browser for {uname}: {e}")
-            if success_count > 0:
-                self.root.after(0, lambda: messagebox.showinfo("Success", f"Launched {success_count} browser(s)!"))
-            else:
-                self.root.after(0, lambda: messagebox.showerror("Error", "Failed to launch any browsers."))
+                    print(f"Failed to launch Roblox home for {uname}: {e}")
+            
+            def on_done():
+                if success_count > 0:
+                    if len(selected_usernames) == 1:
+                        messagebox.showinfo("Success", "Roblox is launching to home! Check your desktop.")
+                    else:
+                        messagebox.showinfo("Success", f"Roblox is launching to home for {success_count} account(s)! Check your desktop.")
+                else:
+                    messagebox.showerror("Error", "Failed to launch Roblox.")
+            
+            self.root.after(0, on_done)
 
         threading.Thread(target=worker, args=(usernames,), daemon=True).start()
 
@@ -1190,7 +1194,7 @@ class AccountManagerUI:
             # thus, allowing multiple instances to run. Simple, right? (doesn't fix 773 yet)
             mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
             
-            # Check if mutex already existed (GetLastError returns ERROR_ALREADY_EXISTS = 183)
+            # check if mutex already existed (GetLastError returns ERROR_ALREADY_EXISTS = 183)
             if win32api.GetLastError() == 183:
                 print("[WARNING] Mutex already exists. Taking ownership...")
             
@@ -1391,13 +1395,16 @@ class AccountManagerUI:
         max_games_var = tk.IntVar(value=self.settings.get("max_recent_games", 10))
         
         def on_max_games_change():
-            new_value = max_games_var.get()
-            self.settings["max_recent_games"] = new_value
-            self.save_settings()
-            if len(self.settings["game_list"]) > new_value:
-                self.settings["game_list"] = self.settings["game_list"][:new_value]
+            try:
+                new_value = max_games_var.get()
+                self.settings["max_recent_games"] = new_value
                 self.save_settings()
-                self.refresh_game_list()
+                if len(self.settings["game_list"]) > new_value:
+                    self.settings["game_list"] = self.settings["game_list"][:new_value]
+                    self.save_settings()
+                    self.refresh_game_list()
+            except:
+                pass
         
         max_games_spinner = tk.Spinbox(
             max_games_frame,
@@ -1412,6 +1419,9 @@ class AccountManagerUI:
             command=on_max_games_change
         )
         max_games_spinner.pack(side="right")
+        
+        max_games_spinner.bind("<KeyRelease>", lambda e: on_max_games_change())
+        max_games_spinner.bind("<FocusOut>", lambda e: on_max_games_change())
         
         ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
         
