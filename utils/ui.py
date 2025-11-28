@@ -17,7 +17,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.2.8"
+        self.APP_VERSION = "2.2.9"
         self._game_name_after_id = None
         
         try:
@@ -435,7 +435,14 @@ class AccountManagerUI:
                     display_text = f"Current: {name}"
                 else:
                     display_text = ""
-                self.root.after(0, lambda: self.game_name_label.config(text=display_text))
+                
+                def update_label(text=display_text):
+                    try:
+                        self.game_name_label.config(text=text)
+                    except:
+                        pass
+                
+                self.root.after(0, update_label)
 
             threading.Thread(target=worker, args=(place_id,), daemon=True).start()
 

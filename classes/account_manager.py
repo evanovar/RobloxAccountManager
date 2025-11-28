@@ -186,7 +186,11 @@ class RobloxAccountManager:
         window.ultraFastDetection = {
             detected: false,
             method: null,
-            debug: []
+            debug: [],
+            cleanup: function() {
+                if (this.interval) clearInterval(this.interval);
+                if (this.observer) this.observer.disconnect();
+            }
         };
         
         function instantDetect() {
@@ -212,6 +216,7 @@ class RobloxAccountManager:
                 window.ultraFastDetection.detected = true;
                 window.ultraFastDetection.method = 'url_only';
                 window.ultraFastDetection.debug.push('✅ DETECTED via URL! Page: ' + url);
+                window.ultraFastDetection.cleanup();
                 return true;
             }
             
@@ -221,25 +226,29 @@ class RobloxAccountManager:
         
         instantDetect();
         
-        const ultraInterval = setInterval(() => {
+        window.ultraFastDetection.interval = setInterval(() => {
             if (instantDetect()) {
-                clearInterval(ultraInterval);
+                clearInterval(window.ultraFastDetection.interval);
             }
         }, 25);
         
         let lastHref = location.href;
-        new MutationObserver(() => {
+        window.ultraFastDetection.observer = new MutationObserver(() => {
             if (location.href !== lastHref) {
                 lastHref = location.href;
                 window.ultraFastDetection.debug.push('URL changed to: ' + location.href);
                 if (instantDetect()) {
-                    clearInterval(ultraInterval);
+                    clearInterval(window.ultraFastDetection.interval);
+                    window.ultraFastDetection.observer.disconnect();
                 }
             }
-        }).observe(document, {subtree: true, childList: true});
+        });
+        window.ultraFastDetection.observer.observe(document, {subtree: true, childList: true});
         
         ['beforeunload', 'unload', 'pagehide'].forEach(event => {
-            window.addEventListener(event, instantDetect);
+            window.addEventListener(event, () => {
+                window.ultraFastDetection.cleanup();
+            });
         });
         """
         
@@ -259,6 +268,10 @@ class RobloxAccountManager:
                 if result and result.get('detected'):
                     method = result.get('method', 'url_only')
                     print(f"[SUCCESS] LOGIN DETECTED! Method: {method} - Closing browser instantly...")
+                    try:
+                        driver.execute_script("window.ultraFastDetection.cleanup();")
+                    except:
+                        pass
                     return True
                 
                 current_time = time.time()
@@ -287,9 +300,17 @@ class RobloxAccountManager:
                 time.sleep(0.025)
                 
             except WebDriverException:
+                try:
+                    driver.execute_script("if(window.ultraFastDetection) window.ultraFastDetection.cleanup();")
+                except:
+                    pass
                 return False
         
         print("[WARNING] Login timeout. Please try again.")
+        try:
+            driver.execute_script("if(window.ultraFastDetection) window.ultraFastDetection.cleanup();")
+        except:
+            pass
         return False
     
     def extract_user_info(self, driver):

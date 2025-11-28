@@ -153,6 +153,9 @@ A: There's no hard limit. You can save as many accounts as you need.
 **Q: Why is my token invalid?**  
 A: Roblox cookies can expire after long periods of inactivity or if you change your account password. Use the "Validate account" feature to check if an account is still valid.
 
+**Q: Why does Roblox close after ~20 minutes of playing?**  
+A: This is a **Roblox platform limitation**, not a bug in the account manager. Roblox authentication tickets expire after 15-20 minutes for security reasons. This is normal behavior. Simply re-launch the game from the account manager - your .ROBLOSECURITY cookie is still valid, only the game session expired.
+
 **Q: Can I transfer accounts between different instances of the tool?**  
 A: 
 - **Hardware encryption**: No, tied to one machine only
