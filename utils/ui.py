@@ -1551,11 +1551,13 @@ class AccountManagerUI:
         if text.strip():
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.log_to_console(f"[{timestamp}] {text}\n")
-        self.original_stdout.write(text)
+        if self.original_stdout:
+            self.original_stdout.write(text)
     
     def flush(self):
         """Flush stdout"""
-        self.original_stdout.flush()
+        if self.original_stdout:
+            self.original_stdout.flush()
     
     def log_to_console(self, message):
         """Log message to console output buffer"""
