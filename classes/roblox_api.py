@@ -37,6 +37,32 @@ class RobloxAPI:
         return "Unknown"
     
     @staticmethod
+    def get_game_name(place_id):
+        """Fetch game name from Roblox API"""
+        if not place_id or not place_id.isdigit():
+            return None
+        
+        try:
+            place_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
+            place_response = requests.get(place_url, timeout=5)
+            
+            if place_response.status_code == 200:
+                place_data = place_response.json()
+                universe_id = place_data.get("universeId")
+                
+                if universe_id:
+                    game_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+                    game_response = requests.get(game_url, timeout=5)
+                    
+                    if game_response.status_code == 200:
+                        game_data = game_response.json()
+                        if game_data and game_data.get("data") and len(game_data["data"]) > 0:
+                            return game_data["data"][0].get("name", None)
+        except:
+            pass
+        return None
+    
+    @staticmethod
     def get_auth_ticket(roblosecurity_cookie):
         """Get authentication ticket for launching Roblox games"""
         url = "https://auth.roblox.com/v1/authentication-ticket/"

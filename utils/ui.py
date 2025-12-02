@@ -12,6 +12,7 @@ import requests
 import threading
 import msvcrt
 import ctypes
+import webbrowser
 from io import StringIO
 from datetime import datetime
 
@@ -210,6 +211,9 @@ class AccountManagerUI:
         self.refresh_accounts()
         self.refresh_game_list()
         self.update_game_name()
+        
+        # Check for updates in background
+        threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def load_settings(self):
         """Load UI settings from file"""
@@ -245,6 +249,47 @@ class AccountManagerUI:
         
         if self.settings.get("enable_multi_roblox", False):
             self.root.after(100, self.initialize_multi_roblox)
+
+    def check_for_updates(self):
+        """Check for updates from GitHub releases"""
+        try:
+            print("[Update Checker] Checking for updates...")
+            response = requests.get(
+                "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                latest_release = response.json()
+                latest_version = latest_release.get("tag_name", "").lstrip("v")
+                
+                current_parts = tuple(map(int, self.APP_VERSION.split(".")))
+                latest_parts = tuple(map(int, latest_version.split(".")))
+                
+                if latest_parts > current_parts:
+                    print(f"[Update Checker] New version available: {latest_version}")
+                    self.root.after(0, lambda: self.show_update_notification(latest_version))
+                else:
+                    print(f"[Update Checker] You are on the latest version ({self.APP_VERSION})")
+            else:
+                print(f"[Update Checker] Failed to check for updates (Status: {response.status_code})")
+                
+        except Exception as e:
+            print(f"[Update Checker] Error checking for updates: {str(e)}")
+
+    def show_update_notification(self, latest_version):
+        """Show update notification dialog"""
+        result = messagebox.askyesno(
+            "Update Available",
+            f"A new version is available!\n\n"
+            f"Current version: {self.APP_VERSION}\n"
+            f"Latest version: {latest_version}\n\n"
+            f"Would you like to download the latest version?",
+            icon="info"
+        )
+        
+        if result:
+            webbrowser.open("https://github.com/evanovar/RobloxAccountManager/releases/latest")
 
     def toggle_add_account_dropdown(self):
         """Toggle the Add Account dropdown menu"""
@@ -406,31 +451,6 @@ class AccountManagerUI:
         self.settings["last_private_server"] = private_server
         self.save_settings()
 
-    def get_game_name(self, place_id):
-        """Fetch game name from Roblox API"""
-        if not place_id or not place_id.isdigit():
-            return None
-        
-        try:
-            place_url = f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-            place_response = requests.get(place_url, timeout=5)
-            
-            if place_response.status_code == 200:
-                place_data = place_response.json()
-                universe_id = place_data.get("universeId")
-                
-                if universe_id:
-                    game_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-                    game_response = requests.get(game_url, timeout=5)
-                    
-                    if game_response.status_code == 200:
-                        game_data = game_response.json()
-                        if game_data and game_data.get("data") and len(game_data["data"]) > 0:
-                            return game_data["data"][0].get("name", None)
-        except:
-            pass
-        return None
-
     def update_game_name(self):
         """Debounced, non-blocking update of the game name label"""
         if self._game_name_after_id is not None:
@@ -447,7 +467,8 @@ class AccountManagerUI:
                 return
 
             def worker(pid):
-                name = self.get_game_name(pid)
+                from classes.roblox_api import RobloxAPI
+                name = RobloxAPI.get_game_name(pid)
                 if name:
                     max_name_length = 20
                     if len(name) > max_name_length:
@@ -1191,7 +1212,8 @@ class AccountManagerUI:
         private_server = self.private_server_entry.get().strip()
 
         if self.settings.get("confirm_before_launch", False):
-            game_name = self.get_game_name(game_id)
+            from classes.roblox_api import RobloxAPI
+            game_name = RobloxAPI.get_game_name(game_id)
             if not game_name:
                 game_name = f"Place {game_id}"
             if len(usernames) == 1:
@@ -1212,7 +1234,8 @@ class AccountManagerUI:
 
             def on_done():
                 if success_count > 0:
-                    gname = self.get_game_name(pid)
+                    from classes.roblox_api import RobloxAPI
+                    gname = RobloxAPI.get_game_name(pid)
                     if gname:
                         self.add_game_to_list(pid, gname, psid)
                     else:
