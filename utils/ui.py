@@ -5,20 +5,32 @@ Contains the main AccountManagerUI class
 
 import os
 import json
+import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 import requests
 import threading
 import msvcrt
 import ctypes
+from io import StringIO
+from datetime import datetime
 
 
 class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.2.9"
+        self.APP_VERSION = "2.3.0"
         self._game_name_after_id = None
+        
+        self.console_output = []
+        self.console_window = None
+        self.console_text_widget = None
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        
+        sys.stdout = self
+        sys.stderr = self
         
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -112,6 +124,14 @@ class AccountManagerUI:
         scrollbar = ttk.Scrollbar(list_frame, command=self.account_list.yview)
         scrollbar.pack(side="right", fill="y")
         self.account_list.config(yscrollcommand=scrollbar.set)
+        
+        # Drag and drop state
+        self.drag_data = {"item": None, "index": None}
+        
+        # Bind drag and drop events
+        self.account_list.bind("<Button-1>", self.on_drag_start)
+        self.account_list.bind("<B1-Motion>", self.on_drag_motion)
+        self.account_list.bind("<ButtonRelease-1>", self.on_drag_release)
 
         right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         right_frame.pack(side="right", fill="y")
@@ -519,6 +539,53 @@ class AccountManagerUI:
             if note:
                 display_text += f" • {note}"
             self.account_list.insert(tk.END, display_text)
+    
+    def on_drag_start(self, event):
+        """Start dragging an account"""
+        widget = event.widget
+        index = widget.nearest(event.y)
+        if index >= 0:
+            self.drag_data["index"] = index
+            self.drag_data["item"] = widget.get(index)
+            widget.selection_clear(0, tk.END)
+            widget.selection_set(index)
+    
+    def on_drag_motion(self, event):
+        """Handle drag motion - highlight drop position"""
+        widget = event.widget
+        index = widget.nearest(event.y)
+        if index >= 0 and self.drag_data["index"] is not None:
+            widget.selection_clear(0, tk.END)
+            widget.selection_set(index)
+    
+    def on_drag_release(self, event):
+        """Release drag and reorder accounts"""
+        if self.drag_data["index"] is None:
+            return
+        
+        widget = event.widget
+        drop_index = widget.nearest(event.y)
+        drag_index = self.drag_data["index"]
+        
+        if drop_index >= 0 and drag_index != drop_index:
+            ordered_usernames = list(self.manager.accounts.keys())
+            
+            username = ordered_usernames.pop(drag_index)
+            ordered_usernames.insert(drop_index, username)
+            
+            new_accounts = {}
+            for uname in ordered_usernames:
+                new_accounts[uname] = self.manager.accounts[uname]
+            
+            self.manager.accounts = new_accounts
+            self.manager.save_accounts()
+            
+            self.refresh_accounts()
+            
+            widget.selection_clear(0, tk.END)
+            widget.selection_set(drop_index)
+        
+        self.drag_data = {"item": None, "index": None}
     
     def get_selected_username(self):
         """Get the currently selected username"""
@@ -1275,7 +1342,7 @@ class AccountManagerUI:
         settings_window.resizable(False, False)
         
         settings_window.transient(self.root)
-        settings_window.grab_set()
+        # Removed grab_set() to allow interaction with console window
         
         if self.settings.get("enable_topmost", False):
             settings_window.attributes("-topmost", True)
@@ -1287,7 +1354,7 @@ class AccountManagerUI:
         main_height = self.root.winfo_height()
         
         settings_width = 300
-        settings_height = 320
+        settings_height = 355
         
         x = main_x + (main_width - settings_width) // 2
         y = main_y + (main_height - settings_height) // 2
@@ -1432,6 +1499,14 @@ class AccountManagerUI:
         
         ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
         
+        console_button = ttk.Button(
+            main_frame,
+            text="Console Output",
+            style="Dark.TButton",
+            command=self.open_console_window
+        )
+        console_button.pack(fill="x", pady=(0, 5))
+        
         close_button = ttk.Button(
             main_frame,
             text="Close",
@@ -1447,3 +1522,129 @@ class AccountManagerUI:
             font=("Segoe UI", 9)
         )
         version_label.pack(anchor="e", pady=(6, 0))
+    
+    def write(self, text):
+        """Redirect stdout/stderr writes to console"""
+        if text.strip():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.log_to_console(f"[{timestamp}] {text}\n")
+        self.original_stdout.write(text)
+    
+    def flush(self):
+        """Flush stdout"""
+        self.original_stdout.flush()
+    
+    def log_to_console(self, message):
+        """Log message to console output buffer"""
+        self.console_output.append(message)
+        
+        if self.console_text_widget:
+            try:
+                self.console_text_widget.config(state="normal")
+                self.console_text_widget.insert(tk.END, message)
+                self.console_text_widget.see(tk.END)
+                self.console_text_widget.config(state="disabled")
+            except:
+                pass
+    
+    def open_console_window(self):
+        """Open the Console Output window"""
+        if self.console_window and tk.Toplevel.winfo_exists(self.console_window):
+            self.console_window.focus()
+            return
+        
+        self.console_window = tk.Toplevel(self.root)
+        self.console_window.title("Console Output")
+        self.console_window.geometry("700x500")
+        self.console_window.configure(bg=self.BG_DARK)
+        self.console_window.minsize(500, 450)
+        
+        if self.settings.get("enable_topmost", False):
+            self.console_window.attributes("-topmost", True)
+        
+        self.root.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        
+        x = main_x + (main_width - 700) // 2
+        y = main_y + (main_height - 500) // 2
+        self.console_window.geometry(f"700x500+{x}+{y}")
+        
+        main_frame = ttk.Frame(self.console_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        title_label = ttk.Label(
+            main_frame,
+            text="Console Output",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        )
+        title_label.pack(anchor="w", pady=(0, 10))
+        
+        text_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        text_frame.pack(fill="both", expand=True)
+        
+        self.console_text_widget = tk.Text(
+            text_frame,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=("Consolas", 9),
+            wrap="word",
+            state="disabled"
+        )
+        self.console_text_widget.pack(side="left", fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(text_frame, command=self.console_text_widget.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.console_text_widget.config(yscrollcommand=scrollbar.set)
+        
+        self.console_text_widget.config(state="normal")
+        for message in self.console_output:
+            self.console_text_widget.insert(tk.END, message)
+        self.console_text_widget.config(state="disabled")
+        
+        self.console_text_widget.see(tk.END)
+        
+        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x", pady=(10, 0))
+        
+        def clear_console():
+            self.console_output.clear()
+            self.console_text_widget.config(state="normal") 
+            self.console_text_widget.delete(1.0, tk.END)
+            self.console_text_widget.config(state="disabled") 
+        
+        def copy_all():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.console_text_widget.get(1.0, tk.END))
+            messagebox.showinfo("Copied", "Console output copied to clipboard!")
+        
+        ttk.Button(
+            button_frame,
+            text="Clear",
+            style="Dark.TButton",
+            command=clear_console
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Copy All",
+            style="Dark.TButton",
+            command=copy_all
+        ).pack(side="left", fill="x", expand=True, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=self.console_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def on_close():
+            self.console_text_widget = None
+            self.console_window.destroy()
+            self.console_window = None
+        
+        self.console_window.protocol("WM_DELETE_WINDOW", on_close)
