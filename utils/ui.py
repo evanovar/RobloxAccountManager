@@ -1290,6 +1290,7 @@ class AccountManagerUI:
             # this means, when roblox starts, it cannot be created by roblox again.
             # thus, allowing multiple instances to run. Simple, right? (doesn't fix 773 yet)
             mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
+            print("[INFO] Multi Roblox activated.")
             
             # check if mutex already existed (GetLastError returns ERROR_ALREADY_EXISTS = 183)
             if win32api.GetLastError() == 183:
