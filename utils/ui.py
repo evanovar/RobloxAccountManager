@@ -21,7 +21,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.3.0"
+        self.APP_VERSION = "2.3.1"
         self._game_name_after_id = None
         
         self.console_output = []
@@ -41,11 +41,6 @@ class AccountManagerUI:
             except:
                 pass
         
-        self.root.title("Roblox Account Manager - Made by evanovar")
-        self.root.geometry("450x520")
-        self.root.configure(bg="#2b2b2b")
-        self.root.resizable(False, False)
-        
         self.data_folder = "AccountManagerData"
         if not os.path.exists(self.data_folder):
             os.makedirs(self.data_folder)
@@ -53,20 +48,27 @@ class AccountManagerUI:
         self.settings_file = os.path.join(self.data_folder, "ui_settings.json")
         self.load_settings()
         
+        self.root.title("Roblox Account Manager - Made by evanovar")
+        self.root.geometry("450x520")
+        self.root.configure(bg=self.settings.get("theme_bg_dark", "#2b2b2b"))
+        self.root.resizable(False, False)
+        
         self.multi_roblox_handle = None
 
-        self.BG_DARK = "#2b2b2b"
-        self.BG_MID = "#3a3a3a"
-        self.BG_LIGHT = "#4b4b4b"
-        self.FG_TEXT = "white"
-        self.FG_ACCENT = "#0078D7"
+        self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
+        self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
+        self.BG_LIGHT = self.settings.get("theme_bg_light", "#4b4b4b")
+        self.FG_TEXT = self.settings.get("theme_fg_text", "white")
+        self.FG_ACCENT = self.settings.get("theme_fg_accent", "#0078D7")
+        self.FONT_FAMILY = self.settings.get("theme_font_family", "Segoe UI")
+        self.FONT_SIZE = self.settings.get("theme_font_size", 10)
 
         style = ttk.Style()
         style.theme_use("clam")
 
         style.configure("Dark.TFrame", background=self.BG_DARK)
-        style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=("Segoe UI", 10))
-        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 9))
+        style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE - 1))
         style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
         style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
 
@@ -126,10 +128,16 @@ class AccountManagerUI:
         scrollbar.pack(side="right", fill="y")
         self.account_list.config(yscrollcommand=scrollbar.set)
         
-        # Drag and drop state
-        self.drag_data = {"item": None, "index": None}
+        self.drag_data = {
+            "item": None, 
+            "index": None, 
+            "start_x": 0, 
+            "start_y": 0,
+            "dragging": False,
+            "hold_timer": None
+        }
+        self.drag_indicator = None
         
-        # Bind drag and drop events
         self.account_list.bind("<Button-1>", self.on_drag_start)
         self.account_list.bind("<B1-Motion>", self.on_drag_motion)
         self.account_list.bind("<ButtonRelease-1>", self.on_drag_release)
@@ -212,7 +220,6 @@ class AccountManagerUI:
         self.refresh_game_list()
         self.update_game_name()
         
-        # Check for updates in background
         threading.Thread(target=self.check_for_updates, daemon=True).start()
 
     def load_settings(self):
@@ -562,26 +569,98 @@ class AccountManagerUI:
             self.account_list.insert(tk.END, display_text)
     
     def on_drag_start(self, event):
-        """Start dragging an account"""
+        """Initiate drag - store position and wait for hold"""
         widget = event.widget
         index = widget.nearest(event.y)
+        
+        if self.drag_data["hold_timer"]:
+            self.root.after_cancel(self.drag_data["hold_timer"])
+        
         if index >= 0:
             self.drag_data["index"] = index
             self.drag_data["item"] = widget.get(index)
-            widget.selection_clear(0, tk.END)
-            widget.selection_set(index)
+            self.drag_data["start_x"] = event.x
+            self.drag_data["start_y"] = event.y
+            self.drag_data["dragging"] = False
+            
+            if not self.settings.get("enable_multi_select", False):
+                widget.selection_clear(0, tk.END)
+                widget.selection_set(index)
+            
+            self.drag_data["hold_timer"] = self.root.after(500, lambda: self.activate_drag(event))
+    
+    def activate_drag(self, event):
+        """Activate dragging after hold timer"""
+        self.drag_data["dragging"] = True
+        self.drag_data["hold_timer"] = None
+        
+        if not self.drag_indicator:
+            self.drag_indicator = tk.Toplevel(self.root)
+            self.drag_indicator.overrideredirect(True)
+            self.drag_indicator.attributes("-alpha", 0.7)
+            self.drag_indicator.attributes("-topmost", True)
+            
+            label = tk.Label(
+                self.drag_indicator,
+                text=self.drag_data["item"],
+                bg=self.BG_LIGHT,
+                fg=self.FG_TEXT,
+                font=("Segoe UI", 10),
+                padx=10,
+                pady=5,
+                relief="raised",
+                borderwidth=2
+            )
+            label.pack()
+            
+            x = self.root.winfo_pointerx() + 10
+            y = self.root.winfo_pointery() + 10
+            self.drag_indicator.geometry(f"+{x}+{y}")
     
     def on_drag_motion(self, event):
-        """Handle drag motion - highlight drop position"""
+        """Handle drag motion, show indicator and highlight drop position"""
+        if self.drag_data["hold_timer"] and self.drag_data["index"] is not None:
+            dx = abs(event.x - self.drag_data["start_x"])
+            dy = abs(event.y - self.drag_data["start_y"])
+            if dx > 5 or dy > 5:
+                self.root.after_cancel(self.drag_data["hold_timer"])
+                self.drag_data["hold_timer"] = None
+        
+        if not self.drag_data["dragging"] or self.drag_data["index"] is None:
+            return
+        
         widget = event.widget
+        
+        if self.drag_indicator:
+            x = event.x_root + 10
+            y = event.y_root + 10
+            self.drag_indicator.geometry(f"+{x}+{y}")
+        
         index = widget.nearest(event.y)
-        if index >= 0 and self.drag_data["index"] is not None:
-            widget.selection_clear(0, tk.END)
+        if index >= 0:
+            if not self.settings.get("enable_multi_select", False):
+                widget.selection_clear(0, tk.END)
             widget.selection_set(index)
     
     def on_drag_release(self, event):
         """Release drag and reorder accounts"""
-        if self.drag_data["index"] is None:
+        if self.drag_data["hold_timer"]:
+            self.root.after_cancel(self.drag_data["hold_timer"])
+            self.drag_data["hold_timer"] = None
+        
+        if self.drag_indicator:
+            self.drag_indicator.destroy()
+            self.drag_indicator = None
+        
+        if not self.drag_data["dragging"] or self.drag_data["index"] is None:
+            self.drag_data = {
+                "item": None, 
+                "index": None, 
+                "start_x": 0, 
+                "start_y": 0,
+                "dragging": False,
+                "hold_timer": None
+            }
             return
         
         widget = event.widget
@@ -603,10 +682,18 @@ class AccountManagerUI:
             
             self.refresh_accounts()
             
-            widget.selection_clear(0, tk.END)
-            widget.selection_set(drop_index)
+            if not self.settings.get("enable_multi_select", False):
+                widget.selection_clear(0, tk.END)
+                widget.selection_set(drop_index)
         
-        self.drag_data = {"item": None, "index": None}
+        self.drag_data = {
+            "item": None, 
+            "index": None, 
+            "start_x": 0, 
+            "start_y": 0,
+            "dragging": False,
+            "hold_timer": None
+        }
     
     def get_selected_username(self):
         """Get the currently selected username"""
@@ -1366,7 +1453,6 @@ class AccountManagerUI:
         settings_window.resizable(False, False)
         
         settings_window.transient(self.root)
-        # Removed grab_set() to allow interaction with console window
         
         if self.settings.get("enable_topmost", False):
             settings_window.attributes("-topmost", True)
@@ -1385,16 +1471,23 @@ class AccountManagerUI:
         
         settings_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
         
-        main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        tabs = ttk.Notebook(settings_window)
+        tabs.pack(fill=tk.BOTH, expand=True)
         
-        title_label = ttk.Label(
-            main_frame, 
-            text="Settings", 
-            style="Dark.TLabel", 
-            font=("Segoe UI", 14, "bold")
-        )
-        title_label.pack(anchor="w", pady=(0, 10))
+        general_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(general_tab, text="General")
+        
+        themes_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(themes_tab, text="Themes")
+        
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
+        style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 9), focuscolor='none')
+        style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
+        
+        main_frame = ttk.Frame(general_tab, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
         topmost_var = tk.BooleanVar(value=self.settings.get("enable_topmost", False))
         multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
@@ -1537,8 +1630,8 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=settings_window.destroy
         )
-        close_button.pack(fill="x", pady=(3, 0)) 
-
+        close_button.pack(fill="x", pady=(5, 5))
+        
         version_label = ttk.Label(
             main_frame,
             text=f"Version: {self.APP_VERSION}",
@@ -1546,6 +1639,187 @@ class AccountManagerUI:
             font=("Segoe UI", 9)
         )
         version_label.pack(anchor="e", pady=(6, 0))
+        
+        themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
+        themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
+    
+        def create_color_picker(parent, label_text, current_color, setting_key):
+            frame = ttk.Frame(parent, style="Dark.TFrame")
+            frame.pack(fill="x", pady=3)
+            
+            ttk.Label(
+                frame,
+                text=label_text,
+                style="Dark.TLabel",
+                font=("Segoe UI", 9)
+            ).pack(side="left")
+            
+            color_display = tk.Frame(frame, bg=current_color, width=30, height=20, relief="solid", borderwidth=1)
+            color_display.pack(side="right", padx=(5, 0))
+            
+            def pick_color():
+                from tkinter import colorchooser
+                color = colorchooser.askcolor(initialcolor=current_color, title=f"Choose {label_text}")
+                if color[1]:
+                    color_display.config(bg=color[1])
+                    self.settings[setting_key] = color[1]
+                    self.save_settings()
+            
+            color_display.bind("<Button-1>", lambda e: pick_color())
+            
+            return frame
+        
+        create_color_picker(themes_frame, "Background Dark:", self.BG_DARK, "theme_bg_dark")
+        create_color_picker(themes_frame, "Background Mid:", self.BG_MID, "theme_bg_mid")
+        create_color_picker(themes_frame, "Background Light:", self.BG_LIGHT, "theme_bg_light")
+        create_color_picker(themes_frame, "Text Color:", self.FG_TEXT, "theme_fg_text")
+        create_color_picker(themes_frame, "Accent Color:", self.FG_ACCENT, "theme_fg_accent")
+        
+        ttk.Label(themes_frame, text="", style="Dark.TLabel").pack(pady=5)
+        
+        font_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
+        font_frame.pack(fill="x", pady=3)
+        
+        ttk.Label(
+            font_frame,
+            text="Font Family:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        ).pack(side="left")
+        
+        font_var = tk.StringVar(value=self.FONT_FAMILY)
+        font_options = ["Segoe UI", "Arial", "Calibri", "Consolas", "Courier New", "Times New Roman", "Verdana"]
+        
+        font_menu = ttk.Combobox(
+            font_frame,
+            textvariable=font_var,
+            values=font_options,
+            state="readonly",
+            width=15,
+            font=(self.FONT_FAMILY, 9)
+        )
+        font_menu.pack(side="right")
+        
+        def on_font_change(event=None):
+            self.settings["theme_font_family"] = font_var.get()
+            self.save_settings()
+        
+        font_menu.bind("<<ComboboxSelected>>", on_font_change)
+        
+        size_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
+        size_frame.pack(fill="x", pady=3)
+        
+        ttk.Label(
+            size_frame,
+            text="Font Size:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        ).pack(side="left")
+        
+        size_var = tk.IntVar(value=self.FONT_SIZE)
+        
+        def on_size_change():
+            try:
+                new_size = size_var.get()
+                if 8 <= new_size <= 16:
+                    self.settings["theme_font_size"] = new_size
+                    self.save_settings()
+            except:
+                pass
+        
+        size_spinner = tk.Spinbox(
+            size_frame,
+            from_=8,
+            to=16,
+            textvariable=size_var,
+            width=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_LIGHT,
+            font=(self.FONT_FAMILY, 9),
+            state="readonly",
+            command=on_size_change,
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            disabledbackground=self.BG_MID,
+            disabledforeground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0
+        )
+        size_spinner.pack(side="right")
+        
+        
+        ttk.Label(themes_frame, text="", style="Dark.TLabel").pack(pady=5)
+        
+        def apply_theme():
+            self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
+            self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
+            self.BG_LIGHT = self.settings.get("theme_bg_light", "#4b4b4b")
+            self.FG_TEXT = self.settings.get("theme_fg_text", "white")
+            self.FG_ACCENT = self.settings.get("theme_fg_accent", "#0078D7")
+            self.FONT_FAMILY = self.settings.get("theme_font_family", "Segoe UI")
+            self.FONT_SIZE = self.settings.get("theme_font_size", 10)
+            
+            self.root.configure(bg=self.BG_DARK)
+            
+            style = ttk.Style()
+            style.configure("Dark.TFrame", background=self.BG_DARK)
+            style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+            style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE - 1))
+            style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
+            style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
+            style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+            
+            style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
+            style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, 9), focuscolor='none')
+            style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
+            
+            # Update settings window
+            settings_window.configure(bg=self.BG_DARK)
+            
+            messagebox.showinfo("Theme Applied", "Theme has been updated successfully!")
+        
+        def reset_theme():
+            confirm = messagebox.askyesno(
+                "Reset Theme",
+                "Are you sure you want to reset all theme settings to default?"
+            )
+            if confirm:
+                self.settings["theme_bg_dark"] = "#2b2b2b"
+                self.settings["theme_bg_mid"] = "#3a3a3a"
+                self.settings["theme_bg_light"] = "#4b4b4b"
+                self.settings["theme_fg_text"] = "white"
+                self.settings["theme_fg_accent"] = "#0078D7"
+                self.settings["theme_font_family"] = "Segoe UI"
+                self.settings["theme_font_size"] = 10
+                self.save_settings()
+                apply_theme()
+                
+                for widget in themes_frame.winfo_children():
+                    widget.destroy()
+                
+                settings_window.destroy()
+                self.open_settings()
+        
+        button_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x", pady=(5, 0))
+        
+        ttk.Button(
+            button_frame,
+            text="Save & Apply",
+            style="Dark.TButton",
+            command=apply_theme
+        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        
+        ttk.Button(
+            button_frame,
+            text="Reset to Default",
+            style="Dark.TButton",
+            command=reset_theme
+        ).pack(side="left", fill="x", expand=True, padx=(3, 0))
     
     def write(self, text):
         """Redirect stdout/stderr writes to console"""

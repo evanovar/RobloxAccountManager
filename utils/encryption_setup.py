@@ -4,6 +4,7 @@ Encryption setup
 
 import sys
 import os
+import json
 import hashlib
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
@@ -63,11 +64,21 @@ class EncryptionSetupUI:
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.should_exit = False
         
-        self.BG_DARK = "#2b2b2b"
-        self.BG_MID = "#3a3a3a"
-        self.BG_LIGHT = "#4b4b4b"
-        self.FG_TEXT = "white"
-        self.FG_ACCENT = "#0078D7"
+        # Load theme settings
+        settings_file = os.path.join(self.data_folder, "ui_settings.json")
+        settings = {}
+        if os.path.exists(settings_file):
+            try:
+                with open(settings_file, 'r') as f:
+                    settings = json.load(f)
+            except:
+                pass
+        
+        self.BG_DARK = settings.get("theme_bg_dark", "#2b2b2b")
+        self.BG_MID = settings.get("theme_bg_mid", "#3a3a3a")
+        self.BG_LIGHT = settings.get("theme_bg_light", "#4b4b4b")
+        self.FG_TEXT = settings.get("theme_fg_text", "white")
+        self.FG_ACCENT = settings.get("theme_fg_accent", "#0078D7")
     
     def setup_encryption_ui(self):
         """Show encryption setup UI and return password if needed"""
