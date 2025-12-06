@@ -15,17 +15,42 @@ Created by evanovar · Contact: [Discord Server](https://discord.gg/TYnJXyEhgY) 
 
 ## ✨ Features
 
-### 🎨 Modern UI Interface
-- **Dark Theme**: Sleek, modern interface easy on the eyes
-- **Visual Account Management**: See all your accounts at a glance
+### 🎨 Modern UI & Theme System
+- **Customizable Dark Theme**: Full theme customization with 5 color pickers (Background Dark/Mid/Light, Text, Accent)
+- **Font Personalization**: Choose from 7 preset fonts and adjust size (8-16px)
+- **Clean Interface:** A modern, compact design that keeps everything clear and easy to navigate.
 
-### 🖥️ Interface Features
-- **Account Management**: List of all your accounts with encryption status
-- **Multi Roblox Support**: Run multiple Roblox instances on the same device
-- **Import Cookie Feature**: Add accounts quickly using `.ROBLOSECURITY` cookie
-- **Game List**: Save up to 50 recently played games with Place IDs (configurable)
+### 🔐 Account Management
+- **Multiple Addition Methods**:
+  - Browser automation (login manually in Chrome)
+  - Cookie import (paste `.ROBLOSECURITY` cookie)
+  - JavaScript automation (bulk account creation with custom scripts)
+- **Encryption Options**:
+  - Hardware-based (automatic, tied to your PC)
+  - Password-based (portable, works on any PC)
+  - No encryption (easy transfer but insecure)
+- **Account Organization**:
+  - Add custom notes to accounts
+  - Drag-and-drop reordering
+  - Multi-select mode
+- **Visual Status Indicators**: See encryption status at a glance ([HARDWARE ENCRYPTED] / [PASSWORD ENCRYPTED] / [NOT ENCRYPTED])
+
+### 🎮 Game Launch Features
+- **Multi Roblox + 773 Fix**: Run multiple Roblox instances simultaneously with automatic Error 773 prevention
+- **Smart Game List**: Save up to 50 recently played games (configurable 5-50)
 - **Private Server Support**: Save and launch private servers with [P] indicator
-- **Persistent Settings**: Automatically saves Place IDs, Private Server codes, game list, and preferences
+- **Launch Confirmation**: Optional confirmation dialog before launching games
+
+### 🔧 Quality of Life Features
+- **Persistent Settings**: All preferences, game history, and Place IDs auto-save
+- **Live Game Name Lookup**: Automatically fetches game names from Place IDs
+- **Always on Top Setting**: Keep window on top of other applications (can be enabled/disabled)
+- **Console Output**: View detailed logs and debug information
+- **Auto-Update Checker**: Notifies you when new versions are available
+
+### ⚙️ Developer Features
+- **JavaScript Automation**: Launch up to 10 Chrome instances with custom JavaScript execution
+- **Manual Account Import**: Import account manually using .ROBLOSECURITY cookie.
 
 ## 🛠️ Installation
 
@@ -123,10 +148,16 @@ A: Currently, this tool is optimized for Windows only.
 A: [P] indicates that the game was saved with a private server link code. Clicking it will load both the Place ID and Private Server ID.
 
 **Q: What is Multi Roblox?**  
-A: Multi Roblox allows you to run multiple Roblox instances simultaneously on the same machine. Enable it in Settings, and you can launch multiple games at once.
+A: Multi Roblox allows you to run multiple Roblox instances simultaneously on the same machine. You can enable it in Settings → General tab.
+
+**Q: Does Multi Roblox work automatically?**  
+A: If you enable it in Settings, it will activate on startup. If Roblox is already running when you enable it, the tool will ask permission to close all Roblox instances first.
 
 **Q: Where are my data files stored?**  
-A: All configuration and account data are stored in the `AccountManagerData` folder in the same directory as the program.
+A: All configuration and account data are stored in the `AccountManagerData` folder:
+- `saved_accounts.json` - Your encrypted account data
+- `encryption_config.json` - Encryption settings
+- `ui_settings.json` - Theme preferences and UI settings
 
 ### Encryption Questions
 
@@ -134,13 +165,13 @@ A: All configuration and account data are stored in the `AccountManagerData` fol
 A: Unfortunately, there is **NO password recovery method**. This is by design for security. Lost password = permanent data loss. Always remember your password or use hardware-based encryption instead.
 
 **Q: Can I change from hardware encryption to password encryption?**  
-A: Currently, there is no safe method. I will add this soon probably
+A: Currently, there is no built-in migration tool. You would need to manually re-add your accounts. A safe migration feature is planned for a future update.
 
 **Q: Which encryption method should I choose?**  
 A:
-- **Hardware Encryption**: You only use one computer, want zero hassle, don't need cloud backups
-- **Password Encryption**: You use multiple computers, want cloud backups, need portability
-- **No Encrpytion**: You don't care about security
+- **Hardware Encryption**: Best if you only use one computer, want zero hassle, and don't need cloud backups
+- **Password Encryption**: Best if you use multiple computers, want cloud backups, or need portability
+- **No Encryption**: You don't care about security at all.
 
 **Q: Can I access my password-encrypted accounts on another computer?**  
 A: Yes! Simply copy the entire `AccountManagerData` folder to the new computer, install the app, and enter your password. This folder contains `saved_accounts.json` and `encryption_config.json`.
@@ -150,11 +181,14 @@ A: Yes! Simply copy the entire `AccountManagerData` folder to the new computer, 
 **Q: How many accounts can I save?**  
 A: There's no hard limit. You can save as many accounts as you need.
 
-**Q: Why is my token invalid?**  
-A: Roblox cookies can expire after long periods of inactivity or if you change your account password. Use the "Validate account" feature to check if an account is still valid.
+**Q: How do I select multiple accounts?**  
+A: Enable "Multi Select" in Settings, then use Ctrl+Click to select multiple accounts. You can then launch games, edit notes, or delete multiple accounts at once.
 
-**Q: Can I transfer accounts between different instances of the tool?**  
-A: 
-- **Hardware encryption**: No, tied to one machine only
-- **Password encryption**: Yes, copy the entire `AccountManagerData` folder, then use same password
-- **No encryption**: Yes, copy the entire `AccountManagerData` folder
+**Q: Why is my token invalid?**  
+A: Roblox cookies can expire after long periods of inactivity or if you change your account password. Use the "Validate Account" feature to check if an account is still valid.
+
+**Q: How does the JavaScript automation work?**  
+A: It opens multiple Chrome instances, navigates to your specified website, and executes your custom JavaScript code. Useful for bulk account creation.
+
+**Q: If I update the .exe, will it cause data loss?**  
+A: No. Updating the `.exe` will not delete your data. All data is stored inside the `AccountManagerData` folder. Just make sure the new `.exe` is placed in the same location as that folder.
