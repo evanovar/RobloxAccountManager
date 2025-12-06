@@ -61,13 +61,11 @@ class RobloxAccountManager:
                 if self.encryptor and isinstance(data, dict) and data.get('encrypted'):
                     try:
                         decrypted_data = self.encryptor.decrypt_data(data['data'])
-                        # Migrate old accounts to include 'note' field
                         self._migrate_accounts(decrypted_data)
                         return decrypted_data
                     except Exception as e:
                         raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
                 
-                # Migrate old accounts to include 'note' field
                 if isinstance(data, dict):
                     self._migrate_accounts(data)
                 return data if isinstance(data, dict) else {}
@@ -295,7 +293,7 @@ class RobloxAccountManager:
                             return True
                                 
                     except Exception as e:
-                        print(f"Debug error: {e}")
+                        print(f"[ERROR] Login detection failed: {e}")
                 
                 time.sleep(0.05)
                 
@@ -474,8 +472,7 @@ class RobloxAccountManager:
             for thread in threads:
                 thread.join()
             
-            for driver in drivers:
-                self.cleanup_temp_profile()
+            self.cleanup_temp_profile()
             
             return success_count > 0
                 

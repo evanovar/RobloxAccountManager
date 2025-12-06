@@ -23,6 +23,7 @@ class AccountManagerUI:
         self.manager = manager
         self.APP_VERSION = "2.3.1"
         self._game_name_after_id = None
+        self._save_settings_timer = None
         
         self.console_output = []
         self.console_window = None
@@ -97,14 +98,14 @@ class AccountManagerUI:
             encryption_status = "[NOT ENCRYPTED]"
             encryption_color = "#FFB6C1"
             
-        status_label = tk.Label(
+        self.encryption_label = tk.Label(
             header_frame,
             text=encryption_status,
             bg=self.BG_DARK,
             fg=encryption_color,
             font=("Segoe UI", 8, "bold")
         )
-        status_label.pack(side="right", padx=(5, 0))
+        self.encryption_label.pack(side="right", padx=(5, 0))
 
         list_frame = ttk.Frame(left_frame, style="Dark.TFrame")
         list_frame.pack(fill="both", expand=True)
@@ -418,12 +419,23 @@ class AccountManagerUI:
 
 
     def save_settings(self):
-        """Save UI settings to file"""
-        try:
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save settings: {e}")
+        """Save UI settings to file with debouncing"""
+        if self._save_settings_timer is not None:
+            try:
+                self.root.after_cancel(self._save_settings_timer)
+            except:
+                pass
+            self._save_settings_timer = None
+        
+        def do_save():
+            try:
+                with open(self.settings_file, 'w') as f:
+                    json.dump(self.settings, f, indent=2)
+            except Exception as e:
+                print(f"Failed to save settings: {e}")
+            self._save_settings_timer = None
+        
+        self._save_settings_timer = self.root.after(500, do_save)
 
     def is_chrome_installed(self):
         """Best-effort check to see if Google Chrome is installed (Windows)."""
@@ -644,15 +656,41 @@ class AccountManagerUI:
     
     def on_drag_release(self, event):
         """Release drag and reorder accounts"""
-        if self.drag_data["hold_timer"]:
-            self.root.after_cancel(self.drag_data["hold_timer"])
-            self.drag_data["hold_timer"] = None
-        
-        if self.drag_indicator:
-            self.drag_indicator.destroy()
-            self.drag_indicator = None
-        
-        if not self.drag_data["dragging"] or self.drag_data["index"] is None:
+        try:
+            if self.drag_data["hold_timer"]:
+                self.root.after_cancel(self.drag_data["hold_timer"])
+                self.drag_data["hold_timer"] = None
+            
+            if not self.drag_data["dragging"] or self.drag_data["index"] is None:
+                return
+            
+            widget = event.widget
+            drop_index = widget.nearest(event.y)
+            drag_index = self.drag_data["index"]
+            
+            if drop_index >= 0 and drag_index != drop_index:
+                ordered_usernames = list(self.manager.accounts.keys())
+                
+                username = ordered_usernames.pop(drag_index)
+                ordered_usernames.insert(drop_index, username)
+                
+                new_accounts = {}
+                for uname in ordered_usernames:
+                    new_accounts[uname] = self.manager.accounts[uname]
+                
+                self.manager.accounts = new_accounts
+                self.manager.save_accounts()
+                
+                self.refresh_accounts()
+                
+                if not self.settings.get("enable_multi_select", False):
+                    widget.selection_clear(0, tk.END)
+                    widget.selection_set(drop_index)
+        finally:
+            if self.drag_indicator:
+                self.drag_indicator.destroy()
+                self.drag_indicator = None
+            
             self.drag_data = {
                 "item": None, 
                 "index": None, 
@@ -661,39 +699,6 @@ class AccountManagerUI:
                 "dragging": False,
                 "hold_timer": None
             }
-            return
-        
-        widget = event.widget
-        drop_index = widget.nearest(event.y)
-        drag_index = self.drag_data["index"]
-        
-        if drop_index >= 0 and drag_index != drop_index:
-            ordered_usernames = list(self.manager.accounts.keys())
-            
-            username = ordered_usernames.pop(drag_index)
-            ordered_usernames.insert(drop_index, username)
-            
-            new_accounts = {}
-            for uname in ordered_usernames:
-                new_accounts[uname] = self.manager.accounts[uname]
-            
-            self.manager.accounts = new_accounts
-            self.manager.save_accounts()
-            
-            self.refresh_accounts()
-            
-            if not self.settings.get("enable_multi_select", False):
-                widget.selection_clear(0, tk.END)
-                widget.selection_set(drop_index)
-        
-        self.drag_data = {
-            "item": None, 
-            "index": None, 
-            "start_x": 0, 
-            "start_y": 0,
-            "dragging": False,
-            "hold_timer": None
-        }
     
     def get_selected_username(self):
         """Get the currently selected username"""
@@ -1419,7 +1424,18 @@ class AccountManagerUI:
             if self.multi_roblox_handle:
                 if self.multi_roblox_handle.get('file'):
                     try:
-                        self.multi_roblox_handle['file'].close()
+                        cookie_file = self.multi_roblox_handle['file']
+                        cookies_path = os.path.join(
+                            os.getenv('LOCALAPPDATA'),
+                            r'Roblox\LocalStorage\RobloxCookies.dat'
+                        )
+                        if os.path.exists(cookies_path):
+                            try:
+                                msvcrt.locking(cookie_file.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
+                                print("[INFO] Cookie file unlocked.")
+                            except Exception as unlock_error:
+                                print(f"[ERROR] Failed to unlock cookie file: {unlock_error}")
+                        cookie_file.close()
                     except Exception as file_error:
                         print(f"[ERROR] Failed to close cookie file: {file_error}")
                 
@@ -1605,10 +1621,17 @@ class AccountManagerUI:
             textvariable=max_games_var,
             width=8,
             bg=self.BG_MID,
-            fg="white",
+            fg=self.FG_TEXT,
             buttonbackground=self.BG_LIGHT,
-            font=("Segoe UI", 9),
-            command=on_max_games_change
+            font=(self.FONT_FAMILY, 9),
+            command=on_max_games_change,
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0
         )
         max_games_spinner.pack(side="right")
         
@@ -1722,13 +1745,18 @@ class AccountManagerUI:
         def on_size_change():
             try:
                 new_size = size_var.get()
-                if 8 <= new_size <= 16:
-                    self.settings["theme_font_size"] = new_size
-                    self.save_settings()
+                if new_size < 8:
+                    size_var.set(8)
+                    new_size = 8
+                elif new_size > 16:
+                    size_var.set(16)
+                    new_size = 16
+                self.settings["theme_font_size"] = new_size
+                self.save_settings()
             except:
                 pass
         
-        size_spinner = tk.Spinbox(
+        self.size_spinner = tk.Spinbox(
             size_frame,
             from_=8,
             to=16,
@@ -1738,19 +1766,19 @@ class AccountManagerUI:
             fg=self.FG_TEXT,
             buttonbackground=self.BG_LIGHT,
             font=(self.FONT_FAMILY, 9),
-            state="readonly",
             command=on_size_change,
             readonlybackground=self.BG_MID,
             selectbackground=self.FG_ACCENT,
             selectforeground=self.FG_TEXT,
             insertbackground=self.FG_TEXT,
-            disabledbackground=self.BG_MID,
-            disabledforeground=self.FG_TEXT,
             relief="flat",
             borderwidth=1,
             highlightthickness=0
         )
-        size_spinner.pack(side="right")
+        self.size_spinner.pack(side="right")
+        
+        self.size_spinner.bind("<FocusOut>", lambda e: on_size_change())
+        self.size_spinner.bind("<Return>", lambda e: on_size_change())
         
         
         ttk.Label(themes_frame, text="", style="Dark.TLabel").pack(pady=5)
@@ -1779,6 +1807,38 @@ class AccountManagerUI:
             style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
             
             settings_window.configure(bg=self.BG_DARK)
+            
+            self.account_list.configure(
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                selectbackground=self.FG_ACCENT
+            )
+            
+            self.game_list.configure(
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                selectbackground=self.FG_ACCENT
+            )
+            
+            self.encryption_label.configure(bg=self.BG_DARK)
+            
+            self.size_spinner.configure(
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                buttonbackground=self.BG_LIGHT,
+                readonlybackground=self.BG_MID,
+                selectbackground=self.FG_ACCENT,
+                insertbackground=self.FG_TEXT
+            )
+            
+            max_games_spinner.configure(
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                buttonbackground=self.BG_LIGHT,
+                readonlybackground=self.BG_MID,
+                selectbackground=self.FG_ACCENT,
+                insertbackground=self.FG_TEXT
+            )
             
             messagebox.showinfo("Theme Applied", "Theme has been updated successfully!")
         
