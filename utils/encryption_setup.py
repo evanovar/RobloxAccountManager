@@ -7,7 +7,7 @@ import os
 import json
 import hashlib
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from classes.encryption import EncryptionConfig, PasswordEncryption
 
 

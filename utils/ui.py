@@ -7,13 +7,12 @@ import os
 import json
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox
 import requests
 import threading
 import msvcrt
 import ctypes
 import webbrowser
-from io import StringIO
 from datetime import datetime, time
 
 
