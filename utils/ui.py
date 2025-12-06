@@ -14,7 +14,7 @@ import msvcrt
 import ctypes
 import webbrowser
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, time
 
 
 class AccountManagerUI:
@@ -1368,6 +1368,7 @@ class AccountManagerUI:
                 if response == 'yes':
                     subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
                                  capture_output=True, text=True, encoding='utf-8', errors='replace') # closes roblox
+                    time.sleep(1) # wait a second to ensure all processes are closed
                     messagebox.showinfo("Success", "All Roblox instances have been closed.")
                 else:
                     return False
@@ -1777,7 +1778,6 @@ class AccountManagerUI:
             style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, 9), focuscolor='none')
             style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
             
-            # Update settings window
             settings_window.configure(bg=self.BG_DARK)
             
             messagebox.showinfo("Theme Applied", "Theme has been updated successfully!")

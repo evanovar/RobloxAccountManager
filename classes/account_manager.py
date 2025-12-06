@@ -297,7 +297,7 @@ class RobloxAccountManager:
                     except Exception as e:
                         print(f"Debug error: {e}")
                 
-                time.sleep(0.025)
+                time.sleep(0.05)
                 
             except WebDriverException:
                 try:
