@@ -20,7 +20,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.3.1"
+        self.APP_VERSION = "2.3.2"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
