@@ -138,8 +138,12 @@ class RobloxAPI:
             return None
     
     @staticmethod
-    def launch_roblox(username, cookie, game_id, private_server_id=""):
-        """Launch Roblox game with specified account"""
+    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default"):
+        """Launch Roblox game with specified account
+        
+        Args:
+            launcher_preference: "default", "bloxstrap", "fishstrap", or "client"
+        """
         print(f"Getting authentication ticket for {username}...")
         auth_ticket = RobloxAPI.get_auth_ticket(cookie)
         
@@ -167,14 +171,9 @@ class RobloxAPI:
             )
             print(f"Launching Roblox Home...")
             print(f"Account: {username}")
+            print(f"Launcher: {launcher_preference}")
             
-            try:
-                os.system(f'start "" "{url}"')
-                print("[SUCCESS] Roblox home launched successfully!")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to launch Roblox: {e}")
-                return False
+            return RobloxAPI._execute_launch(url, launcher_preference)
 
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
@@ -198,13 +197,95 @@ class RobloxAPI:
         print(f"Game ID: {game_id}")
         if private_server_code:
             print(f"Private Server: {private_server_code}")
+        print(f"Launcher: {launcher_preference}")
         
+        return RobloxAPI._execute_launch(url, launcher_preference)
+    
+    @staticmethod
+    def _execute_launch(url, launcher_preference):
+        """Execute the Roblox launch with the specified launcher"""
         try:
-            os.system(f'start "" "{url}"')
-            print("[SUCCESS] Roblox launched successfully!")
-            return True
+            if launcher_preference == "bloxstrap":
+                local_appdata = os.getenv('LOCALAPPDATA')
+                if not local_appdata:
+                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
+                    return False
+                
+                bloxstrap_path = Path(local_appdata) / 'Bloxstrap' / 'Bloxstrap.exe'
+                if not bloxstrap_path.exists():
+                    messagebox.showerror(
+                        "Bloxstrap Not Found",
+                        f"Bloxstrap is not installed.\n\nExpected location:\n{bloxstrap_path}\n\nPlease install Bloxstrap or select a different launcher."
+                    )
+                    return False
+                
+                subprocess.Popen([str(bloxstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("[SUCCESS] Launched with Bloxstrap!")
+                return True
+            
+            elif launcher_preference == "fishstrap":
+                local_appdata = os.getenv('LOCALAPPDATA')
+                if not local_appdata:
+                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
+                    return False
+                
+                fishstrap_path = Path(local_appdata) / 'Fishstrap' / 'Fishstrap.exe'
+                if not fishstrap_path.exists():
+                    messagebox.showerror(
+                        "Fishstrap Not Found",
+                        f"Fishstrap is not installed.\n\nExpected location:\n{fishstrap_path}\n\nPlease install Fishstrap or select a different launcher."
+                    )
+                    return False
+                
+                subprocess.Popen([str(fishstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("[SUCCESS] Launched with Fishstrap!")
+                return True
+            
+            elif launcher_preference == "client":
+                local_appdata = os.getenv('LOCALAPPDATA')
+                if not local_appdata:
+                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
+                    return False
+                
+                versions_dir = Path(local_appdata) / 'Roblox' / 'Versions'
+                if not versions_dir.exists():
+                    messagebox.showerror(
+                        "Roblox Client Not Found",
+                        f"Roblox client directory not found.\n\nExpected location:\n{versions_dir}\n\nPlease install Roblox or select a different launcher."
+                    )
+                    return False
+                
+                version_folders = [d for d in versions_dir.iterdir() if d.is_dir() and d.name.startswith('version-')]
+                if not version_folders:
+                    messagebox.showerror(
+                        "Roblox Client Not Found",
+                        f"No Roblox version found in:\n{versions_dir}\n\nPlease reinstall Roblox or select a different launcher."
+                    )
+                    return False
+                
+                latest_version = max(version_folders, key=lambda x: x.stat().st_mtime)
+                client_path = latest_version / 'RobloxPlayerBeta.exe'
+                
+                if not client_path.exists():
+                    messagebox.showerror(
+                        "Roblox Client Not Found",
+                        f"RobloxPlayerBeta.exe not found in:\n{latest_version}\n\nPlease reinstall Roblox or select a different launcher."
+                    )
+                    return False
+                
+                subprocess.Popen([str(client_path), url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print(f"[SUCCESS] Launched with Roblox Client from {latest_version.name}!")
+                return True
+            
+            else:  # default
+                import webbrowser
+                webbrowser.open(url)
+                print("[SUCCESS] Roblox launched successfully!")
+                return True
+                
         except Exception as e:
             print(f"[ERROR] Failed to launch Roblox: {e}")
+            messagebox.showerror("Launch Error", f"Failed to launch Roblox:\n\n{str(e)}")
             return False
     
     @staticmethod

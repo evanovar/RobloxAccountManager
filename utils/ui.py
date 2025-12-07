@@ -14,14 +14,15 @@ import threading
 import msvcrt
 import ctypes
 import webbrowser
-from datetime import datetime, time
+import time
+from datetime import datetime
 
 
 class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.3.3beta"
+        self.APP_VERSION = "2.3.4"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
@@ -1265,10 +1266,11 @@ class AccountManagerUI:
             usernames = [username]
 
         def worker(selected_usernames):
+            launcher_pref = self.settings.get("roblox_launcher", "default")
             success_count = 0
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, "", ""):
+                    if self.manager.launch_roblox(uname, "", "", launcher_pref):
                         success_count += 1
                 except Exception as e:
                     print(f"Failed to launch Roblox home for {uname}: {e}")
@@ -1320,10 +1322,11 @@ class AccountManagerUI:
                 return
 
         def worker(selected_usernames, pid, psid):
+            launcher_pref = self.settings.get("roblox_launcher", "default")
             success_count = 0
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, pid, psid):
+                    if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
                         success_count += 1
                 except Exception as e:
                     print(f"Failed to launch game for {uname}: {e}")
@@ -1501,6 +1504,9 @@ class AccountManagerUI:
         themes_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(themes_tab, text="Themes")
         
+        roblox_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(roblox_tab, text="Roblox")
+        
         style = ttk.Style()
         style.theme_use('clam')
         style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
@@ -1660,7 +1666,6 @@ class AccountManagerUI:
         )
         close_button.pack(fill="x", pady=(5, 5))
         
-        # Check if this is an unstable version
         import re
         is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
         version_text = f"Version: {self.APP_VERSION}"
@@ -1674,6 +1679,96 @@ class AccountManagerUI:
             font=("Segoe UI", 9)
         )
         version_label.pack(anchor="e", pady=(6, 0))
+        
+        roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
+        roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        launcher_label = ttk.Label(
+            roblox_frame,
+            text="Roblox Launcher:",
+            style="Dark.TLabel",
+            font=("Segoe UI", 10, "bold")
+        )
+        launcher_label.pack(anchor="w", pady=(0, 10))
+        
+        launcher_var = tk.StringVar(value=self.settings.get("roblox_launcher", "default"))
+        
+        radio_style = ttk.Style()
+        radio_style.configure(
+            "Dark.TRadiobutton",
+            background=self.BG_DARK,
+            foreground=self.FG_TEXT,
+            font=("Segoe UI", 9)
+        )
+        radio_style.map(
+            "Dark.TRadiobutton",
+            background=[('active', self.BG_DARK)],
+            foreground=[('active', self.FG_TEXT)]
+        )
+        
+        def on_launcher_change():
+            self.settings["roblox_launcher"] = launcher_var.get()
+            self.save_settings()
+        
+        ttk.Radiobutton(
+            roblox_frame,
+            text="Default",
+            variable=launcher_var,
+            value="default",
+            style="Dark.TRadiobutton",
+            command=on_launcher_change
+        ).pack(anchor="w", pady=2)
+        
+        ttk.Radiobutton(
+            roblox_frame,
+            text="Bloxstrap",
+            variable=launcher_var,
+            value="bloxstrap",
+            style="Dark.TRadiobutton",
+            command=on_launcher_change
+        ).pack(anchor="w", pady=2)
+        
+        ttk.Radiobutton(
+            roblox_frame,
+            text="Fishstrap",
+            variable=launcher_var,
+            value="fishstrap",
+            style="Dark.TRadiobutton",
+            command=on_launcher_change
+        ).pack(anchor="w", pady=2)
+        
+        ttk.Radiobutton(
+            roblox_frame,
+            text="Roblox Client (RobloxPlayerBeta.exe)",
+            variable=launcher_var,
+            value="client",
+            style="Dark.TRadiobutton",
+            command=on_launcher_change
+        ).pack(anchor="w", pady=2)
+        
+        def force_close_roblox():
+            try:
+                result = subprocess.run(
+                    ['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'],
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                
+                if result.returncode == 0:
+                    messagebox.showinfo("Success", "All Roblox instances have been closed.")
+                else:
+                    messagebox.showinfo("Info", "No Roblox instances were found running.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to close Roblox: {e}")
+        
+        force_close_btn = ttk.Button(
+            roblox_frame,
+            text="Force Close All Roblox",
+            style="Dark.TButton",
+            command=force_close_roblox
+        )
+        force_close_btn.pack(fill="x", pady=(15, 0))
         
         themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
         themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
