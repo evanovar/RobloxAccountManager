@@ -7,11 +7,60 @@ import os
 import time
 import random
 import requests
+import subprocess
+from pathlib import Path
+from tkinter import messagebox
 
 
 
 class RobloxAPI:
     """Handles all Roblox API interactions"""
+    
+    @staticmethod
+    def get_installed_roblox_versions():
+        """Get all installed Roblox versions from LocalAppData"""
+        versions_path = Path(os.getenv('LOCALAPPDATA')) / 'Roblox' / 'Versions'
+        
+        if not versions_path.exists():
+            return []
+        
+        versions = []
+        for folder in versions_path.iterdir():
+            if folder.is_dir():
+                roblox_player = folder / 'RobloxPlayerBeta.exe'
+                if roblox_player.exists():
+                    versions.append(str(roblox_player))
+        
+        return versions
+    
+    @staticmethod
+    def get_latest_roblox_version():
+        """Get the latest installed Roblox version based on modification time"""
+        versions = RobloxAPI.get_installed_roblox_versions()
+        
+        if not versions:
+            return None
+        
+        versions.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        return versions[0]
+    
+    @staticmethod
+    def extract_private_server_code(private_server_input):
+        """Extract private server code from URL or return the code directly"""
+        if not private_server_input:
+            return ""
+        
+        if private_server_input.isdigit():
+            return private_server_input
+        else:
+            print("[ERROR] Wrong Format, Private Server ID must contain only numbers")
+            messagebox.showerror(
+                "Wrong Format",
+                "Private Server ID must contain only numbers.\n\n"
+                f"Invalid input: {private_server_input}\n\n"
+                "Example format: 12345678901234567890123456789012"
+            )
+            return None
     
     @staticmethod
     def get_username_from_api(roblosecurity_cookie):
@@ -111,8 +160,19 @@ class RobloxAPI:
         
         print("[SUCCESS] Got authentication ticket!")
         
+        private_server_code = RobloxAPI.extract_private_server_code(private_server_id)
+        
+        if private_server_id and private_server_code is None:
+            print("[ERROR] Invalid private server code. Launch aborted.")
+            return False
+        
         browser_tracker_id = random.randint(55393295400, 55393295500)
         launch_time = int(time.time() * 1000)
+        
+        latest_version = RobloxAPI.get_latest_roblox_version()
+        
+        if not latest_version:
+            print("[WARNING] No Roblox installation found, using protocol URL (will trigger download)")
         
         if not game_id or game_id == "":
             url = (
@@ -123,6 +183,17 @@ class RobloxAPI:
             )
             print(f"Launching Roblox Home...")
             print(f"Account: {username}")
+            
+            if latest_version:
+                print(f"Using installed version: {latest_version}")
+                try:
+                    subprocess.Popen([latest_version, url], creationflags=subprocess.CREATE_NO_WINDOW)
+                    print("[SUCCESS] Roblox home launched successfully!")
+                    return True
+                except Exception as e:
+                    print(f"[ERROR] Failed to launch with installed version: {e}")
+                    print("[INFO] Falling back to protocol URL...")
+            
             try:
                 os.system(f'start "" "{url}"')
                 print("[SUCCESS] Roblox home launched successfully!")
@@ -140,8 +211,8 @@ class RobloxAPI:
             "&isPlayTogetherGame=false"
         )
 
-        if private_server_id:
-            url += "&linkCode=" + private_server_id
+        if private_server_code:
+            url += "&linkCode=" + private_server_code
 
         url += (
             "+browsertrackerid:" + str(browser_tracker_id) +
@@ -151,9 +222,19 @@ class RobloxAPI:
         print(f"Launching Roblox...")
         print(f"Account: {username}")
         print(f"Game ID: {game_id}")
-        if private_server_id:
-            print(f"Private Server: {private_server_id}")
+        if private_server_code:
+            print(f"Private Server: {private_server_code}")
 
+        if latest_version:
+            print(f"Using installed version: {latest_version}")
+            try:
+                subprocess.Popen([latest_version, url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("[SUCCESS] Roblox launched successfully!")
+                return True
+            except Exception as e:
+                print(f"[ERROR] Failed to launch with installed version: {e}")
+                print("[INFO] Falling back to protocol URL...")
+        
         try:
             os.system(f'start "" "{url}"')
             print("[SUCCESS] Roblox launched successfully!")

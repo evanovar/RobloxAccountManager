@@ -1358,7 +1358,7 @@ class AccountManagerUI:
         # so we ask the user for permission to close all roblox processes.
         try:
             result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                  capture_output=True, text=True, encoding='utf-8', errors='replace') # checks running processes
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW) # checks running processes
             
             if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
                 response = messagebox.askquestion( # ask user for permission
@@ -1371,7 +1371,7 @@ class AccountManagerUI:
                 
                 if response == 'yes':
                     subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
-                                 capture_output=True, text=True, encoding='utf-8', errors='replace') # closes roblox
+                                 capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW) # closes roblox
                     time.sleep(1) # wait a second to ensure all processes are closed
                     messagebox.showinfo("Success", "All Roblox instances have been closed.")
                 else:
