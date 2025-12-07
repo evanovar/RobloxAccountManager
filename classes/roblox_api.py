@@ -17,34 +17,6 @@ class RobloxAPI:
     """Handles all Roblox API interactions"""
     
     @staticmethod
-    def get_installed_roblox_versions():
-        """Get all installed Roblox versions from LocalAppData"""
-        versions_path = Path(os.getenv('LOCALAPPDATA')) / 'Roblox' / 'Versions'
-        
-        if not versions_path.exists():
-            return []
-        
-        versions = []
-        for folder in versions_path.iterdir():
-            if folder.is_dir():
-                roblox_player = folder / 'RobloxPlayerBeta.exe'
-                if roblox_player.exists():
-                    versions.append(str(roblox_player))
-        
-        return versions
-    
-    @staticmethod
-    def get_latest_roblox_version():
-        """Get the latest installed Roblox version based on modification time"""
-        versions = RobloxAPI.get_installed_roblox_versions()
-        
-        if not versions:
-            return None
-        
-        versions.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-        return versions[0]
-    
-    @staticmethod
     def detect_custom_launcher():
         """Detect if Bloxstrap or Fishstrap is installed and return launcher path"""
         local_appdata = os.getenv('LOCALAPPDATA')
@@ -166,12 +138,8 @@ class RobloxAPI:
             return None
     
     @staticmethod
-    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="auto"):
-        """Launch Roblox game with specified account
-        
-        Args:
-            launcher_preference: "auto", "bloxstrap", "fishstrap", or "default"
-        """
+    def launch_roblox(username, cookie, game_id, private_server_id=""):
+        """Launch Roblox game with specified account"""
         print(f"Getting authentication ticket for {username}...")
         auth_ticket = RobloxAPI.get_auth_ticket(cookie)
         
@@ -187,37 +155,8 @@ class RobloxAPI:
             print("[ERROR] Invalid private server code. Launch aborted.")
             return False
         
-        launcher_path = None
-        launcher_name = None
-        
-        if launcher_preference == "auto":
-            launcher_path, launcher_name = RobloxAPI.detect_custom_launcher()
-        elif launcher_preference == "bloxstrap":
-            local_appdata = os.getenv('LOCALAPPDATA')
-            if local_appdata:
-                bloxstrap_path = Path(local_appdata) / 'Bloxstrap' / 'Bloxstrap.exe'
-                if bloxstrap_path.exists():
-                    launcher_path = str(bloxstrap_path)
-                    launcher_name = 'Bloxstrap'
-                else:
-                    print("[WARNING] Bloxstrap not found, falling back to default")
-        elif launcher_preference == "fishstrap":
-            local_appdata = os.getenv('LOCALAPPDATA')
-            if local_appdata:
-                fishstrap_path = Path(local_appdata) / 'Fishstrap' / 'Fishstrap.exe'
-                if fishstrap_path.exists():
-                    launcher_path = str(fishstrap_path)
-                    launcher_name = 'Fishstrap'
-                else:
-                    print("[WARNING] Fishstrap not found, falling back to default")
-        
         browser_tracker_id = random.randint(55393295400, 55393295500)
         launch_time = int(time.time() * 1000)
-        
-        latest_version = RobloxAPI.get_latest_roblox_version()
-        
-        if not latest_version and not launcher_path:
-            print("[WARNING] No Roblox installation found, using protocol URL (will trigger download)")
         
         if not game_id or game_id == "":
             url = (
@@ -228,26 +167,6 @@ class RobloxAPI:
             )
             print(f"Launching Roblox Home...")
             print(f"Account: {username}")
-            
-            if launcher_path:
-                print(f"Using {launcher_name} launcher")
-                try:
-                    subprocess.Popen([launcher_path, "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
-                    print("[SUCCESS] Roblox home launched successfully!")
-                    return True
-                except Exception as e:
-                    print(f"[ERROR] Failed to launch with {launcher_name}: {e}")
-                    print("[INFO] Falling back to standard Roblox...")
-            
-            if latest_version:
-                print(f"Using installed version: {latest_version}")
-                try:
-                    subprocess.Popen([latest_version, url], creationflags=subprocess.CREATE_NO_WINDOW)
-                    print("[SUCCESS] Roblox home launched successfully!")
-                    return True
-                except Exception as e:
-                    print(f"[ERROR] Failed to launch with installed version: {e}")
-                    print("[INFO] Falling back to protocol URL...")
             
             try:
                 os.system(f'start "" "{url}"')
@@ -279,26 +198,6 @@ class RobloxAPI:
         print(f"Game ID: {game_id}")
         if private_server_code:
             print(f"Private Server: {private_server_code}")
-
-        if launcher_path:
-            print(f"Using {launcher_name} launcher")
-            try:
-                subprocess.Popen([launcher_path, "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
-                print("[SUCCESS] Roblox launched successfully!")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to launch with {launcher_name}: {e}")
-                print("[INFO] Falling back to standard Roblox...")
-
-        if latest_version:
-            print(f"Using installed version: {latest_version}")
-            try:
-                subprocess.Popen([latest_version, url], creationflags=subprocess.CREATE_NO_WINDOW)
-                print("[SUCCESS] Roblox launched successfully!")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to launch with installed version: {e}")
-                print("[INFO] Falling back to protocol URL...")
         
         try:
             os.system(f'start "" "{url}"')
