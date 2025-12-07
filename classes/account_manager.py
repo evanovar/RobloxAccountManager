@@ -616,14 +616,18 @@ class RobloxAccountManager:
                 pass
             return False
     
-    def launch_roblox(self, username, game_id, private_server_id=""):
-        """Launch Roblox game with specified account"""
+    def launch_roblox(self, username, game_id, private_server_id="", launcher_preference="auto"):
+        """Launch Roblox game with specified account
+        
+        Args:
+            launcher_preference: "auto", "bloxstrap", "fishstrap", or "default"
+        """
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
             return False
         
         cookie = self.accounts[username]['cookie']
-        return RobloxAPI.launch_roblox(username, cookie, game_id, private_server_id)
+        return RobloxAPI.launch_roblox(username, cookie, game_id, private_server_id, launcher_preference)
     
     def set_account_note(self, username, note):
         """Set or update note for an account"""

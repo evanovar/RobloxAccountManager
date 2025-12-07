@@ -6,6 +6,7 @@ Contains the main AccountManagerUI class
 import os
 import json
 import sys
+import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
@@ -1260,10 +1261,11 @@ class AccountManagerUI:
             usernames = [username]
 
         def worker(selected_usernames):
+            launcher_pref = self.settings.get("roblox_launcher", "auto")
             success_count = 0
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, "", ""):
+                    if self.manager.launch_roblox(uname, "", "", launcher_pref):
                         success_count += 1
                 except Exception as e:
                     print(f"Failed to launch Roblox home for {uname}: {e}")
@@ -1315,10 +1317,11 @@ class AccountManagerUI:
                 return
 
         def worker(selected_usernames, pid, psid):
+            launcher_pref = self.settings.get("roblox_launcher", "auto")
             success_count = 0
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, pid, psid):
+                    if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
                         success_count += 1
                 except Exception as e:
                     print(f"Failed to launch game for {uname}: {e}")
@@ -1495,6 +1498,9 @@ class AccountManagerUI:
         
         themes_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(themes_tab, text="Themes")
+        
+        roblox_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(roblox_tab, text="Roblox")
         
         style = ttk.Style()
         style.theme_use('clam')
@@ -1879,6 +1885,72 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=reset_theme
         ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+        
+        roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
+        roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        ttk.Label(
+            roblox_frame,
+            text="Launcher:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 10, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        launcher_var = tk.StringVar(value=self.settings.get("roblox_launcher", "auto"))
+        
+        launcher_options = [
+            ("Auto Detect", "auto"),
+            ("Bloxstrap", "bloxstrap"),
+            ("Fishstrap", "fishstrap"),
+            ("Default Roblox", "default")
+        ]
+        
+        for text, value in launcher_options:
+            ttk.Radiobutton(
+                roblox_frame,
+                text=text,
+                variable=launcher_var,
+                value=value,
+                style="Dark.TRadiobutton",
+                command=lambda: [
+                    self.settings.update({"roblox_launcher": launcher_var.get()}),
+                    self.save_settings()
+                ]
+            ).pack(anchor="w", padx=20)
+        
+        ttk.Label(roblox_frame, text="", style="Dark.TLabel").pack(pady=10)
+        
+        def force_quit_roblox():
+            try:
+                result = subprocess.run(
+                    ['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                if result.returncode == 0:
+                    messagebox.showinfo("Force Quit", "All Roblox instances have been closed.")
+                else:
+                    messagebox.showinfo("Force Quit", "No Roblox instances found.")
+            except Exception as exc:
+                messagebox.showerror("Force Quit", f"Failed to close Roblox: {exc}")
+        
+        ttk.Button(
+            roblox_frame,
+            text="Force Quit All Roblox",
+            style="Dark.TButton",
+            command=force_quit_roblox
+        ).pack(fill="x", pady=(0, 10))
+        
+        radio_style = ttk.Style()
+        radio_style.configure(
+            "Dark.TRadiobutton",
+            background=self.BG_DARK,
+            foreground=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 9)
+        )
     
     def write(self, text):
         """Redirect stdout/stderr writes to console"""
