@@ -271,8 +271,12 @@ class AccountManagerUI:
                 latest_release = response.json()
                 latest_version = latest_release.get("tag_name", "").lstrip("v")
                 
-                current_parts = tuple(map(int, self.APP_VERSION.split(".")))
-                latest_parts = tuple(map(int, latest_version.split(".")))
+                import re
+                current_clean = re.sub(r'(alpha|beta).*$', '', self.APP_VERSION, flags=re.IGNORECASE)
+                latest_clean = re.sub(r'(alpha|beta).*$', '', latest_version, flags=re.IGNORECASE)
+                
+                current_parts = tuple(map(int, current_clean.split(".")))
+                latest_parts = tuple(map(int, latest_clean.split(".")))
                 
                 if latest_parts > current_parts:
                     print(f"[Update Checker] New version available: {latest_version}")
@@ -1656,9 +1660,16 @@ class AccountManagerUI:
         )
         close_button.pack(fill="x", pady=(5, 5))
         
+        # Check if this is an unstable version
+        import re
+        is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
+        version_text = f"Version: {self.APP_VERSION}"
+        if is_unstable:
+            version_text += "\nThis is an unstable version"
+        
         version_label = ttk.Label(
             main_frame,
-            text=f"Version: {self.APP_VERSION}",
+            text=version_text,
             style="Dark.TLabel",
             font=("Segoe UI", 9)
         )
