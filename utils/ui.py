@@ -222,7 +222,15 @@ class AccountManagerUI:
         self.refresh_game_list()
         self.update_game_name()
         
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         threading.Thread(target=self.check_for_updates, daemon=True).start()
+    
+    def on_closing(self):
+        """Handle application closing - restore installers and exit"""
+        from classes.roblox_api import RobloxAPI
+        RobloxAPI.restore_installers()
+        self.root.destroy()
 
     def load_settings(self):
         """Load UI settings from file"""

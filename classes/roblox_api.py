@@ -8,6 +8,7 @@ import time
 import random
 import requests
 import subprocess
+import shutil
 from pathlib import Path
 from tkinter import messagebox
 
@@ -32,6 +33,81 @@ class RobloxAPI:
             return str(fishstrap_path), 'Fishstrap'
         
         return None, None
+    
+    @staticmethod
+    def quarantine_installers():
+        """Move RobloxPlayerInstaller.exe files to quarantine to prevent installer popups"""
+        local_appdata = os.getenv('LOCALAPPDATA')
+        if not local_appdata:
+            return
+        
+        versions_path = Path(local_appdata) / 'Roblox' / 'Versions'
+        quarantine_path = Path(local_appdata) / 'RobloxAccountManager' / 'Quarantine'
+        
+        if not versions_path.exists():
+            return
+        
+        quarantine_path.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            for folder in versions_path.iterdir():
+                if folder.is_dir() and folder.name.startswith('version-'):
+                    installer = folder / 'RobloxPlayerInstaller.exe'
+                    if installer.exists():
+                        try:
+                            version_id = folder.name.split('-')[1]
+                            version_quarantine = quarantine_path / version_id
+                            version_quarantine.mkdir(exist_ok=True)
+                            
+                            dest = version_quarantine / 'RobloxPlayerInstaller.exe'
+                            if not dest.exists():
+                                shutil.move(str(installer), str(dest))
+                                print(f"[Quarantine] Moved installer from {folder.name}")
+                        except Exception as e:
+                            print(f"[Quarantine] Failed to move installer from {folder.name}: {e}")
+        except Exception as e:
+            print(f"[Quarantine] Error accessing versions folder: {e}")
+    
+    @staticmethod
+    def restore_installers():
+        """Restore RobloxPlayerInstaller.exe files from quarantine"""
+        local_appdata = os.getenv('LOCALAPPDATA')
+        if not local_appdata:
+            return
+        
+        versions_path = Path(local_appdata) / 'Roblox' / 'Versions'
+        quarantine_path = Path(local_appdata) / 'RobloxAccountManager' / 'Quarantine'
+        
+        if not quarantine_path.exists():
+            return
+        
+        try:
+            for version_folder in quarantine_path.iterdir():
+                if not version_folder.is_dir():
+                    continue
+                
+                installer_q = version_folder / 'RobloxPlayerInstaller.exe'
+                if not installer_q.exists():
+                    continue
+                
+                roblox_folder = versions_path / f'version-{version_folder.name}'
+                if not roblox_folder.exists():
+                    continue
+                
+                installer_restore = roblox_folder / 'RobloxPlayerInstaller.exe'
+                try:
+                    shutil.move(str(installer_q), str(installer_restore))
+                    print(f"[Restore] Restored installer to {roblox_folder.name}")
+                except Exception as e:
+                    print(f"[Restore] Failed to restore installer to {roblox_folder.name}: {e}")
+            
+            try:
+                shutil.rmtree(str(quarantine_path), ignore_errors=True)
+                print("[Restore] Cleaned up quarantine folder")
+            except:
+                pass
+        except Exception as e:
+            print(f"[Restore] Error restoring installers: {e}")
     
     @staticmethod
     def extract_private_server_code(private_server_input):
@@ -242,6 +318,8 @@ class RobloxAPI:
                 return True
             
             elif launcher_preference == "client":
+                RobloxAPI.quarantine_installers()
+                
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
                     messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
