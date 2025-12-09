@@ -1,7 +1,9 @@
 [![Version](https://img.shields.io/github/v/release/evanovar/RobloxAccountManager)](https://github.com/evanovar/RobloxAccountManager/releases/latest)
 ![License](https://img.shields.io/github/license/evanovar/RobloxAccountManager)
-[![Discord](https://img.shields.io/discord/1436930121897476140?label=Discord)](https://discord.gg/TYnJXyEhgY)<br>
+[![Discord](https://img.shields.io/discord/1436930121897476140?label=Discord)](https://discord.gg/TYnJXyEhgY)
+![DownloadCount](https://img.shields.io/github/downloads/evanovar/RobloxAccountManager/total)<br>
 [![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
+
 
 # 🚀 Roblox Account Manager
 
