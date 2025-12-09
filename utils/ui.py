@@ -1478,13 +1478,25 @@ class AccountManagerUI:
 
     def open_settings(self):
         """Open the Settings window"""
+        if hasattr(self, 'settings_window') and self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus()
+            return
+        
         settings_window = tk.Toplevel(self.root)
+        self.settings_window = settings_window
         settings_window.title("Settings")
         settings_window.geometry("300x300")
         settings_window.configure(bg=self.BG_DARK)
         settings_window.resizable(False, False)
         
         settings_window.transient(self.root)
+        
+        def on_close():
+            self.settings_window = None
+            settings_window.destroy()
+        
+        settings_window.protocol("WM_DELETE_WINDOW", on_close)
         
         if self.settings.get("enable_topmost", False):
             settings_window.attributes("-topmost", True)

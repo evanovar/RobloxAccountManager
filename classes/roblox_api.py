@@ -177,6 +177,88 @@ class RobloxAPI:
         return None
     
     @staticmethod
+    def get_csrf_token(cookie):
+        """Get CSRF token for authenticated requests"""
+        url = "https://auth.roblox.com/v2/logout"
+        headers = {
+            'Cookie': f'.ROBLOSECURITY={cookie}'
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, timeout=5)
+            return response.headers.get('x-csrf-token')
+        except:
+            return None
+    
+    @staticmethod
+    def get_user_id_from_username(username):
+        """Get user ID from username"""
+        url = "https://users.roblox.com/v1/usernames/users"
+        payload = {
+            "usernames": [username],
+            "excludeBannedUsers": False
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('data') and len(data['data']) > 0:
+                    return data['data'][0]['id']
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def get_player_presence(user_id, cookie):
+        """Get player's current presence (online status and game info)"""
+        url = "https://presence.roblox.com/v1/presence/users"
+        
+        csrf_token = RobloxAPI.get_csrf_token(cookie)
+        if not csrf_token:
+            print("[ERROR] Failed to get CSRF token")
+            return None
+        
+        headers = {
+            'Cookie': f'.ROBLOSECURITY={cookie}',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrf_token
+        }
+        
+        payload = {
+            "userIds": [user_id]
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('userPresences') and len(data['userPresences']) > 0:
+                    presence = data['userPresences'][0]
+                    
+                    result = {
+                        'user_id': presence.get('userId'),
+                        'in_game': presence.get('userPresenceType') == 2,
+                        'status': presence.get('userPresenceType', 0),
+                        'last_location': presence.get('lastLocation', 'Unknown')
+                    }
+                    
+                    if presence.get('userPresenceType') == 2:
+                        result['place_id'] = presence.get('placeId')
+                        result['root_place_id'] = presence.get('rootPlaceId')
+                        result['universe_id'] = presence.get('universeId')
+                        result['game_id'] = presence.get('gameId')
+                    
+                    return result
+            else:
+                print(f"[ERROR] Presence API returned status {response.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get player presence: {e}")
+        
+        return None
+    
+    @staticmethod
     def get_auth_ticket(roblosecurity_cookie):
         """Get authentication ticket for launching Roblox games"""
         url = "https://auth.roblox.com/v1/authentication-ticket/"
@@ -356,8 +438,7 @@ class RobloxAPI:
                 return True
             
             else:  # default
-                import webbrowser
-                webbrowser.open(url)
+                os.startfile(url)
                 print("[SUCCESS] Roblox launched successfully!")
                 return True
                 
