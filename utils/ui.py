@@ -162,7 +162,13 @@ class AccountManagerUI:
         self.private_server_entry.insert(0, self.settings.get("last_private_server", ""))
         self.private_server_entry.bind("<KeyRelease>", self.on_private_server_change)
 
-        ttk.Button(right_frame, text="Join Place ID", style="Dark.TButton", command=self.launch_game).pack(fill="x", pady=(0, 10))
+        self.join_place_split_btn = ttk.Button(
+            right_frame,
+            text="  Join Place ID       ▼",
+            style="Dark.TButton"
+        )
+        self.join_place_split_btn.pack(fill="x", pady=(0, 10))
+        self.join_place_split_btn.bind("<Button-1>", self.on_join_place_split_click)
         
         ttk.Label(right_frame, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 2))
         
@@ -210,6 +216,9 @@ class AccountManagerUI:
         
         self.add_account_dropdown = None
         self.add_account_dropdown_visible = False
+        
+        self.join_place_dropdown = None
+        self.join_place_dropdown_visible = False
         
         ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(bottom_frame, text="Launch Roblox Home", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
@@ -403,6 +412,8 @@ class AccountManagerUI:
         """Called when the main window moves/resizes; keep dropdown attached."""
         if self.add_account_dropdown_visible and self.add_account_dropdown is not None:
             self.position_add_account_dropdown()
+        if self.join_place_dropdown_visible and self.join_place_dropdown is not None:
+            self.position_join_place_dropdown()
     
     def hide_add_account_dropdown(self):
         """Hide the Add Account dropdown menu"""
@@ -429,7 +440,92 @@ class AccountManagerUI:
                         self.hide_add_account_dropdown()
                 except:
                     self.hide_add_account_dropdown()
+        
+        if self.join_place_dropdown_visible and self.join_place_dropdown is not None:
+            if not self.is_child_of(widget, self.join_place_split_btn):
+                try:
+                    if not self.is_child_of(widget, self.join_place_dropdown):
+                        self.hide_join_place_dropdown()
+                except:
+                    self.hide_join_place_dropdown()
 
+    def toggle_join_place_dropdown(self):
+        """Toggle the Join Place dropdown menu"""
+        self.join_place_dropdown_visible = not self.join_place_dropdown_visible
+        if self.join_place_dropdown_visible:
+            self.show_join_place_dropdown()
+        else:
+            self.hide_join_place_dropdown()
+    
+    def on_join_place_split_click(self, event):
+        """Handle clicks on the unified split button: left area joins game, right area opens dropdown."""
+        try:
+            width = event.widget.winfo_width()
+        except Exception:
+            width = 0
+        arrow_zone = 24
+        if event.x >= max(0, width - arrow_zone):
+            self.toggle_join_place_dropdown()
+        else:
+            self.launch_game()
+        return "break"
+    
+    def show_join_place_dropdown(self):
+        """Show the Join Place dropdown menu"""
+        if self.join_place_dropdown is not None:
+            self.join_place_dropdown.destroy()
+        
+        self.join_place_dropdown = tk.Toplevel(self.root)
+        self.join_place_dropdown.overrideredirect(True)
+        self.join_place_dropdown.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
+        
+        self.position_join_place_dropdown()
+        
+        join_user_btn = tk.Button(
+            self.join_place_dropdown,
+            text="Join User",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=lambda: [self.hide_join_place_dropdown(), self.join_user()]
+        )
+        join_user_btn.pack(fill="x", padx=2, pady=1)
+        
+        self.position_join_place_dropdown()
+        
+        if self.settings.get("enable_topmost", False):
+            self.join_place_dropdown.attributes("-topmost", True)
+        
+        self.join_place_dropdown.bind("<FocusOut>", lambda e: self.hide_join_place_dropdown())
+
+    def position_join_place_dropdown(self):
+        """Position the dropdown right under the split button and match its width."""
+        try:
+            if self.join_place_dropdown is None or not self.join_place_dropdown_visible:
+                return
+            self.root.update_idletasks()
+            x = self.join_place_split_btn.winfo_rootx()
+            y = self.join_place_split_btn.winfo_rooty() + self.join_place_split_btn.winfo_height()
+            width = self.join_place_split_btn.winfo_width()
+            req_h = self.join_place_dropdown.winfo_reqheight()
+            self.join_place_dropdown.geometry(f"{width}x{req_h}+{x}+{y}")
+            if self.settings.get("enable_topmost", False):
+                self.join_place_dropdown.attributes("-topmost", True)
+        except Exception:
+            pass
+    
+    def hide_join_place_dropdown(self):
+        """Hide the Join Place dropdown menu"""
+        if self.join_place_dropdown is not None:
+            self.join_place_dropdown.destroy()
+            self.join_place_dropdown = None
+        self.join_place_dropdown_visible = False
 
     def save_settings(self):
         """Save UI settings to file with debouncing"""
@@ -1357,6 +1453,173 @@ class AccountManagerUI:
             self.root.after(0, on_done)
 
         threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
+
+    def join_user(self):
+        """Join a user's current game"""
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+        
+        join_window = tk.Toplevel(self.root)
+        join_window.title("Join User")
+        join_window.geometry("450x220")
+        join_window.configure(bg=self.BG_DARK)
+        join_window.resizable(False, False)
+        
+        self.root.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        
+        x = main_x + (main_width - 450) // 2
+        y = main_y + (main_height - 220) // 2
+        join_window.geometry(f"450x220+{x}+{y}")
+        
+        if self.settings.get("enable_topmost", False):
+            join_window.attributes("-topmost", True)
+        
+        join_window.transient(self.root)
+        join_window.grab_set()
+        
+        main_frame = ttk.Frame(join_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ttk.Label(
+            main_frame,
+            text="Join User's Game",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(
+            main_frame,
+            text="⚠️ User must have their joins enabled!",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9, "italic"),
+            foreground="#FFA500"
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(main_frame, text="Username to join:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        
+        username_entry = ttk.Entry(main_frame, style="Dark.TEntry")
+        username_entry.pack(fill="x", pady=(0, 15))
+        username_entry.focus_set()
+        
+        def do_join():
+            target_username = username_entry.get().strip()
+            
+            if not target_username:
+                messagebox.showwarning("Missing Information", "Please enter a username.")
+                return
+            
+            join_window.destroy()
+            
+            def worker(selected_usernames, target_user):
+                from classes.roblox_api import RobloxAPI
+                
+                user_id = RobloxAPI.get_user_id_from_username(target_user)
+                if not user_id:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        f"User '{target_user}' not found."
+                    ))
+                    return
+                
+                account_cookie = self.manager.accounts.get(selected_usernames[0])
+                if isinstance(account_cookie, dict):
+                    account_cookie = account_cookie.get('cookie')
+                
+                if not account_cookie:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        "Failed to get account cookie."
+                    ))
+                    return
+                
+                presence = RobloxAPI.get_player_presence(user_id, account_cookie)
+                
+                if not presence:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        f"Failed to get presence for '{target_user}'. Please try again."
+                    ))
+                    return
+                
+                if not presence.get('in_game'):
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Not In Game",
+                        f"'{target_user}' is not currently in a game.\n\nStatus: {presence.get('last_location', 'Unknown')}"
+                    ))
+                    return
+                
+                place_id = str(presence.get('place_id', ''))
+                game_id = str(presence.get('game_id', ''))
+                
+                if not place_id:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        f"Could not get game info for '{target_user}'."
+                    ))
+                    return
+                
+                launcher_pref = self.settings.get("roblox_launcher", "default")
+                success_count = 0
+                
+                for uname in selected_usernames:
+                    try:
+                        if self.manager.launch_roblox(uname, place_id, "", launcher_pref, game_id):
+                            success_count += 1
+                    except Exception as e:
+                        print(f"Failed to launch game for {uname}: {e}")
+                
+                def on_done():
+                    if success_count > 0:
+                        game_name = RobloxAPI.get_game_name(place_id)
+                        if game_name:
+                            self.add_game_to_list(place_id, game_name, "")
+                        else:
+                            self.add_game_to_list(place_id, f"Place {place_id}", "")
+                        
+                        if len(selected_usernames) == 1:
+                            messagebox.showinfo(
+                                "Success",
+                                f"Joining '{target_user}' in their game! Check your desktop."
+                            )
+                        else:
+                            messagebox.showinfo(
+                                "Success",
+                                f"Joining '{target_user}' with {success_count} account(s)! Check your desktop."
+                            )
+                    else:
+                        messagebox.showerror("Error", "Failed to launch Roblox.")
+                
+                self.root.after(0, on_done)
+            
+            threading.Thread(target=worker, args=(usernames, target_username), daemon=True).start()
+        
+        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x")
+        
+        ttk.Button(
+            button_frame,
+            text="Join",
+            style="Dark.TButton",
+            command=do_join
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            style="Dark.TButton",
+            command=join_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def enable_multi_roblox(self):
         """Enable Multi Roblox + 773 fix"""

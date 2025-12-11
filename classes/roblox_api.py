@@ -296,15 +296,11 @@ class RobloxAPI:
             return None
     
     @staticmethod
-    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default"):
-        """Launch Roblox game with specified account
-        
-        Args:
-            launcher_preference: "default", "bloxstrap", "fishstrap", or "client"
-        """
+    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id=""):
+        """Launch Roblox game with specified account"""
+
         print(f"Getting authentication ticket for {username}...")
         auth_ticket = RobloxAPI.get_auth_ticket(cookie)
-        
         if not auth_ticket:
             print("[ERROR] Failed to get authentication ticket")
             return False
@@ -344,6 +340,8 @@ class RobloxAPI:
 
         if private_server_code:
             url += "&linkCode=" + private_server_code
+        elif job_id:
+            url += "&gameInstanceId=" + str(job_id)
 
         url += (
             "+browsertrackerid:" + str(browser_tracker_id) +
@@ -355,6 +353,8 @@ class RobloxAPI:
         print(f"Game ID: {game_id}")
         if private_server_code:
             print(f"Private Server: {private_server_code}")
+        elif job_id:
+            print(f"Job ID: {job_id}")
         print(f"Launcher: {launcher_preference}")
         
         return RobloxAPI._execute_launch(url, launcher_preference)
@@ -463,9 +463,6 @@ class RobloxAPI:
             
             is_valid = response.status_code == 200
             
-            print(f"\n{'='*60}")
-            print(f"ACCOUNT VALIDATION: {username}")
-            print(f"{'='*60}")
             print(f"Valid: {'Yes' if is_valid else 'No'}")
             
             if cookie:
@@ -495,13 +492,10 @@ class RobloxAPI:
                 else:
                     print("Reason: Unknown error")
             
-            print(f"{'='*60}")
             return is_valid
             
         except Exception as e:
-            print(f"\n{'='*60}")
-            print(f"ACCOUNT VALIDATION: {username}")
-            print(f"{'='*60}")
+            print(f"Account: {username}")
             print(f"Valid: No")
             if cookie:
                 if len(cookie) > 60:
