@@ -227,6 +227,7 @@ class AccountManagerUI:
         
         self.root.bind("<Button-1>", self.hide_dropdown_on_click_outside)
         self.root.bind("<Configure>", self.on_root_configure)
+        self.root.bind("<Delete>", lambda e: self.remove_account())
 
         self.refresh_accounts()
         self.refresh_game_list()
