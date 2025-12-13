@@ -164,11 +164,12 @@ class AccountManagerUI:
 
         self.join_place_split_btn = ttk.Button(
             right_frame,
-            text="  Join Place ID       ▼",
+            text="Join Place ID",
             style="Dark.TButton"
         )
         self.join_place_split_btn.pack(fill="x", pady=(0, 10))
         self.join_place_split_btn.bind("<Button-1>", self.on_join_place_split_click)
+        self.join_place_split_btn.bind("<Button-3>", self.on_join_place_right_click)
         
         ttk.Label(right_frame, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 2))
         
@@ -458,16 +459,13 @@ class AccountManagerUI:
             self.hide_join_place_dropdown()
     
     def on_join_place_split_click(self, event):
-        """Handle clicks on the unified split button: left area joins game, right area opens dropdown."""
-        try:
-            width = event.widget.winfo_width()
-        except Exception:
-            width = 0
-        arrow_zone = 24
-        if event.x >= max(0, width - arrow_zone):
-            self.toggle_join_place_dropdown()
-        else:
-            self.launch_game()
+        """Handle clicks on the button: left click launches game, right click shows dropdown."""
+        self.launch_game()
+        return "break"
+    
+    def on_join_place_right_click(self, event):
+        """Handle right click on the button: show dropdown menu."""
+        self.toggle_join_place_dropdown()
         return "break"
     
     def show_join_place_dropdown(self):

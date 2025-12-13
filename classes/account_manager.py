@@ -436,7 +436,6 @@ class RobloxAccountManager:
                     if javascript:
                         print(f"Executing Javascript for instance {i + 1}...")
                         try:
-                            # Wait for page to be ready
                             driver.execute_script("return document.readyState") 
                             driver.execute_script(javascript)
                             print(f"[SUCCESS] Javascript executed for instance {i + 1}")
