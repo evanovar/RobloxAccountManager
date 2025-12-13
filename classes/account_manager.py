@@ -161,6 +161,10 @@ class RobloxAccountManager:
             sys.stderr = open(os.devnull, 'w')
             
             driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            driver.set_page_load_timeout(120)
+            driver.implicitly_wait(10)
+            
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             sys.stderr.close()
@@ -172,6 +176,8 @@ class RobloxAccountManager:
                 sys.stderr = original_stderr
             print(f"Error setting up Chrome driver: {e}")
             print("Please make sure Google Chrome is installed on your system")
+            import traceback
+            traceback.print_exc()
             return None
     
     def wait_for_login(self, driver, timeout=300):
@@ -413,11 +419,25 @@ class RobloxAccountManager:
                 
                 try:
                     print(f"Opening {website} (instance {i + 1}/{amount})...")
-                    driver.get(website)
+                    
+                    max_retries = 3
+                    for retry in range(max_retries):
+                        try:
+                            driver.get(website)
+                            time.sleep(1)
+                            break
+                        except Exception as nav_error:
+                            if retry < max_retries - 1:
+                                print(f"[WARNING] Navigation attempt {retry + 1} failed, retrying...")
+                                time.sleep(2)
+                            else:
+                                raise nav_error
                     
                     if javascript:
                         print(f"Executing Javascript for instance {i + 1}...")
                         try:
+                            # Wait for page to be ready
+                            driver.execute_script("return document.readyState") 
                             driver.execute_script(javascript)
                             print(f"[SUCCESS] Javascript executed for instance {i + 1}")
                         except Exception as js_error:
@@ -425,6 +445,8 @@ class RobloxAccountManager:
                     
                 except Exception as e:
                     print(f"[ERROR] Error opening browser for instance {i + 1}: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             print(f"All {len(drivers)} browser(s) opened. Waiting for logins...")
             
@@ -584,10 +606,24 @@ class RobloxAccountManager:
             service = Service(ChromeDriverManager().install(), log_path=os.devnull)
             driver = webdriver.Chrome(service=service, options=chrome_options)
             
+            driver.set_page_load_timeout(120)
+            driver.implicitly_wait(10)
+            
             sys.stderr.close()
             sys.stderr = original_stderr
             
-            driver.get("https://www.roblox.com/")
+            max_retries = 3
+            for retry in range(max_retries):
+                try:
+                    driver.get("https://www.roblox.com/")
+                    time.sleep(1)
+                    break
+                except Exception as nav_error:
+                    if retry < max_retries - 1:
+                        print(f"[WARNING] Navigation attempt {retry + 1} failed, retrying...")
+                        time.sleep(2)
+                    else:
+                        raise nav_error
             
             driver.add_cookie({
                 'name': '.ROBLOSECURITY',
