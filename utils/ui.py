@@ -32,6 +32,9 @@ class AccountManagerUI:
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
         
+        self.tooltip = None
+        self.tooltip_timer = None
+        
         sys.stdout = self
         sys.stderr = self
         
@@ -170,6 +173,8 @@ class AccountManagerUI:
         self.join_place_split_btn.pack(fill="x", pady=(0, 10))
         self.join_place_split_btn.bind("<Button-1>", self.on_join_place_split_click)
         self.join_place_split_btn.bind("<Button-3>", self.on_join_place_right_click)
+        self.join_place_split_btn.bind("<Enter>", self.on_join_place_hover)
+        self.join_place_split_btn.bind("<Leave>", self.on_join_place_leave)
         
         ttk.Label(right_frame, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 2))
         
@@ -468,6 +473,54 @@ class AccountManagerUI:
         """Handle right click on the button: show dropdown menu."""
         self.toggle_join_place_dropdown()
         return "break"
+    
+    def on_join_place_hover(self, event):
+        """Show tooltip when hovering over Join Place ID button"""
+        if self.tooltip_timer:
+            self.root.after_cancel(self.tooltip_timer)
+        
+        def show_tooltip():
+            if self.tooltip:
+                return
+            
+            x = event.widget.winfo_rootx() + event.widget.winfo_width() // 2
+            y = event.widget.winfo_rooty() + event.widget.winfo_height() + 5
+            
+            self.tooltip = tk.Toplevel(self.root)
+            self.tooltip.wm_overrideredirect(True)
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+            
+            label = tk.Label(
+                self.tooltip,
+                text="Right click to join user",
+                bg="#333333",
+                fg="white",
+                font=("Segoe UI", 9),
+                padx=8,
+                pady=4,
+                relief="solid",
+                borderwidth=1
+            )
+            label.pack()
+            
+            self.tooltip.update_idletasks()
+            tooltip_width = self.tooltip.winfo_width()
+            self.tooltip.wm_geometry(f"+{x - tooltip_width // 2}+{y}")
+            
+            if self.settings.get("enable_topmost", False):
+                self.tooltip.attributes("-topmost", True)
+        
+        self.tooltip_timer = self.root.after(800, show_tooltip)
+    
+    def on_join_place_leave(self, event):
+        """Hide tooltip when leaving Join Place ID button"""
+        if self.tooltip_timer:
+            self.root.after_cancel(self.tooltip_timer)
+            self.tooltip_timer = None
+        
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
     
     def show_join_place_dropdown(self):
         """Show the Join Place dropdown menu"""
