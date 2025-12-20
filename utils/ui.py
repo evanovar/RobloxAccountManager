@@ -1789,6 +1789,9 @@ class AccountManagerUI:
         roblox_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(roblox_tab, text="Roblox")
         
+        about_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(about_tab, text="About")
+        
         style = ttk.Style()
         style.theme_use('clam')
         style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
@@ -2268,6 +2271,80 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=reset_theme
         ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+        
+        # About Tab
+        about_frame = ttk.Frame(about_tab, style="Dark.TFrame")
+        about_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        # App title
+        ttk.Label(
+            about_frame,
+            text="Roblox Account Manager",
+            style="Dark.TLabel",
+            font=("Segoe UI", 14, "bold")
+        ).pack(anchor="center", pady=(10, 5))
+        
+        # Version info
+        import re
+        is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
+        version_text = f"Version {self.APP_VERSION}"
+        
+        ttk.Label(
+            about_frame,
+            text=version_text,
+            style="Dark.TLabel",
+            font=("Segoe UI", 10)
+        ).pack(anchor="center", pady=(0, 5))
+        
+        if is_unstable:
+            ttk.Label(
+                about_frame,
+                text="⚠️ This is an unstable version",
+                style="Dark.TLabel",
+                font=("Segoe UI", 9, "italic"),
+                foreground="#FFA500"
+            ).pack(anchor="center", pady=(0, 10))
+        else:
+            ttk.Label(about_frame, text="", style="Dark.TLabel").pack(pady=(0, 10))
+        
+        ttk.Label(
+            about_frame,
+            text="Made by evanovar",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(anchor="center", pady=(5, 15))
+        
+        def copy_discord():
+            discord_server = "https://discord.gg/SZaZU8zwZA"
+            self.root.clipboard_clear()
+            self.root.clipboard_append(discord_server)
+            self.root.update()
+            messagebox.showinfo("Copied!", f"Discord server '{discord_server}' copied to clipboard!")
+        
+        ttk.Button(
+            about_frame,
+            text="Copy Discord Server",
+            style="Dark.TButton",
+            command=copy_discord
+        ).pack(fill="x", pady=(0, 10))
+        
+        def open_github():
+            import webbrowser
+            webbrowser.open("https://github.com/evanovar/RobloxAccountManager")
+        
+        ttk.Button(
+            about_frame,
+            text="Open GitHub Repository",
+            style="Dark.TButton",
+            command=open_github
+        ).pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(
+            about_frame,
+            text="© 2024-2025 evanovar",
+            style="Dark.TLabel",
+            font=("Segoe UI", 8)
+        ).pack(anchor="center", side="bottom", pady=(20, 0))
     
     def write(self, text):
         """Redirect stdout/stderr writes to console"""
