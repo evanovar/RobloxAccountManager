@@ -11,8 +11,9 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 Created by evanovar · Contact: [Discord Server](https://discord.gg/TYnJXyEhgY) <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
-<img width="446" height="528" alt="image" src="https://github.com/user-attachments/assets/e01fabc2-473a-4da8-9853-1729ebbf5561" />
-<img width="298" height="347" alt="image" src="https://github.com/user-attachments/assets/686747b4-1caf-47db-a1f6-8f06469c65d2" />
+<img width="447" height="549" alt="image" src="https://github.com/user-attachments/assets/77587173-1540-4231-a0ac-38f8eaf69cf0" />
+<img width="300" height="383" alt="image" src="https://github.com/user-attachments/assets/19fd1bd9-97ed-49e7-bc99-70eb9ad27de1" />
+
 
 
 ## ✨ Features
@@ -188,9 +189,6 @@ A: Enable "Multi Select" in Settings, then use Ctrl+Click to select multiple acc
 
 **Q: Why is my token invalid?**  
 A: Roblox cookies can expire after long periods of inactivity or if you change your account password. Use the "Validate Account" feature to check if an account is still valid.
-
-**Q: How does the JavaScript automation work?**  
-A: It opens multiple Chrome instances, navigates to your specified website, and executes your custom JavaScript code. Useful for bulk account creation.
 
 **Q: If I update the .exe, will it cause data loss?**  
 A: No. Updating the `.exe` will not delete your data. All data is stored inside the `AccountManagerData` folder. Just make sure the new `.exe` is placed in the same location as that folder.
