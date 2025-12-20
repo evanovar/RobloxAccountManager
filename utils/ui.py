@@ -2391,13 +2391,6 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=open_github
         ).pack(fill="x", pady=(0, 10))
-        
-        ttk.Label(
-            about_frame,
-            text="© 2024-2025 evanovar",
-            style="Dark.TLabel",
-            font=("Segoe UI", 8)
-        ).pack(anchor="center", side="bottom", pady=(20, 0))
     
     def write(self, text):
         """Redirect stdout/stderr writes to console"""
