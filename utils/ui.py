@@ -185,7 +185,7 @@ class AccountManagerUI:
         
         ttk.Label(recent_games_header, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(side="left")
         
-        star_btn = tk.Button(
+        self.star_btn = tk.Button(
             recent_games_header,
             text="⭐",
             bg=self.BG_DARK,
@@ -196,7 +196,7 @@ class AccountManagerUI:
             cursor="hand2",
             command=self.open_favorites_window
         )
-        star_btn.pack(side="left", padx=(5, 0))
+        self.star_btn.pack(side="left", padx=(5, 0))
         
         game_list_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         game_list_frame.pack(fill="both", expand=True)
@@ -291,7 +291,8 @@ class AccountManagerUI:
                     "enable_multi_select": False,
                     "anti_afk_enabled": False,
                     "anti_afk_interval_minutes": 10,
-                    "anti_afk_key": "w"
+                    "anti_afk_key": "w",
+                    "disable_launch_popup": False
                 }
         except:
             self.settings = {
@@ -306,7 +307,8 @@ class AccountManagerUI:
                 "enable_multi_select": False,
                 "anti_afk_enabled": False,
                 "anti_afk_interval_minutes": 10,
-                "anti_afk_key": "w"
+                "anti_afk_key": "w",
+                "disable_launch_popup": False
             }
         
         if self.settings.get("enable_topmost", False):
@@ -1465,10 +1467,11 @@ class AccountManagerUI:
             
             def on_done():
                 if success_count > 0:
-                    if len(selected_usernames) == 1:
-                        messagebox.showinfo("Success", "Roblox is launching to home! Check your desktop.")
-                    else:
-                        messagebox.showinfo("Success", f"Roblox is launching to home for {success_count} account(s)! Check your desktop.")
+                    if not self.settings.get("disable_launch_popup", False):
+                        if len(selected_usernames) == 1:
+                            messagebox.showinfo("Success", "Roblox is launching to home! Check your desktop.")
+                        else:
+                            messagebox.showinfo("Success", f"Roblox is launching to home for {success_count} account(s)! Check your desktop.")
                 else:
                     messagebox.showerror("Error", "Failed to launch Roblox.")
             
@@ -1527,10 +1530,11 @@ class AccountManagerUI:
                         self.add_game_to_list(pid, gname, psid)
                     else:
                         self.add_game_to_list(pid, f"Place {pid}", psid)
-                    if len(selected_usernames) == 1:
-                        messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
-                    else:
-                        messagebox.showinfo("Success", f"Roblox is launching for {success_count} account(s)! Check your desktop.")
+                    if not self.settings.get("disable_launch_popup", False):
+                        if len(selected_usernames) == 1:
+                            messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
+                        else:
+                            messagebox.showinfo("Success", f"Roblox is launching for {success_count} account(s)! Check your desktop.")
                 else:
                     messagebox.showerror("Error", "Failed to launch Roblox.")
 
@@ -1833,7 +1837,6 @@ class AccountManagerUI:
         settings_window = tk.Toplevel(self.root)
         self.settings_window = settings_window
         settings_window.title("Settings")
-        settings_window.geometry("300x300")
         settings_window.configure(bg=self.BG_DARK)
         settings_window.resizable(False, False)
         
@@ -1855,7 +1858,7 @@ class AccountManagerUI:
         main_height = self.root.winfo_height()
         
         settings_width = 300
-        settings_height = 355
+        settings_height = 385
         
         x = main_x + (main_width - settings_width) // 2
         y = main_y + (main_height - settings_height) // 2
@@ -1967,6 +1970,16 @@ class AccountManagerUI:
             command=on_multi_select_toggle
         )
         multi_select_check.pack(anchor="w", pady=2)
+        
+        disable_launch_popup_var = tk.BooleanVar(value=self.settings.get("disable_launch_popup", False))
+        disable_launch_popup_check = ttk.Checkbutton(
+            main_frame,
+            text="Disable Launch Success Popup",
+            variable=disable_launch_popup_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
+        )
+        disable_launch_popup_check.pack(anchor="w", pady=2)
         
         ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=5)
         
@@ -2375,6 +2388,10 @@ class AccountManagerUI:
             self.FONT_SIZE = self.settings.get("theme_font_size", 10)
             
             self.root.configure(bg=self.BG_DARK)
+            if hasattr(self, 'settings_window') and self.settings_window:
+                self.settings_window.configure(bg=self.BG_DARK)
+            if hasattr(self, 'star_btn') and self.star_btn:
+                self.star_btn.config(bg=self.BG_DARK)
             
             style = ttk.Style()
             style.configure("Dark.TFrame", background=self.BG_DARK)
@@ -2383,6 +2400,8 @@ class AccountManagerUI:
             style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
             style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
             style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+            style.configure("Dark.TRadiobutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+            style.map("Dark.TRadiobutton", background=[('active', self.BG_DARK)], foreground=[('active', self.FG_TEXT)])
             
             style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
             style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, 9), focuscolor='none')
