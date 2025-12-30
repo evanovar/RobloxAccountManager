@@ -17,7 +17,8 @@ import webbrowser
 import time
 from datetime import datetime
 
-
+# 3k lines woah
+# how can i organize this code better?
 class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
@@ -59,6 +60,9 @@ class AccountManagerUI:
         self.root.resizable(False, False)
         
         self.multi_roblox_handle = None
+        
+        self.anti_afk_thread = None
+        self.anti_afk_stop_event = threading.Event()
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -176,7 +180,23 @@ class AccountManagerUI:
         self.join_place_split_btn.bind("<Enter>", self.on_join_place_hover)
         self.join_place_split_btn.bind("<Leave>", self.on_join_place_leave)
         
-        ttk.Label(right_frame, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(10, 2))
+        recent_games_header = ttk.Frame(right_frame, style="Dark.TFrame")
+        recent_games_header.pack(fill="x", anchor="w", pady=(10, 2))
+        
+        ttk.Label(recent_games_header, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(side="left")
+        
+        star_btn = tk.Button(
+            recent_games_header,
+            text="⭐",
+            bg=self.BG_DARK,
+            fg="#FFD700",
+            font=("Segoe UI", 10),
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            command=self.open_favorites_window
+        )
+        star_btn.pack(side="left", padx=(5, 0))
         
         game_list_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         game_list_frame.pack(fill="both", expand=True)
@@ -245,6 +265,10 @@ class AccountManagerUI:
     def on_closing(self):
         """Handle application closing - restore installers and exit"""
         from classes.roblox_api import RobloxAPI
+        
+        if hasattr(self, 'anti_afk_stop_event'):
+            self.stop_anti_afk()
+        
         RobloxAPI.restore_installers()
         self.root.destroy()
 
@@ -259,22 +283,30 @@ class AccountManagerUI:
                     "last_place_id": "",
                     "last_private_server": "",
                     "game_list": [],
+                    "favorite_games": [],
                     "enable_topmost": False,
                     "enable_multi_roblox": False,
                     "confirm_before_launch": False,
                     "max_recent_games": 10,
-                    "enable_multi_select": False
+                    "enable_multi_select": False,
+                    "anti_afk_enabled": False,
+                    "anti_afk_interval_minutes": 10,
+                    "anti_afk_key": "w"
                 }
         except:
             self.settings = {
                 "last_place_id": "",
                 "last_private_server": "",
                 "game_list": [],
+                "favorite_games": [],
                 "enable_topmost": False,
                 "enable_multi_roblox": False,
                 "confirm_before_launch": False,
                 "max_recent_games": 10,
-                "enable_multi_select": False
+                "enable_multi_select": False,
+                "anti_afk_enabled": False,
+                "anti_afk_interval_minutes": 10,
+                "anti_afk_key": "w"
             }
         
         if self.settings.get("enable_topmost", False):
@@ -2108,6 +2140,112 @@ class AccountManagerUI:
         )
         force_close_btn.pack(fill="x", pady=(15, 0))
         
+        ttk.Label(
+            roblox_frame,
+            text="Anti-AFK Settings:",
+            style="Dark.TLabel",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", pady=(10, 10))
+        
+        anti_afk_var = tk.BooleanVar(value=self.settings.get("anti_afk_enabled", False))
+        
+        def on_anti_afk_toggle():
+            enabled = anti_afk_var.get()
+            self.settings["anti_afk_enabled"] = enabled
+            self.save_settings()
+            
+            if enabled:
+                self.start_anti_afk()
+            else:
+                self.stop_anti_afk()
+        
+        ttk.Checkbutton(
+            roblox_frame,
+            text="Enable Anti-AFK",
+            variable=anti_afk_var,
+            style="Dark.TCheckbutton",
+            command=on_anti_afk_toggle
+        ).pack(anchor="w", pady=2)
+        
+        settings_frame = ttk.Frame(roblox_frame, style="Dark.TFrame")
+        settings_frame.pack(fill="x", pady=(5, 0))
+        
+        action_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
+        action_frame.pack(fill="x", pady=2)
+        
+        ttk.Label(
+            action_frame,
+            text="Action:",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+        
+        action_options = ["w", "a", "s", "d", "space", "LMB", "RMB"]
+        action_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
+        
+        def on_action_change(*args):
+            self.settings["anti_afk_key"] = action_var.get()
+            self.save_settings()
+        
+        action_var.trace('w', on_action_change)
+        
+        action_dropdown = ttk.Combobox(
+            action_frame,
+            textvariable=action_var,
+            values=action_options,
+            state="readonly",
+            width=10,
+            font=(self.FONT_FAMILY, 9)
+        )
+        action_dropdown.pack(side="right")
+        
+        interval_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
+        interval_frame.pack(fill="x", pady=2)
+        
+        ttk.Label(
+            interval_frame,
+            text="Interval (minutes):",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+        
+        interval_var = tk.IntVar(value=self.settings.get("anti_afk_interval_minutes", 10))
+        
+        def on_interval_change():
+            try:
+                new_value = interval_var.get()
+                self.settings["anti_afk_interval_minutes"] = new_value
+                self.save_settings()
+            except:
+                pass
+        
+        interval_spinner = tk.Spinbox(
+            interval_frame,
+            from_=1,
+            to=60,
+            textvariable=interval_var,
+            width=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_LIGHT,
+            font=(self.FONT_FAMILY, 9),
+            command=on_interval_change,
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0
+        )
+        interval_spinner.pack(side="right")
+        
+        interval_spinner.bind("<KeyRelease>", lambda e: on_interval_change())
+        interval_spinner.bind("<FocusOut>", lambda e: on_interval_change())
+        
+        if self.settings.get("anti_afk_enabled", False):
+            self.root.after(1000, self.start_anti_afk)
+        
         themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
         themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
     
@@ -2325,11 +2463,9 @@ class AccountManagerUI:
             command=reset_theme
         ).pack(side="left", fill="x", expand=True, padx=(3, 0))
         
-        # About Tab
         about_frame = ttk.Frame(about_tab, style="Dark.TFrame")
         about_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
-        # App title
         ttk.Label(
             about_frame,
             text="Roblox Account Manager",
@@ -2337,7 +2473,6 @@ class AccountManagerUI:
             font=("Segoe UI", 14, "bold")
         ).pack(anchor="center", pady=(10, 5))
         
-        # Version info
         import re
         is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
         version_text = f"Version {self.APP_VERSION}"
@@ -2519,3 +2654,419 @@ class AccountManagerUI:
             self.console_window = None
         
         self.console_window.protocol("WM_DELETE_WINDOW", on_close)
+    
+    def open_favorites_window(self):
+        """Open the favorites management window"""
+        favorites_window = tk.Toplevel(self.root)
+        favorites_window.title("Favorite Games")
+        favorites_window.configure(bg=self.BG_DARK)
+        favorites_window.resizable(False, False)
+        
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + 50
+        y = self.root.winfo_y() + 50
+        favorites_window.geometry(f"400x350+{x}+{y}")
+        
+        if self.settings.get("enable_topmost", False):
+            favorites_window.attributes("-topmost", True)
+        
+        favorites_window.transient(self.root)
+        favorites_window.focus_force()
+        
+        main_frame = ttk.Frame(favorites_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        ttk.Label(
+            main_frame,
+            text="Favorite Games",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+        
+        list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        list_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        
+        favorites_list = tk.Listbox(
+            list_frame,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            selectbackground=self.FG_ACCENT,
+            highlightthickness=0,
+            border=0,
+            font=("Segoe UI", 9)
+        )
+        favorites_list.grid(row=0, column=0, sticky="nsew")
+        
+        v_scrollbar = ttk.Scrollbar(list_frame, command=favorites_list.yview, orient="vertical")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        favorites_list.config(yscrollcommand=v_scrollbar.set)
+        
+        h_scrollbar = ttk.Scrollbar(list_frame, command=favorites_list.xview, orient="horizontal")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        favorites_list.config(xscrollcommand=h_scrollbar.set)
+        
+        def refresh_favorites():
+            favorites_list.delete(0, tk.END)
+            for fav in self.settings.get("favorite_games", []):
+                private_server = fav.get("private_server", "")
+                note = fav.get("note", "")
+                prefix = "[P] " if private_server else ""
+                display = f"{prefix}{fav['name']}"
+                if note:
+                    display += f" • {note}"
+                favorites_list.insert(tk.END, display)
+        
+        refresh_favorites()
+        
+        def on_favorite_click(event):
+            """Load selected favorite into main UI when clicked"""
+            selection = favorites_list.curselection()
+            if not selection:
+                return
+            
+            index = selection[0]
+            fav = self.settings["favorite_games"][index]
+            
+            self.place_entry.delete(0, tk.END)
+            self.place_entry.insert(0, fav["place_id"])
+            self.settings["last_place_id"] = fav["place_id"]
+            
+            private_server = fav.get("private_server", "")
+            self.private_server_entry.delete(0, tk.END)
+            self.private_server_entry.insert(0, private_server)
+            self.settings["last_private_server"] = private_server
+            
+            self.save_settings()
+            self.update_game_name()
+        
+        favorites_list.bind("<<ListboxSelect>>", on_favorite_click)
+        
+        btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        btn_frame.pack(fill="x")
+        
+        def add_favorite():
+            """Open dialog to add a new favorite"""
+            add_window = tk.Toplevel(favorites_window)
+            add_window.title("Add Favorite")
+            add_window.configure(bg=self.BG_DARK)
+            add_window.resizable(False, False)
+            
+            favorites_window.update_idletasks()
+            x = favorites_window.winfo_x() + 50
+            y = favorites_window.winfo_y() + 50
+            add_window.geometry(f"400x250+{x}+{y}")
+            
+            if self.settings.get("enable_topmost", False):
+                add_window.attributes("-topmost", True)
+            
+            add_window.transient(favorites_window)
+            add_window.focus_force()
+            
+            form_frame = ttk.Frame(add_window, style="Dark.TFrame")
+            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            place_id_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            place_id_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            ps_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            ps_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Note (Optional):", style="Dark.TLabel").pack(anchor="w")
+            note_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            note_entry.pack(fill="x", pady=(0, 10))
+            
+            def save_favorite():
+                place_id = place_id_entry.get().strip()
+                
+                if not place_id:
+                    messagebox.showerror("Error", "Place ID is required!")
+                    return
+                
+                from classes.roblox_api import RobloxAPI
+                name = RobloxAPI.get_game_name(place_id)
+                if not name:
+                    messagebox.showerror("Error", "Could not fetch game name. Please check the Place ID.")
+                    return
+                
+                favorite = {
+                    "place_id": place_id,
+                    "name": name,
+                    "private_server": ps_entry.get().strip(),
+                    "note": note_entry.get().strip()
+                }
+                
+                if "favorite_games" not in self.settings:
+                    self.settings["favorite_games"] = []
+                
+                self.settings["favorite_games"].append(favorite)
+                self.save_settings()
+                refresh_favorites()
+                add_window.destroy()
+                messagebox.showinfo("Success", f"Added '{name}' to favorites!")
+                favorites_window.lift()
+                favorites_window.focus_force()
+            
+            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            button_frame.pack(fill="x", pady=(10, 0))
+            
+            ttk.Button(
+                button_frame,
+                text="Save",
+                style="Dark.TButton",
+                command=save_favorite
+            ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+            
+            ttk.Button(
+                button_frame,
+                text="Cancel",
+                style="Dark.TButton",
+                command=add_window.destroy
+            ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def edit_favorite():
+            """Edit selected favorite"""
+            selection = favorites_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select a favorite to edit.")
+                return
+            
+            index = selection[0]
+            fav = self.settings["favorite_games"][index]
+            
+            edit_window = tk.Toplevel(favorites_window)
+            edit_window.title("Edit Favorite")
+            edit_window.configure(bg=self.BG_DARK)
+            edit_window.resizable(False, False)
+            
+            favorites_window.update_idletasks()
+            x = favorites_window.winfo_x() + 50
+            y = favorites_window.winfo_y() + 50
+            edit_window.geometry(f"400x250+{x}+{y}")
+            
+            if self.settings.get("enable_topmost", False):
+                edit_window.attributes("-topmost", True)
+            
+            edit_window.transient(favorites_window)
+            edit_window.focus_force()
+            
+            form_frame = ttk.Frame(edit_window, style="Dark.TFrame")
+            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            place_id_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            place_id_entry.insert(0, fav["place_id"])
+            place_id_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            ps_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            ps_entry.insert(0, fav.get("private_server", ""))
+            ps_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Note (Optional):", style="Dark.TLabel").pack(anchor="w")
+            note_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            note_entry.insert(0, fav.get("note", ""))
+            note_entry.pack(fill="x", pady=(0, 10))
+            
+            def save_edit():
+                place_id = place_id_entry.get().strip()
+                
+                if not place_id:
+                    messagebox.showerror("Error", "Place ID is required!")
+                    return
+                
+                if place_id != fav["place_id"]:
+                    from classes.roblox_api import RobloxAPI
+                    name = RobloxAPI.get_game_name(place_id)
+                    if not name:
+                        messagebox.showerror("Error", "Could not fetch game name. Please check the Place ID.")
+                        return
+                else:
+                    name = fav["name"]
+                
+                self.settings["favorite_games"][index] = {
+                    "place_id": place_id,
+                    "name": name,
+                    "private_server": ps_entry.get().strip(),
+                    "note": note_entry.get().strip()
+                }
+                
+                self.save_settings()
+                refresh_favorites()
+                edit_window.destroy()
+                messagebox.showinfo("Success", "Favorite updated!")
+                favorites_window.lift()
+                favorites_window.focus_force()
+            
+            
+            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            button_frame.pack(fill="x", pady=(10, 0))
+            
+            ttk.Button(
+                button_frame,
+                text="Save",
+                style="Dark.TButton",
+                command=save_edit
+            ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+            
+            ttk.Button(
+                button_frame,
+                text="Cancel",
+                style="Dark.TButton",
+                command=edit_window.destroy
+            ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def remove_favorite():
+            """Remove selected favorite"""
+            selection = favorites_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select a favorite to remove.")
+                return
+            
+            index = selection[0]
+            fav = self.settings["favorite_games"][index]
+            
+            confirm = messagebox.askyesno(
+                "Confirm Delete",
+                f"Remove '{fav['name']}' from favorites?"
+            )
+            
+            if confirm:
+                self.settings["favorite_games"].pop(index)
+                self.save_settings()
+                refresh_favorites()
+                messagebox.showinfo("Success", "Favorite removed!")
+                favorites_window.lift()
+                favorites_window.focus_force()
+        
+        ttk.Button(
+            btn_frame,
+            text="Add Favorite",
+            style="Dark.TButton",
+            command=add_favorite
+        ).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        
+        ttk.Button(
+            btn_frame,
+            text="Edit",
+            style="Dark.TButton",
+            command=edit_favorite
+        ).pack(side="left", fill="x", expand=True, padx=2)
+        
+        ttk.Button(
+            btn_frame,
+            text="Remove",
+            style="Dark.TButton",
+            command=remove_favorite
+        ).pack(side="left", fill="x", expand=True, padx=2)
+        
+        ttk.Button(
+            btn_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=favorites_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(2, 0))
+    
+    def start_anti_afk(self):
+        """Start the Anti-AFK background thread"""
+        if self.anti_afk_thread and self.anti_afk_thread.is_alive():
+            return
+        
+        self.anti_afk_stop_event.clear()
+        self.anti_afk_thread = threading.Thread(target=self.anti_afk_worker, daemon=True)
+        self.anti_afk_thread.start()
+        print("[Anti-AFK] Started")
+    
+    def stop_anti_afk(self):
+        """Stop the Anti-AFK background thread"""
+        if self.anti_afk_thread and self.anti_afk_thread.is_alive():
+            self.anti_afk_stop_event.set()
+            self.anti_afk_thread.join(timeout=2)
+            print("[Anti-AFK] Stopped")
+    
+    def anti_afk_worker(self):
+        """Background worker that sends key presses to Roblox windows"""
+        while not self.anti_afk_stop_event.is_set():
+            try:
+                interval_minutes = self.settings.get("anti_afk_interval_minutes", 10)
+                key = self.settings.get("anti_afk_key", "w")
+                
+                for _ in range(interval_minutes * 60):
+                    if self.anti_afk_stop_event.wait(1):
+                        return
+                
+                self.send_key_to_roblox_windows(key)
+                
+            except Exception as e:
+                print(f"[Anti-AFK] Error: {e}")
+                time.sleep(5)
+    
+    def send_key_to_roblox_windows(self, action):
+        """Send a key press or mouse click to all Roblox windows using Windows API"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            WM_KEYDOWN = 0x0100
+            WM_KEYUP = 0x0101
+            WM_LBUTTONDOWN = 0x0201
+            WM_LBUTTONUP = 0x0202
+            WM_RBUTTONDOWN = 0x0204
+            WM_RBUTTONUP = 0x0205
+            
+            vk_codes = {
+                'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
+                'space': 0x20, ' ': 0x20,
+                'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
+            }
+            
+            is_mouse = action.upper() in ['LMB', 'RMB']
+            
+            if not is_mouse:
+                action_lower = action.lower()
+                if action_lower in vk_codes:
+                    vk_code = vk_codes[action_lower]
+                elif len(action) == 1:
+                    vk_code = ord(action.upper())
+                else:
+                    print(f"[Anti-AFK] Unknown action: {action}")
+                    return
+            
+            user32 = ctypes.windll.user32
+            
+            def enum_windows_callback(hwnd, lParam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        title = buff.value
+                        
+                        if "Roblox" in title or "roblox" in title.lower():
+                            if is_mouse:
+                                if action.upper() == 'LMB':
+                                    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, 1, 0)
+                                    time.sleep(0.05)
+                                    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, 0)
+                                    print(f"[Anti-AFK] Sent LMB click to window: {title}")
+                                elif action.upper() == 'RMB':
+                                    user32.PostMessageW(hwnd, WM_RBUTTONDOWN, 2, 0)
+                                    time.sleep(0.05)
+                                    user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, 0)
+                                    print(f"[Anti-AFK] Sent RMB click to window: {title}")
+                            else:
+                                user32.PostMessageW(hwnd, WM_KEYDOWN, vk_code, 0)
+                                time.sleep(0.05)
+                                user32.PostMessageW(hwnd, WM_KEYUP, vk_code, 0)
+                                print(f"[Anti-AFK] Sent '{action}' to window: {title}")
+                return True
+            
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+            
+        except Exception as e:
+            print(f"[Anti-AFK] Failed to send action: {e}")
