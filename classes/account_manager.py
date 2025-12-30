@@ -181,13 +181,10 @@ class RobloxAccountManager:
             return None
     
     def wait_for_login(self, driver, timeout=300):
-        """
-        Ultra-fast login detection using ONLY URL method
-        """
         print("Please log into your Roblox account")
         
         detector_script = """
-        window.ultraFastDetection = {
+        window.browserDetect = {
             detected: false,
             method: null,
             debug: [],
@@ -197,15 +194,15 @@ class RobloxAccountManager:
             }
         };
         
-        function instantDetect() {
+        function checkLogin() {
             const now = Date.now();
-            window.ultraFastDetection.debug.push('URL Check at: ' + now);
+            window.browserDetect.debug.push('URL Check at: ' + now);
             
             const url = window.location.href.toLowerCase();
-            window.ultraFastDetection.debug.push('Current URL: ' + url);
+            window.browserDetect.debug.push('Current URL: ' + url);
             
             if (url.includes('/login') || url.includes('/signup') || url.includes('/createaccount')) {
-                window.ultraFastDetection.debug.push('Still on login/signup/create page - not logged in');
+                window.browserDetect.debug.push('Still on login/signup/create page - not logged in');
                 return false;
             }
             
@@ -217,41 +214,41 @@ class RobloxAccountManager:
                 url.includes('/transactions') || url.includes('/my/avatar') ||
                 url.includes('roblox.com/users/') && !url.includes('/login')) {
                 
-                window.ultraFastDetection.detected = true;
-                window.ultraFastDetection.method = 'url_only';
-                window.ultraFastDetection.debug.push('✅ DETECTED via URL! Page: ' + url);
-                window.ultraFastDetection.cleanup();
+                window.browserDetect.detected = true;
+                window.browserDetect.method = 'url';
+                window.browserDetect.debug.push('✅ DETECTED via URL! Page: ' + url);
+                window.browserDetect.cleanup();
                 return true;
             }
             
-            window.ultraFastDetection.debug.push('Not detected - still checking...');
+            window.browserDetect.debug.push('Not detected - still checking...');
             return false;
         }
         
-        instantDetect();
+        checkLogin();
         
-        window.ultraFastDetection.interval = setInterval(() => {
-            if (instantDetect()) {
-                clearInterval(window.ultraFastDetection.interval);
+        window.browserDetect.interval = setInterval(() => {
+            if (checkLogin()) {
+                clearInterval(window.browserDetect.interval);
             }
         }, 25);
         
         let lastHref = location.href;
-        window.ultraFastDetection.observer = new MutationObserver(() => {
+        window.browserDetect.observer = new MutationObserver(() => {
             if (location.href !== lastHref) {
                 lastHref = location.href;
-                window.ultraFastDetection.debug.push('URL changed to: ' + location.href);
-                if (instantDetect()) {
-                    clearInterval(window.ultraFastDetection.interval);
-                    window.ultraFastDetection.observer.disconnect();
+                window.browserDetect.debug.push('URL changed to: ' + location.href);
+                if (checkLogin()) {
+                    clearInterval(window.browserDetect.interval);
+                    window.browserDetect.observer.disconnect();
                 }
             }
         });
-        window.ultraFastDetection.observer.observe(document, {subtree: true, childList: true});
+        window.browserDetect.observer.observe(document, {subtree: true, childList: true});
         
         ['beforeunload', 'unload', 'pagehide'].forEach(event => {
             window.addEventListener(event, () => {
-                window.ultraFastDetection.cleanup();
+                window.browserDetect.cleanup();
             });
         });
         """
@@ -264,16 +261,30 @@ class RobloxAccountManager:
         
         start_time = time.time()
         last_debug_time = 0
+        check_count = 0
         
         while time.time() - start_time < timeout:
             try:
-                result = driver.execute_script("return window.ultraFastDetection;")
+                check_count += 1
                 
-                if result and result.get('detected'):
-                    method = result.get('method', 'url_only')
-                    print(f"[SUCCESS] LOGIN DETECTED! Method: {method} - Closing browser instantly...")
+                try:
+                    current_url = driver.current_url.lower()
+                    if any(p in current_url for p in ['/home', '/games', '/catalog', '/avatar', '/discover', '/friends', '/profile', '/groups', '/develop', '/create']) and '/login' not in current_url and '/createaccount' not in current_url:
+                        print(f"[SUCCESS] LOGIN DETECTED via URL check! (check #{check_count})")
+                        try:
+                            driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
+                        except:
+                            pass
+                        return True
+                except:
+                    pass
+                
+                result = driver.execute_script("return window.browserDetect ? window.browserDetect.detected : false;")
+                
+                if result:
+                    print(f"[SUCCESS] LOGIN DETECTED via JS! (check #{check_count}) - Closing browser...")
                     try:
-                        driver.execute_script("window.ultraFastDetection.cleanup();")
+                        driver.execute_script("window.browserDetect.cleanup();")
                     except:
                         pass
                     return True
@@ -282,43 +293,29 @@ class RobloxAccountManager:
                 if current_time - last_debug_time > 5:
                     last_debug_time = current_time
                     try:
-                        current_url = driver.current_url
-                        print(f"Still checking... Current URL: {current_url}")
-                        
-                        if result and result.get('debug'):
-                            recent_debug = result.get('debug', [])[-3:]
-                            for debug_msg in recent_debug:
-                                print(f"Debug: {debug_msg}")
-                        
-                        if ('/home' in current_url or '/games' in current_url or 
-                            '/catalog' in current_url or '/avatar' in current_url or
-                            '/discover' in current_url or '/friends' in current_url or
-                            '/profile' in current_url or '/groups' in current_url or
-                            '/develop' in current_url or '/create' in current_url) and '/login' not in current_url and '/createaccount' not in current_url.lower():
-                            print("[SUCCESS] LOGIN DETECTED via manual URL check!")
-                            return True
-                                
-                    except Exception as e:
-                        print(f"[ERROR] Login detection failed: {e}")
+                        print(f"Still checking... URL: {driver.current_url} (checks: {check_count})")
+                    except:
+                        pass
                 
-                time.sleep(0.05)
+                time.sleep(0.02)
                 
             except WebDriverException:
                 try:
-                    driver.execute_script("if(window.ultraFastDetection) window.ultraFastDetection.cleanup();")
+                    driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
                 except:
                     pass
                 return False
         
         print("[WARNING] Login timeout. Please try again.")
         try:
-            driver.execute_script("if(window.ultraFastDetection) window.ultraFastDetection.cleanup();")
+            driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
         except:
             pass
         return False
+
     
     def extract_user_info(self, driver):
-        """Extract username and cookie with ultra-fast detection"""
+        """Extract username and cookie - optimized for speed"""
         try:
             roblosecurity_cookie = None
             cookies = driver.get_cookies()
@@ -331,43 +328,13 @@ class RobloxAccountManager:
             if not roblosecurity_cookie:
                 return None, None
             
-            username = None
-            try:
-                result = driver.execute_script("return window.ultraFastDetection;")
-                if result and result.get('username'):
-                    username = result.get('username')
-                    print(f"[SUCCESS] Username detected from page: {username}")
-            except:
-                pass
-            
-            if not username:
-                try:
-                    username_selectors = [
-                        "[data-testid='navigation-user-display-name']",
-                        "[data-testid='user-menu-button']",
-                        ".font-header-2.text-color-secondary-alt",
-                        "#nav-username",
-                        ".navigation-user-name"
-                    ]
-                    
-                    for selector in username_selectors:
-                        try:
-                            element = driver.find_element(By.CSS_SELECTOR, selector)
-                            if element and element.text.strip():
-                                username = element.text.strip()
-                                break
-                        except:
-                            continue
-                            
-                except Exception:
-                    pass
-            
-            if not username:
-                username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
+            print("[INFO] Getting username from API...")
+            username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
             
             if not username:
                 username = "Unknown"
             
+            print(f"[SUCCESS] Username: {username}")
             return username, roblosecurity_cookie
             
         except Exception as e:
