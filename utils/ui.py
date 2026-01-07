@@ -2865,6 +2865,8 @@ class AccountManagerUI:
                 self.settings_window.configure(bg=self.BG_DARK)
             if hasattr(self, 'star_btn') and self.star_btn:
                 self.star_btn.config(bg=self.BG_DARK)
+            if hasattr(self, 'auto_rejoin_btn') and self.auto_rejoin_btn:
+                self.auto_rejoin_btn.config(bg=self.BG_DARK)
             
             style = ttk.Style()
             style.configure("Dark.TFrame", background=self.BG_DARK)
