@@ -17,8 +17,9 @@ import webbrowser
 import time
 from datetime import datetime
 
-# 3k lines woah
-# how can i organize this code better?
+# almost 4k lines of code
+# i will organize this later
+
 class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
@@ -63,6 +64,10 @@ class AccountManagerUI:
         
         self.anti_afk_thread = None
         self.anti_afk_stop_event = threading.Event()
+        
+        self.auto_rejoin_threads = {}
+        self.auto_rejoin_stop_events = {}
+        self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -198,6 +203,19 @@ class AccountManagerUI:
         )
         self.star_btn.pack(side="left", padx=(5, 0))
         
+        self.auto_rejoin_btn = tk.Button(
+            recent_games_header,
+            text="🔁",
+            bg=self.BG_DARK,
+            fg="#00BFFF",
+            font=("Segoe UI", 10),
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            command=self.open_auto_rejoin
+        )
+        self.auto_rejoin_btn.pack(side="left", padx=(5, 0))
+        
         game_list_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         game_list_frame.pack(fill="both", expand=True)
         
@@ -269,6 +287,9 @@ class AccountManagerUI:
         if hasattr(self, 'anti_afk_stop_event'):
             self.stop_anti_afk()
         
+        if hasattr(self, 'auto_rejoin_threads'):
+            self.stop_all_auto_rejoin()
+        
         RobloxAPI.restore_installers()
         self.root.destroy()
 
@@ -292,7 +313,8 @@ class AccountManagerUI:
                     "anti_afk_enabled": False,
                     "anti_afk_interval_minutes": 10,
                     "anti_afk_key": "w",
-                    "disable_launch_popup": False
+                    "disable_launch_popup": False,
+                    "auto_rejoin_configs": {}
                 }
         except:
             self.settings = {
@@ -308,6 +330,7 @@ class AccountManagerUI:
                 "anti_afk_enabled": False,
                 "anti_afk_interval_minutes": 10,
                 "anti_afk_key": "w",
+                "auto_rejoin_configs": {},
                 "disable_launch_popup": False
             }
         
@@ -526,7 +549,7 @@ class AccountManagerUI:
             
             label = tk.Label(
                 self.tooltip,
-                text="Right click to join user",
+                text="Right click to see more options",
                 bg="#333333",
                 fg="white",
                 font=("Segoe UI", 9),
@@ -582,6 +605,22 @@ class AccountManagerUI:
             command=lambda: [self.hide_join_place_dropdown(), self.join_user()]
         )
         join_user_btn.pack(fill="x", padx=2, pady=1)
+        
+        job_id_btn = tk.Button(
+            self.join_place_dropdown,
+            text="Job-ID",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=lambda: [self.hide_join_place_dropdown(), self.join_by_job_id()]
+        )
+        job_id_btn.pack(fill="x", padx=2, pady=1)
         
         self.position_join_place_dropdown()
         
@@ -1542,6 +1581,329 @@ class AccountManagerUI:
 
         threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
 
+    def open_auto_rejoin(self):
+        """Open the auto-rejoin management window (like favorites window)"""
+        auto_rejoin_window = tk.Toplevel(self.root)
+        auto_rejoin_window.title("Auto-Rejoin")
+        auto_rejoin_window.configure(bg=self.BG_DARK)
+        auto_rejoin_window.resizable(False, False)
+        
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + 50
+        y = self.root.winfo_y() + 50
+        auto_rejoin_window.geometry(f"450x400+{x}+{y}")
+        
+        if self.settings.get("enable_topmost", False):
+            auto_rejoin_window.attributes("-topmost", True)
+        
+        auto_rejoin_window.transient(self.root)
+        auto_rejoin_window.focus_force()
+        
+        main_frame = ttk.Frame(auto_rejoin_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        ttk.Label(
+            main_frame,
+            text="Auto-Rejoin Accounts",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+        
+        list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        list_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        
+        rejoin_list = tk.Listbox(
+            list_frame,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            selectbackground=self.FG_ACCENT,
+            highlightthickness=0,
+            border=0,
+            font=("Segoe UI", 9)
+        )
+        rejoin_list.grid(row=0, column=0, sticky="nsew")
+        
+        v_scrollbar = ttk.Scrollbar(list_frame, command=rejoin_list.yview, orient="vertical")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        rejoin_list.config(yscrollcommand=v_scrollbar.set)
+        
+        def refresh_rejoin_list():
+            rejoin_list.delete(0, tk.END)
+            for account, config in self.auto_rejoin_configs.items():
+                is_active = account in self.auto_rejoin_threads and self.auto_rejoin_threads[account].is_alive()
+                status = "[ACTIVE]" if is_active else "[INACTIVE]"
+                place_id = config.get('place_id', 'Unknown')
+                display = f"{account} - {status} - Place: {place_id}"
+                rejoin_list.insert(tk.END, display)
+        
+        refresh_rejoin_list()
+        
+        btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        btn_frame.pack(fill="x")
+        
+        def add_auto_rejoin():
+            """Open dialog to add a new auto-rejoin account"""
+            add_window = tk.Toplevel(auto_rejoin_window)
+            add_window.title("Add Auto-Rejoin")
+            add_window.configure(bg=self.BG_DARK)
+            add_window.resizable(False, False)
+            
+            auto_rejoin_window.update_idletasks()
+            x = auto_rejoin_window.winfo_x() + 50
+            y = auto_rejoin_window.winfo_y() + 50
+            add_window.geometry(f"400x350+{x}+{y}")
+            
+            if self.settings.get("enable_topmost", False):
+                add_window.attributes("-topmost", True)
+            
+            add_window.transient(auto_rejoin_window)
+            add_window.focus_force()
+            
+            form_frame = ttk.Frame(add_window, style="Dark.TFrame")
+            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ttk.Label(form_frame, text="Account:", style="Dark.TLabel").pack(anchor="w")
+            account_combo = ttk.Combobox(form_frame, values=list(self.manager.accounts.keys()), state="readonly")
+            account_combo.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            place_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            private_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            private_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Job ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            job_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            job_entry.pack(fill="x", pady=(0, 10))
+            
+            interval_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            interval_frame.pack(fill="x", pady=(0, 10))
+            ttk.Label(interval_frame, text="Check Interval (seconds):", style="Dark.TLabel").pack(side="left")
+            interval_spinbox = ttk.Spinbox(interval_frame, from_=5, to=300, increment=5, width=8)
+            interval_spinbox.set(10)
+            interval_spinbox.pack(side="left", padx=(10, 0))
+            
+            retry_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            retry_frame.pack(fill="x", pady=(0, 10))
+            ttk.Label(retry_frame, text="Max Rejoin Attempts:", style="Dark.TLabel").pack(side="left")
+            retry_spinbox = ttk.Spinbox(retry_frame, from_=1, to=50, increment=1, width=8)
+            retry_spinbox.set(5)
+            retry_spinbox.pack(side="left", padx=(10, 0))
+            
+            def save_and_add():
+                account = account_combo.get()
+                if not account:
+                    messagebox.showwarning("Missing Info", "Please select an account.")
+                    return
+                
+                place_id = place_entry.get().strip()
+                if not place_id:
+                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
+                    return
+                if not place_id.isdigit():
+                    messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
+                    return
+                
+                job_id = job_entry.get().strip()
+                
+                self.auto_rejoin_configs[account] = {
+                    'place_id': place_id,
+                    'private_server': private_entry.get().strip(),
+                    'job_id': job_id,
+                    'check_interval': int(interval_spinbox.get()),
+                    'max_retries': int(retry_spinbox.get())
+                }
+                
+                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
+                self.save_settings()
+                
+                add_window.destroy()
+                refresh_rejoin_list()
+                messagebox.showinfo("Success", f"Added auto-rejoin for {account}!")
+                auto_rejoin_window.lift()
+                auto_rejoin_window.focus_force()
+            
+            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            button_frame.pack(fill="x", pady=(10, 0))
+            
+            ttk.Button(button_frame, text="Save", style="Dark.TButton", command=save_and_add).pack(side="left", fill="x", expand=True, padx=(0, 5))
+            ttk.Button(button_frame, text="Cancel", style="Dark.TButton", command=add_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def edit_auto_rejoin():
+            """Edit selected auto-rejoin config"""
+            selection = rejoin_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an account to edit.")
+                return
+            
+            accounts_list = list(self.auto_rejoin_configs.keys())
+            account = accounts_list[selection[0]]
+            config = self.auto_rejoin_configs[account]
+            
+            edit_window = tk.Toplevel(auto_rejoin_window)
+            edit_window.title("Edit Auto-Rejoin")
+            edit_window.configure(bg=self.BG_DARK)
+            edit_window.resizable(False, False)
+            
+            auto_rejoin_window.update_idletasks()
+            x = auto_rejoin_window.winfo_x() + 50
+            y = auto_rejoin_window.winfo_y() + 50
+            edit_window.geometry(f"400x350+{x}+{y}")
+            
+            if self.settings.get("enable_topmost", False):
+                edit_window.attributes("-topmost", True)
+            
+            edit_window.transient(auto_rejoin_window)
+            edit_window.focus_force()
+            
+            form_frame = ttk.Frame(edit_window, style="Dark.TFrame")
+            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            ttk.Label(form_frame, text=f"Account: {account}", style="Dark.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            place_entry.insert(0, config.get('place_id', ''))
+            place_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            private_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            private_entry.insert(0, config.get('private_server', ''))
+            private_entry.pack(fill="x", pady=(0, 10))
+            
+            ttk.Label(form_frame, text="Job ID (Optional):", style="Dark.TLabel").pack(anchor="w")
+            job_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            job_entry.insert(0, config.get('job_id', ''))
+            job_entry.pack(fill="x", pady=(0, 10))
+            
+            interval_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            interval_frame.pack(fill="x", pady=(0, 10))
+            ttk.Label(interval_frame, text="Check Interval (seconds):", style="Dark.TLabel").pack(side="left")
+            interval_spinbox = ttk.Spinbox(interval_frame, from_=5, to=300, increment=5, width=8)
+            interval_spinbox.set(config.get('check_interval', 10))
+            interval_spinbox.pack(side="left", padx=(10, 0))
+            
+            retry_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            retry_frame.pack(fill="x", pady=(0, 10))
+            ttk.Label(retry_frame, text="Max Rejoin Attempts:", style="Dark.TLabel").pack(side="left")
+            retry_spinbox = ttk.Spinbox(retry_frame, from_=1, to=50, increment=1, width=8)
+            retry_spinbox.set(config.get('max_retries', 5))
+            retry_spinbox.pack(side="left", padx=(10, 0))
+            
+            def save_edit():
+                place_id = place_entry.get().strip()
+                if not place_id:
+                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
+                    return
+                if not place_id.isdigit():
+                    messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
+                    return
+                
+                job_id = job_entry.get().strip()
+                
+                self.auto_rejoin_configs[account] = {
+                    'place_id': place_id,
+                    'private_server': private_entry.get().strip(),
+                    'job_id': job_id,
+                    'check_interval': int(interval_spinbox.get()),
+                    'max_retries': int(retry_spinbox.get())
+                }
+                
+                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
+                self.save_settings()
+                
+                edit_window.destroy()
+                refresh_rejoin_list()
+                auto_rejoin_window.lift()
+                auto_rejoin_window.focus_force()
+            
+            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            button_frame.pack(fill="x", pady=(10, 0))
+            
+            ttk.Button(button_frame, text="Save", style="Dark.TButton", command=save_edit).pack(side="left", fill="x", expand=True, padx=(0, 5))
+            ttk.Button(button_frame, text="Cancel", style="Dark.TButton", command=edit_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def remove_auto_rejoin():
+            """Remove selected auto-rejoin config"""
+            selection = rejoin_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an account to remove.")
+                return
+            
+            accounts_list = list(self.auto_rejoin_configs.keys())
+            account = accounts_list[selection[0]]
+            
+            if messagebox.askyesno("Confirm", f"Remove auto-rejoin for {account}?"):
+                self.stop_auto_rejoin_for_account(account)
+                del self.auto_rejoin_configs[account]
+                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
+                self.save_settings()
+                refresh_rejoin_list()
+        
+        def start_selected():
+            """Start auto-rejoin for selected account"""
+            selection = rejoin_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an account to start.")
+                return
+            
+            accounts_list = list(self.auto_rejoin_configs.keys())
+            account = accounts_list[selection[0]]
+            self.start_auto_rejoin_for_account(account)
+            refresh_rejoin_list()
+            messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
+        
+        def stop_selected():
+            """Stop auto-rejoin for selected account"""
+            selection = rejoin_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an account to stop.")
+                return
+            
+            accounts_list = list(self.auto_rejoin_configs.keys())
+            account = accounts_list[selection[0]]
+            self.stop_auto_rejoin_for_account(account)
+            refresh_rejoin_list()
+            messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {account}!")
+        
+        def start_all():
+            """Start auto-rejoin for all accounts"""
+            for account in self.auto_rejoin_configs.keys():
+                self.start_auto_rejoin_for_account(account)
+            refresh_rejoin_list()
+            messagebox.showinfo("Started", f"Auto-rejoin started for all {len(self.auto_rejoin_configs)} account(s)!")
+        
+        def stop_all():
+            """Stop auto-rejoin for all accounts"""
+            for account in list(self.auto_rejoin_threads.keys()):
+                self.stop_auto_rejoin_for_account(account)
+            refresh_rejoin_list()
+            messagebox.showinfo("Stopped", "Auto-rejoin stopped for all accounts!")
+        
+        row1_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
+        row1_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(row1_frame, text="Add", style="Dark.TButton", command=add_auto_rejoin).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(row1_frame, text="Edit", style="Dark.TButton", command=edit_auto_rejoin).pack(side="left", fill="x", expand=True, padx=2)
+        ttk.Button(row1_frame, text="Remove", style="Dark.TButton", command=remove_auto_rejoin).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        
+        row2_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
+        row2_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(row2_frame, text="Start Selected", style="Dark.TButton", command=start_selected).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(row2_frame, text="Stop Selected", style="Dark.TButton", command=stop_selected).pack(side="left", fill="x", expand=True, padx=(2, 0))
+        
+        row3_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
+        row3_frame.pack(fill="x")
+        
+        ttk.Button(row3_frame, text="Start All", style="Dark.TButton", command=start_all).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ttk.Button(row3_frame, text="Stop All", style="Dark.TButton", command=stop_all).pack(side="left", fill="x", expand=True, padx=(2, 0))
+
     def join_user(self):
         """Join a user's current game"""
         if self.settings.get("enable_multi_select", False):
@@ -1707,6 +2069,117 @@ class AccountManagerUI:
             text="Cancel",
             style="Dark.TButton",
             command=join_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
+    def join_by_job_id(self):
+        """Join a game by Job ID"""
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+        
+        job_id_window = tk.Toplevel(self.root)
+        job_id_window.title("Join by Job-ID")
+        job_id_window.geometry("450x220")
+        job_id_window.configure(bg=self.BG_DARK)
+        job_id_window.resizable(False, False)
+        
+        self.root.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        
+        x = main_x + (main_width - 450) // 2
+        y = main_y + (main_height - 220) // 2
+        job_id_window.geometry(f"450x220+{x}+{y}")
+        
+        if self.settings.get("enable_topmost", False):
+            job_id_window.attributes("-topmost", True)
+        
+        job_id_window.transient(self.root)
+        job_id_window.grab_set()
+        
+        main_frame = ttk.Frame(job_id_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ttk.Label(
+            main_frame,
+            text="Join by Job-ID",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(main_frame, text="Job-ID:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        
+        job_id_entry = ttk.Entry(main_frame, style="Dark.TEntry")
+        job_id_entry.pack(fill="x", pady=(0, 15))
+        job_id_entry.focus_set()
+        
+        def do_join_job():
+            place_id = self.place_entry.get().strip()
+            if not place_id:
+                messagebox.showwarning("Missing Information", "Please enter a Place ID first.")
+                return
+            
+            job_id = job_id_entry.get().strip()
+            if not job_id:
+                messagebox.showwarning("Missing Information", "Please enter a Job-ID.")
+                return
+            
+            job_id_window.destroy()
+            
+            def worker(selected_usernames, pid, jid):
+                launcher_pref = self.settings.get("roblox_launcher", "default")
+                success_count = 0
+                
+                for uname in selected_usernames:
+                    try:
+                        if self.manager.launch_roblox(uname, pid, "", launcher_pref, jid):
+                            success_count += 1
+                    except Exception as e:
+                        print(f"Failed to launch game for {uname}: {e}")
+                
+                def on_done():
+                    if success_count > 0:
+                        from classes.roblox_api import RobloxAPI
+                        game_name = RobloxAPI.get_game_name(pid)
+                        if game_name:
+                            self.add_game_to_list(pid, game_name, "")
+                        else:
+                            self.add_game_to_list(pid, f"Place {pid}", "")
+                        
+                        messagebox.showinfo(
+                            "Success",
+                            f"Joining Job-ID {jid} with {success_count} account(s)! Check your desktop."
+                        )
+                    else:
+                        messagebox.showerror("Error", "Failed to launch Roblox.")
+                
+                self.root.after(0, on_done)
+            
+            threading.Thread(target=worker, args=(usernames, place_id, job_id), daemon=True).start()
+        
+        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x")
+        
+        ttk.Button(
+            button_frame,
+            text="Join",
+            style="Dark.TButton",
+            command=do_join_job
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            style="Dark.TButton",
+            command=job_id_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def enable_multi_roblox(self):
@@ -2545,6 +3018,8 @@ class AccountManagerUI:
             style="Dark.TButton",
             command=open_github
         ).pack(fill="x", pady=(0, 10))
+        
+        
     
     def write(self, text):
         """Redirect stdout/stderr writes to console"""
@@ -3007,18 +3482,175 @@ class AccountManagerUI:
             self.anti_afk_thread.join(timeout=2)
             print("[Anti-AFK] Stopped")
     
+    def start_auto_rejoin_for_account(self, account):
+        """Start the auto-rejoin background thread for a specific account"""
+        if account in self.auto_rejoin_threads and self.auto_rejoin_threads[account].is_alive():
+            return
+        
+        if account not in self.auto_rejoin_configs:
+            print(f"[Auto-Rejoin] No config found for {account}")
+            return
+        
+        stop_event = threading.Event()
+        self.auto_rejoin_stop_events[account] = stop_event
+        
+        thread = threading.Thread(
+            target=self.auto_rejoin_worker_for_account,
+            args=(account,),
+            daemon=True
+        )
+        self.auto_rejoin_threads[account] = thread
+        thread.start()
+        print(f"[Auto-Rejoin] Started for {account}")
+    
+    def stop_auto_rejoin_for_account(self, account):
+        """Stop the auto-rejoin background thread for a specific account"""
+        if account in self.auto_rejoin_stop_events:
+            self.auto_rejoin_stop_events[account].set()
+        
+        if account in self.auto_rejoin_threads:
+            thread = self.auto_rejoin_threads[account]
+            if thread.is_alive():
+                thread.join(timeout=2)
+            del self.auto_rejoin_threads[account]
+        
+        if account in self.auto_rejoin_stop_events:
+            del self.auto_rejoin_stop_events[account]
+        
+        print(f"[Auto-Rejoin] Stopped for {account}")
+    
+    def stop_all_auto_rejoin(self):
+        """Stop all auto-rejoin threads"""
+        for account in list(self.auto_rejoin_threads.keys()):
+            self.stop_auto_rejoin_for_account(account)
+    
+    def is_roblox_running(self):
+        """Check if any Roblox window exists"""
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, "Roblox")
+            return hwnd != 0
+        except:
+            return False
+    
+    def is_player_in_game(self, user_id, cookie, expected_place_id):
+        """Check if player is still in the same game using Presence API"""
+        try:
+            from classes.roblox_api import RobloxAPI
+            presence = RobloxAPI.get_player_presence(user_id, cookie)
+            
+            if presence:
+                in_game = presence.get('in_game', False)
+                place_id = presence.get('place_id')
+                
+                if in_game and place_id == int(expected_place_id):
+                    return True, place_id, presence.get('game_id')
+            
+            return False, None, None
+        except Exception as e:
+            print(f"[Auto-Rejoin] Error checking player status: {e}")
+            return False, None, None
+    
+    def auto_rejoin_worker_for_account(self, account):
+        """Background worker that monitors for disconnection and rejoins for a specific account"""
+        from classes.roblox_api import RobloxAPI
+        
+        config = self.auto_rejoin_configs.get(account, {})
+        stop_event = self.auto_rejoin_stop_events.get(account)
+        
+        if not stop_event:
+            return
+        
+        retry_count = 0
+        max_retries = config.get('max_retries', 5)
+        check_interval = config.get('check_interval', 10)
+        place_id = config.get('place_id')
+        private_server = config.get('private_server', '')
+        job_id = config.get('job_id', '')
+        
+        if not place_id:
+            print(f"[Auto-Rejoin] Invalid configuration for {account}")
+            return
+        
+        if account not in self.manager.accounts:
+            print(f"[Auto-Rejoin] Account {account} not found")
+            return
+        
+        account_data = self.manager.accounts[account]
+        cookie = account_data.get('cookie')
+        
+        user_id = RobloxAPI.get_user_id_from_username(account)
+        if not user_id:
+            print(f"[Auto-Rejoin] Could not get user ID for {account}")
+            return
+        
+        print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
+        
+        while not stop_event.is_set():
+            try:
+                if not self.is_roblox_running():
+                    print(f"[Auto-Rejoin] [{account}] Roblox not running - launching game...")
+                    
+                    launcher_pref = self.settings.get("roblox_launcher", "default")
+                    success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id)
+                    
+                    if success:
+                        print(f"[Auto-Rejoin] [{account}] Game launched successfully")
+                        time.sleep(10)
+                    else:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
+                            break
+                        time.sleep(check_interval)
+                    continue
+                
+                in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
+                
+                if not in_game:
+                    print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count + 1}/{max_retries})")
+                    
+                    rejoin_job_id = job_id if job_id else (game_id if game_id else '')
+                    
+                    launcher_pref = self.settings.get("roblox_launcher", "default")
+                    success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, rejoin_job_id)
+                    
+                    if success:
+                        retry_count = 0
+                        print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
+                        time.sleep(5)
+                    else:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
+                            break
+                        time.sleep(check_interval)
+                else:
+                    print(f"[Auto-Rejoin] [{account}] Still in game {place_id}")
+                    retry_count = 0
+                    time.sleep(check_interval)
+                    
+            except Exception as e:
+                print(f"[Auto-Rejoin] [{account}] Error: {e}")
+                time.sleep(check_interval)
+      
     def anti_afk_worker(self):
         """Background worker that sends key presses to Roblox windows"""
+        last_window_count = 0
+        window_timers = {}
+        
         while not self.anti_afk_stop_event.is_set():
             try:
                 interval_minutes = self.settings.get("anti_afk_interval_minutes", 10)
                 key = self.settings.get("anti_afk_key", "w")
+                current_time = time.time()
                 
                 for _ in range(interval_minutes * 60):
                     if self.anti_afk_stop_event.wait(1):
                         return
                 
-                self.send_key_to_roblox_windows(key)
+                self.send_key_to_roblox_windows_staggered(key, window_timers, current_time)
                 
             except Exception as e:
                 print(f"[Anti-AFK] Error: {e}")
@@ -3057,6 +3689,10 @@ class AccountManagerUI:
             
             user32 = ctypes.windll.user32
             
+            def is_roblox_game_window(title):
+                """Check if window is an actual Roblox game instance"""
+                return title.strip() == "Roblox"
+            
             def enum_windows_callback(hwnd, lParam):
                 if user32.IsWindowVisible(hwnd):
                     length = user32.GetWindowTextLengthW(hwnd)
@@ -3065,23 +3701,23 @@ class AccountManagerUI:
                         user32.GetWindowTextW(hwnd, buff, length + 1)
                         title = buff.value
                         
-                        if "Roblox" in title or "roblox" in title.lower():
+                        if is_roblox_game_window(title):
                             if is_mouse:
                                 if action.upper() == 'LMB':
                                     user32.PostMessageW(hwnd, WM_LBUTTONDOWN, 1, 0)
                                     time.sleep(0.05)
                                     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, 0)
-                                    print(f"[Anti-AFK] Sent LMB click to window: {title}")
+                                    print(f"[Anti-AFK] Sent LMB click")
                                 elif action.upper() == 'RMB':
                                     user32.PostMessageW(hwnd, WM_RBUTTONDOWN, 2, 0)
                                     time.sleep(0.05)
                                     user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, 0)
-                                    print(f"[Anti-AFK] Sent RMB click to window: {title}")
+                                    print(f"[Anti-AFK] Sent RMB click")
                             else:
                                 user32.PostMessageW(hwnd, WM_KEYDOWN, vk_code, 0)
                                 time.sleep(0.05)
                                 user32.PostMessageW(hwnd, WM_KEYUP, vk_code, 0)
-                                print(f"[Anti-AFK] Sent '{action}' to window: {title}")
+                                print(f"[Anti-AFK] Sent '{action}'")
                 return True
             
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -3089,3 +3725,117 @@ class AccountManagerUI:
             
         except Exception as e:
             print(f"[Anti-AFK] Failed to send action: {e}")
+    
+    def send_key_to_roblox_windows_staggered(self, action, window_timers, current_time):
+        """Send key presses to Roblox windows"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            
+            vk_codes = {
+                'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
+                'space': 0x20, ' ': 0x20,
+                'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
+            }
+            
+            KEYEVENTF_KEYUP = 0x0002
+            SW_RESTORE = 9
+            SW_MINIMIZE = 6
+            
+            is_mouse = action.upper() in ['LMB', 'RMB']
+            
+            if not is_mouse:
+                action_lower = action.lower()
+                if action_lower in vk_codes:
+                    vk_code = vk_codes[action_lower]
+                elif len(action) == 1:
+                    vk_code = ord(action.upper())
+                else:
+                    print(f"[Anti-AFK] Unknown action: {action}")
+                    return
+            
+            roblox_windows = []
+            
+            def is_roblox_game_window(title):
+                return title.strip() == "Roblox"
+            
+            def enum_windows_callback(hwnd, lParam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        title = buff.value
+                        if is_roblox_game_window(title):
+                            roblox_windows.append(hwnd)
+                return True
+            
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+            
+            if not roblox_windows:
+                print("[Anti-AFK] No Roblox game windows found")
+                return
+            
+            original_hwnd = user32.GetForegroundWindow()
+            current_thread_id = kernel32.GetCurrentThreadId()
+            
+            print(f"[Anti-AFK] Found {len(roblox_windows)} Roblox instance(s)")
+            
+            for idx, hwnd in enumerate(roblox_windows):
+                try:
+                    print(f"[Anti-AFK] Processing instance {idx + 1}...")
+                    
+                    was_minimized = user32.IsIconic(hwnd)
+                    if was_minimized:
+                        user32.ShowWindow(hwnd, SW_RESTORE)
+                        time.sleep(0.05)
+                    
+                    user32.SetForegroundWindow(hwnd)
+                    time.sleep(0.05)
+                    
+                    for repeat in range(3):
+                        if is_mouse:
+                            MOUSEEVENTF_LEFTDOWN = 0x0002
+                            MOUSEEVENTF_LEFTUP = 0x0004
+                            MOUSEEVENTF_RIGHTDOWN = 0x0008
+                            MOUSEEVENTF_RIGHTUP = 0x0010
+                            
+                            if action.upper() == 'LMB':
+                                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                time.sleep(0.015)
+                                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            elif action.upper() == 'RMB':
+                                user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                                time.sleep(0.015)
+                                user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+                        else:
+                            scan_code = user32.MapVirtualKeyW(vk_code, 0)
+                            user32.keybd_event(vk_code, scan_code, 0, 0)
+                            time.sleep(0.015)
+                            user32.keybd_event(vk_code, scan_code, KEYEVENTF_KEYUP, 0)
+                    
+                    print(f"[Anti-AFK] Sent '{action}' to Roblox instance {idx + 1}")
+                    
+                    if was_minimized:
+                        user32.ShowWindow(hwnd, SW_MINIMIZE)
+                    
+                except Exception as e:
+                    print(f"[Anti-AFK] Error on instance {idx + 1}: {e}")
+            
+            if original_hwnd:
+                prev_thread_id = user32.GetWindowThreadProcessId(original_hwnd, None)
+                user32.AttachThreadInput(current_thread_id, prev_thread_id, True)
+                user32.BringWindowToTop(original_hwnd)
+                user32.SetForegroundWindow(original_hwnd)
+                user32.AttachThreadInput(current_thread_id, prev_thread_id, False)
+            
+            print(f"[Anti-AFK] Completed for {len(roblox_windows)} instance(s)")
+            
+        except Exception as e:
+            print(f"[Anti-AFK] Failed: {e}")
+            import traceback
+            traceback.print_exc()
