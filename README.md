@@ -11,8 +11,9 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 Created by evanovar · Contact: [Discord Server](https://discord.gg/TYnJXyEhgY) <br>
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 
-<img width="447" height="549" alt="image" src="https://github.com/user-attachments/assets/77587173-1540-4231-a0ac-38f8eaf69cf0" />
-<img width="300" height="383" alt="image" src="https://github.com/user-attachments/assets/19fd1bd9-97ed-49e7-bc99-70eb9ad27de1" />
+<img width="447" height="542" alt="image" src="https://github.com/user-attachments/assets/d005e780-96ef-4130-97f7-d192b1629a01" />
+<img width="297" height="411" alt="image" src="https://github.com/user-attachments/assets/95ba25f5-035b-4618-a56b-9920dd7953a4" />
+
 
 
 
