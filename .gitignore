@@ -44,3 +44,6 @@ tmp/
 .coverage
 htmlcov/
 debug/
+
+# My things
+handle64.exe

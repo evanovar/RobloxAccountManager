@@ -15,6 +15,9 @@ import msvcrt
 import ctypes
 import webbrowser
 import time
+import re
+import win32event
+import win32api
 from datetime import datetime
 
 # almost 4k lines of code
@@ -353,7 +356,6 @@ class AccountManagerUI:
                 latest_release = response.json()
                 latest_version = latest_release.get("tag_name", "").lstrip("v")
                 
-                import re
                 current_clean = re.sub(r'(alpha|beta).*$', '', self.APP_VERSION, flags=re.IGNORECASE)
                 latest_clean = re.sub(r'(alpha|beta).*$', '', latest_version, flags=re.IGNORECASE)
                 
@@ -2182,54 +2184,109 @@ class AccountManagerUI:
             command=job_id_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
+    def _close_roblox_handles(self, handle_path):
+        """Close ROBLOX_singletonEvent handles for all running Roblox processes using handle64.exe"""
+        # thx multiblox
+        try:
+            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            if not (result.stdout and 'RobloxPlayerBeta.exe' in result.stdout):
+                return True
+            
+            pids = []
+            for line in result.stdout.split('\n'):
+                match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
+                if match:
+                    pids.append(match.group(1))
+            
+            for pid in pids:
+                try:
+                    cmd = f'"{handle_path}" -accepteula -p {pid} -a'
+                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        stdin=subprocess.DEVNULL, text=True, shell=True, timeout=5)
+                    
+                    for line in proc.stdout.splitlines():
+                        if "ROBLOX_singletonEvent" in line:
+                            m = re.search(r'([0-9A-F]+):\s.*ROBLOX_singletonEvent', line, re.IGNORECASE)
+                            if m:
+                                handle_id = m.group(1)
+                                close_cmd = f'"{handle_path}" -accepteula -p {pid} -c {handle_id} -y'
+                                subprocess.run(close_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            stdin=subprocess.DEVNULL, shell=True, timeout=5)
+                                print(f"[INFO] Closed ROBLOX_singletonEvent handle for PID:{pid}")
+                                break
+                except Exception as e:
+                    print(f"[WARNING] Could not close handle for PID:{pid} - {str(e)}")
+            
+            return True
+        except Exception as e:
+            print(f"[WARNING] Error closing handles: {str(e)}")
+            return False
+
+    def _find_handle64_exe(self):
+        """Find handle64.exe in same directory as executable or in 'tools' subfolder"""
+        try:
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            handle_path = os.path.join(base_dir, 'handle64.exe')
+            if os.path.exists(handle_path):
+                return handle_path
+            
+            handle_path = os.path.join(base_dir, 'tools', 'handle64.exe')
+            if os.path.exists(handle_path):
+                return handle_path
+            
+            return None
+        except Exception as e:
+            print(f"[WARNING] Error finding handle64.exe: {str(e)}")
+            return None
+
     def enable_multi_roblox(self):
         """Enable Multi Roblox + 773 fix"""
-        # hello programmers! I know you're reading this code, because you want to know how did I implement this feature in Python. (and most importantly, the 773 fix)
-        # because of that, I'll leave some comments here to help you understand.
-        import subprocess
-        import win32event
-        import win32api
         
         if self.multi_roblox_handle is not None:
             self.disable_multi_roblox()
         
-        # first, we check if roblox is running, this is very important.
-        # if roblox is running, we cannot enable multi roblox, because the mutex is already created by the running instance.
-        # so we ask the user for permission to close all roblox processes.
         try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW) # checks running processes
+            handle64_path = self._find_handle64_exe()
             
-            if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
-                response = messagebox.askquestion( # ask user for permission
-                    "Roblox Already Running",
-                    "A Roblox instance is already running.\n\n"
-                    "To use Multi Roblox, you need to close all Roblox instances first.\n\n"
-                    "Do you want to close all Roblox instances now?",
-                    icon='warning'
-                )
+            if handle64_path:
+                print("[INFO] handle64.exe found. Using advanced multi-roblox mode.")
+                if not self._close_roblox_handles(handle64_path):
+                    print("[WARNING] Failed to close some handles, attempting fallback.")
+                    time.sleep(2)
+            else:
+                print("[INFO] handle64.exe not found. Using simple multi-roblox mode.")
+                result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
+                                      capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
                 
-                if response == 'yes':
-                    subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
-                                 capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW) # closes roblox
-                    time.sleep(1) # wait a second to ensure all processes are closed
-                    messagebox.showinfo("Success", "All Roblox instances have been closed.")
-                else:
-                    return False
+                if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
+                    response = messagebox.askquestion(
+                        "Roblox Already Running",
+                        "A Roblox instance is already running.\n\n"
+                        "To use Multi Roblox, you need to close all instances first.\n\n"
+                        "Do you want to close all Roblox instances now?",
+                        icon='warning'
+                    )
+                    
+                    if response == 'yes':
+                        subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
+                                     capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                        time.sleep(1)
+                        messagebox.showinfo("Success", "All Roblox instances have been closed.")
+                    else:
+                        return False
             
-            # then here's the magic:
-            # to enable multi roblox, we create the mutex before roblox creates it.
-            # this means, when roblox starts, it cannot be created by roblox again.
-            # thus, allowing multiple instances to run. Simple, right? (doesn't fix 773 yet)
             mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
             print("[INFO] Multi Roblox activated.")
             
-            # check if mutex already existed (GetLastError returns ERROR_ALREADY_EXISTS = 183)
             if win32api.GetLastError() == 183:
-                print("[WARNING] Mutex already exists. Taking ownership...")
+                print("[INFO] Mutex already exists. Took ownership.")
             
-            # now let's get over on the 773 fix part
-            # first, we need to find the RobloxCookies.dat file
             cookies_path = os.path.join(
                 os.getenv('LOCALAPPDATA'),
                 r'Roblox\LocalStorage\RobloxCookies.dat'
@@ -2238,18 +2295,13 @@ class AccountManagerUI:
             cookie_file = None
             if os.path.exists(cookies_path):
                 try:
-                    # to actually apply the 773 fix, we need to lock the cookies file
-                    # this prevents roblox from accessing it, which causes error 773 to not appear
-                    # and there, you have it, multi roblox + 773 fix!
                     cookie_file = open(cookies_path, 'r+b')
                     msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
                     print("[INFO] Error 773 fix applied.")
-
                 except OSError:
-                    print("[ERROR] Could not lock RobloxCookies.dat. It may already be locked.")
-
+                    print("[WARNING] Could not lock RobloxCookies.dat. It may already be locked.")
             else:
-                print("[ERROR] Cookies file not found. 773 fix skipped.")
+                print("[INFO] Cookies file not found. 773 fix skipped.")
 
             self.multi_roblox_handle = {'mutex': mutex, 'file': cookie_file}
             return True
@@ -2280,8 +2332,6 @@ class AccountManagerUI:
                 
                 if self.multi_roblox_handle.get('mutex'):
                     try:
-                        import win32event
-                        import win32api
                         mutex_handle = self.multi_roblox_handle['mutex']
                         win32event.ReleaseMutex(mutex_handle)
                         win32api.CloseHandle(mutex_handle)
@@ -2522,7 +2572,6 @@ class AccountManagerUI:
         )
         close_button.pack(fill="x", pady=(5, 5))
         
-        import re
         is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
         version_text = f"Version: {self.APP_VERSION}"
         if is_unstable:
@@ -2967,7 +3016,6 @@ class AccountManagerUI:
             font=("Segoe UI", 14, "bold")
         ).pack(anchor="center", pady=(10, 5))
         
-        import re
         is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
         version_text = f"Version {self.APP_VERSION}"
         
