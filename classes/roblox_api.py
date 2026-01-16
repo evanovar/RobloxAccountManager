@@ -332,7 +332,7 @@ class RobloxAPI:
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
             "+launchtime:" + str(launch_time) +
-            "+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame" +
+            "+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob" +
             "&browserTrackerId=" + str(browser_tracker_id) +
             "&placeId=" + str(game_id) +
             "&isPlayTogetherGame=false"
@@ -341,7 +341,7 @@ class RobloxAPI:
         if private_server_code:
             url += "&linkCode=" + private_server_code
         elif job_id:
-            url += "&gameInstanceId=" + str(job_id)
+            url += "&gameId=" + str(job_id)
 
         url += (
             "+browsertrackerid:" + str(browser_tracker_id) +
