@@ -32,7 +32,7 @@ class AccountManagerUI:
     def __init__(self, root, manager):
         self.root = root
         self.manager = manager
-        self.APP_VERSION = "2.3.7"
+        self.APP_VERSION = "2.3.8"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
@@ -380,18 +380,236 @@ class AccountManagerUI:
             print(f"[Update Checker] Error checking for updates: {str(e)}")
 
     def show_update_notification(self, latest_version):
-        """Show update notification dialog"""
-        result = messagebox.askyesno(
-            "Update Available",
-            f"A new version is available!\n\n"
-            f"Current version: {self.APP_VERSION}\n"
-            f"Latest version: {latest_version}\n\n"
-            f"Would you like to download the latest version?",
-            icon="info"
-        )
+        """Show update notification dialog with download options"""
+        update_window = tk.Toplevel(self.root)
+        update_window.title("Update Available")
+        update_window.geometry("450x280")
+        update_window.configure(bg=self.BG_DARK)
+        update_window.resizable(False, False)
+        update_window.transient(self.root)
         
-        if result:
+        if self.settings.get("enable_topmost", False):
+            update_window.attributes("-topmost", True)
+        
+        update_window.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (update_window.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (update_window.winfo_height() // 2)
+        update_window.geometry(f"+{x}+{y}")
+        
+        container = ttk.Frame(update_window, style="Dark.TFrame")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ttk.Label(
+            container,
+            text="🎉 New Update Available!",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 12, "bold")
+        ).pack(anchor="w", pady=(0, 15))
+        
+        info_frame = ttk.Frame(container, style="Dark.TFrame", relief="solid", borderwidth=0)
+        info_frame.pack(fill="x", pady=(0, 15))
+        
+        info_inner = ttk.Frame(info_frame, style="Dark.TFrame")
+        info_inner.pack(fill="x", padx=15, pady=12)
+        
+        ttk.Label(
+            info_inner,
+            text=f"Current Version: {self.APP_VERSION}",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        ).pack(fill="x")
+        
+        ttk.Label(
+            info_inner,
+            text=f"Latest Version: {latest_version}",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9, "bold")
+        ).pack(fill="x", pady=(5, 0))
+        
+        progress_outer = tk.Frame(container, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
+        progress_outer.pack(fill="x", pady=(0, 10))
+        
+        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
+        progress_inner.pack(fill="x", padx=1, pady=1)
+        progress_inner.pack_propagate(False)
+        
+        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
+        progress_fill.place(x=0, y=0, relheight=1)
+        
+        progress_label = tk.Label(
+            progress_inner,
+            text="0%",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 9, "bold")
+        )
+        progress_label.place(relx=0.5, rely=0.5, anchor="center")
+        
+        status_label = ttk.Label(
+            container,
+            text="Choose how to update:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        )
+        status_label.pack(anchor="w", pady=(5, 8))
+        
+        btn_frame = ttk.Frame(container, style="Dark.TFrame")
+        btn_frame.pack(side="bottom", fill="x")
+        
+        def update_progress(percent):
+            """Update the custom progress bar"""
+            progress_inner.update_idletasks()
+            total_width = progress_inner.winfo_width()
+            fill_width = int((percent / 100) * total_width)
+            progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
+            
+            label_x = total_width // 2
+            if fill_width >= label_x:
+                progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
+            else:
+                progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
+            
+            progress_label.config(text=f"{int(percent)}%")
+            update_window.update()
+        
+        def download_update():
+            """Download and replace current executable using batch script"""
+            try:
+                auto_btn.config(state="disabled")
+                manual_btn.config(state="disabled")
+                close_btn.config(state="disabled")
+                
+                status_label.config(text="Downloading update...")
+                update_progress(0)
+                
+                response = requests.get(
+                    "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
+                    timeout=10
+                )
+                
+                if response.status_code != 200:
+                    raise Exception("Failed to fetch release information")
+                
+                release_data = response.json()
+                assets = release_data.get("assets", [])
+                
+                exe_asset = None
+                for asset in assets:
+                    if asset["name"].endswith(".exe"):
+                        exe_asset = asset
+                        break
+                
+                if not exe_asset:
+                    raise Exception("No .exe file found in release")
+                
+                download_url = exe_asset["browser_download_url"]
+                file_name = exe_asset["name"]
+                
+                current_exe = sys.executable
+                if current_exe.lower().endswith("python.exe") or current_exe.lower().endswith("pythonw.exe"):
+                    current_exe = os.path.abspath(sys.argv[0])
+                
+                temp_dir = tempfile.gettempdir()
+                temp_file = os.path.join(temp_dir, file_name)
+                
+                status_label.config(text=f"Downloading {file_name}...")
+                
+                response = requests.get(download_url, stream=True, timeout=30)
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                
+                with open(temp_file, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = (downloaded / total_size) * 100
+                                update_progress(progress)
+                
+                update_progress(100)
+                status_label.config(text="Preparing update...")
+                update_window.update()
+                
+                batch_file = os.path.join(temp_dir, "ram_update.bat")
+                batch_content = f'''@echo off
+setlocal enabledelayedexpansion
+
+if not exist "{temp_file}" (
+    exit /b 1
+)
+
+for /F %%A in ('dir /b "{temp_file}"') do set size=%%~zA
+if !size! LSS 1000000 (
+    exit /b 1
+)
+
+:wait_loop
+copy /Y "{temp_file}" "{current_exe}" >nul 2>&1
+if errorlevel 1 (
+    timeout /t 0 /nobreak >nul
+    goto wait_loop
+)
+
+if exist "{temp_file}" del /f /q "{temp_file}"
+
+del /f /q "%~f0"
+'''
+                with open(batch_file, 'w') as f:
+                    f.write(batch_content)
+                
+                status_label.config(text="Update complete! Please relaunch.")
+                update_window.update()
+                
+                messagebox.showinfo(
+                    "Update Complete",
+                    "Update has been installed successfully!\n\nPlease close this window and wait a second before launching the application again.",
+                    parent=update_window
+                )
+                
+                subprocess.Popen([batch_file], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.root.quit()
+                
+            except Exception as e:
+                status_label.config(text="Download failed. Try manual update.")
+                update_progress(0)
+                messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to update:\n{str(e)}\n\nPlease use Manual Update instead.",
+                    parent=update_window
+                )
+                auto_btn.config(state="normal")
+                manual_btn.config(state="normal")
+                close_btn.config(state="normal")
+        
+        def manual_update():
+            """Open GitHub releases page"""
             webbrowser.open("https://github.com/evanovar/RobloxAccountManager/releases/latest")
+            update_window.destroy()
+        
+        auto_btn = ttk.Button(
+            btn_frame,
+            text="Auto Update",
+            style="Dark.TButton",
+            command=download_update
+        )
+        auto_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        manual_btn = ttk.Button(
+            btn_frame,
+            text="Manual Update",
+            style="Dark.TButton",
+            command=manual_update
+        )
+        manual_btn.pack(side="left", fill="x", expand=True, padx=(2.5, 2.5))
+        
+        close_btn = ttk.Button(
+            btn_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=update_window.destroy
+        )
+        close_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
     def toggle_add_account_dropdown(self):
         """Toggle the Add Account dropdown menu"""
