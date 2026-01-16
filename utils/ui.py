@@ -4096,12 +4096,24 @@ del /f /q "%~f0"
                 in_game = presence.get('in_game', False)
                 place_id = presence.get('place_id')
                 
-                if in_game and place_id == int(expected_place_id):
-                    return True, place_id, presence.get('game_id')
+                print(f"[Auto-Rejoin] Presence check - in_game: {in_game}, place_id: {place_id}, expected: {expected_place_id}")
+                
+                if in_game:
+                    try:
+                        if int(place_id) == int(expected_place_id):
+                            print(f"[Auto-Rejoin] Player is in correct game")
+                            return True, place_id, presence.get('game_id')
+                    except (ValueError, TypeError):
+                        pass
+                
+                print(f"[Auto-Rejoin] Player NOT in game or wrong place_id")
+            else:
+                print(f"[Auto-Rejoin] Presence API returned None")
             
             return False, None, None
         except Exception as e:
             print(f"[Auto-Rejoin] Error checking player status: {e}")
+            traceback.print_exc()
             return False, None, None
     
     def auto_rejoin_worker_for_account(self, account):
