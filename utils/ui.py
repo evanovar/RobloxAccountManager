@@ -25,6 +25,7 @@ import tempfile
 import shutil
 import platform
 import traceback
+import psutil
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 
@@ -70,6 +71,9 @@ class AccountManagerUI:
         self.root.resizable(False, False)
         
         self.multi_roblox_handle = None
+        self.handle64_monitoring = False
+        self.handle64_monitor_thread = None
+        self.handle64_path = None
         
         self.anti_afk_thread = None
         self.anti_afk_stop_event = threading.Event()
@@ -2461,6 +2465,69 @@ del /f /q "%~f0"
             print(f"[WARNING] Error closing handles: {str(e)}")
             return False
 
+    def _handle64_monitor_thread(self):
+        target = "robloxplayerbeta.exe"
+        known = set()
+        
+        while self.handle64_monitoring and self.handle64_path:
+            try:
+                current = {
+                    p.info["pid"]
+                    for p in psutil.process_iter(["pid", "name"])
+                    if p.info["name"] and p.info["name"].lower() == target
+                }
+                new = current - known
+                if new:
+                    threading.Thread(target=self._handle64_close_handles, args=(list(new),), daemon=True).start()
+                    known |= new
+                    for pid in new:
+                        print(f"[INFO] Roblox process created PID:{pid}")
+                
+                known -= (known - current)
+                
+                time.sleep(0.4)
+                    
+            except Exception as e:
+                print(f"[WARNING] Handle64 monitor error: {str(e)}")
+                time.sleep(1.0)
+
+    def _handle64_close_handles(self, new_pids):
+        """Closes ROBLOX_singletonEvent handles for the given PIDs using handle64.exe"""
+        HANDLE = self.handle64_path
+        
+        for pid in new_pids:
+            handle_value = None
+            handle_found = False
+            try:
+                for attempt in range(5):
+                    cmd = f'"{HANDLE}" -accepteula -p {pid} -a'
+                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        stdin=subprocess.DEVNULL, text=True, shell=True)
+                    lines = proc.stdout.splitlines()
+                    for line in lines:
+                        if "ROBLOX_singletonEvent" in line:
+                            m = re.search(r"([0-9A-F]+):.*ROBLOX_singletonEvent", line, re.IGNORECASE)
+                            if m:
+                                handle_value = m.group(1)
+                                break
+                            else:
+                                possible = re.findall(r"\b[0-9A-F]{4,}\b", line)
+                                if possible:
+                                    handle_value = possible[0]
+                                    break
+                    if handle_value:
+                        handle_found = True
+                        break
+                    time.sleep(1)
+                if not handle_value:
+                    print(f"[FAILED] Handle not closed for PID:{pid}")
+                if handle_found:
+                    subprocess.run(f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, shell=True)
+                    print(f"[SUCCESS] Closed handle event for PID:{pid}")
+            except Exception:
+                print(f"[FAILED] Handle not closed for PID:{pid}")
+
     def _download_handle64_exe(self, local_path):
         """Download handle64.exe from Sysinternals and extract it"""
         try:
@@ -2487,21 +2554,25 @@ del /f /q "%~f0"
         try:
             handle_path = os.path.join(self.data_folder, 'handle64.exe')
             if os.path.exists(handle_path):
+                print(f"[INFO] Found handle64.exe at: {handle_path}")
                 return handle_path
             
             if getattr(sys, 'frozen', False):
                 base_dir = os.path.dirname(sys.executable)
             else:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             
             handle_path = os.path.join(base_dir, 'handle64.exe')
             if os.path.exists(handle_path):
+                print(f"[INFO] Found handle64.exe at: {handle_path}")
                 return handle_path
             
-            handle_path = os.path.join(base_dir, 'tools', 'handle64.exe')
+            handle_path = os.path.join(base_dir, 'handle', 'handle64.exe')
             if os.path.exists(handle_path):
+                print(f"[INFO] Found handle64.exe at: {handle_path}")
                 return handle_path
             
+            print(f"[WARNING] handle64.exe not found in: {self.data_folder}, {base_dir}, or {os.path.join(base_dir, 'handle')}")
             return None
         except Exception as e:
             print(f"[WARNING] Error finding handle64.exe: {str(e)}")
@@ -2518,15 +2589,41 @@ del /f /q "%~f0"
             use_handle64 = selected_method == "handle64"
             
             if use_handle64:
-                handle64_path = self._find_handle64_exe()
-                if handle64_path:
-                    print("[INFO] handle64.exe found. Using advanced multi-roblox mode.")
-                    if not self._close_roblox_handles(handle64_path):
-                        print("[WARNING] Failed to close some handles, attempting fallback.")
-                        time.sleep(2)
-                else:
-                    print("[INFO] handle64.exe not found. Falling back to default method.")
+                # Check for admin permissions
+                try:
+                    is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                except:
+                    is_admin = False
+                
+                if not is_admin:
+                    print("[WARNING] Not running as admin! Switching to default method.")
+                    messagebox.showwarning(
+                        "Admin Required",
+                        "handle64 mode requires administrator privileges to close handles.\n\n"
+                        "The app is NOT running as admin.\n\n"
+                        "Switching to Default method instead."
+                    )
+                    # Switch to default method
+                    self.settings["multi_roblox_method"] = "default"
+                    self.save_settings()
                     use_handle64 = False
+                
+                if use_handle64:
+                    handle64_path = self._find_handle64_exe()
+                    if handle64_path:
+                        print("[INFO] handle64.exe found. Using advanced multi-roblox mode.")
+                        self.handle64_path = handle64_path
+                        
+                        self.handle64_monitoring = True
+                        self.handle64_monitor_thread = threading.Thread(
+                            target=self._handle64_monitor_thread,
+                            daemon=True
+                        )
+                        self.handle64_monitor_thread.start()
+                        print("[INFO] Handle64 monitor started.")
+                    else:
+                        print("[INFO] handle64.exe not found. Falling back to default method.")
+                        use_handle64 = False
             
             if not use_handle64:
                 print("[INFO] Using default multi-roblox mode.")
@@ -2550,11 +2647,15 @@ del /f /q "%~f0"
                     else:
                         return False
             
-            mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
-            print("[INFO] Multi Roblox activated.")
-            
-            if win32api.GetLastError() == 183:
-                print("[INFO] Mutex already exists. Took ownership.")
+            mutex = None
+            if not use_handle64:
+                mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
+                print("[INFO] Multi Roblox activated (mutex mode).")
+                
+                if win32api.GetLastError() == 183:
+                    print("[INFO] Mutex already exists. Took ownership.")
+            else:
+                print("[INFO] Multi Roblox activated (handle64 mode).")
             
             cookies_path = os.path.join(
                 os.getenv('LOCALAPPDATA'),
@@ -2581,6 +2682,14 @@ del /f /q "%~f0"
     def disable_multi_roblox(self):
         """Disable Multi Roblox and release resources"""
         try:
+            if self.handle64_monitoring:
+                self.handle64_monitoring = False
+                if self.handle64_monitor_thread:
+                    self.handle64_monitor_thread.join(timeout=2.0)
+                self.handle64_monitor_thread = None
+                self.handle64_path = None
+                print("[INFO] Handle64 monitor stopped.")
+            
             if self.multi_roblox_handle:
                 if self.multi_roblox_handle.get('file'):
                     try:
@@ -2754,7 +2863,7 @@ del /f /q "%~f0"
             style="Dark.TRadiobutton"
         )
         handle_radio.pack(anchor="w", pady=(0, 15))
-        handle_radio.bind("<Enter>", lambda e: show_tooltip(e, "Uses handle64.exe to close handles.\nAllows multi-roblox with running instances."))
+        handle_radio.bind("<Enter>", lambda e: show_tooltip(e, "Uses handle64.exe to close handles.\nAllows multi-roblox with running instances.\nRequires administrator permission!"))
         handle_radio.bind("<Leave>", hide_tooltip)
         
         status_frame = tk.Frame(
@@ -2827,6 +2936,16 @@ del /f /q "%~f0"
                 )
                 return
             
+            # Check if multi-roblox is currently active
+            was_active = self.multi_roblox_handle is not None
+            
+            # If multi-roblox is active and method changed, restart it
+            if was_active:
+                old_method = self.settings.get("multi_roblox_method", "default")
+                if old_method != selected:
+                    print(f"[INFO] Switching multi-roblox from {old_method} to {selected}")
+                    self.disable_multi_roblox()
+            
             self.settings["multi_roblox_method"] = selected
             try:
                 with open(self.settings_file, 'w') as f:
@@ -2834,7 +2953,17 @@ del /f /q "%~f0"
             except Exception as e:
                 print(f"Failed to save settings: {e}")
             
-            messagebox.showinfo("Success", f"Multi Roblox method set to: {selected.title()}")
+            # Re-enable if it was active
+            if was_active:
+                success = self.enable_multi_roblox()
+                if not success:
+                    messagebox.showerror("Error", "Failed to restart Multi Roblox with new method.")
+                    method_window.destroy()
+                    return
+            
+            # Get the actual method that was applied (may have changed if handle64 switched to default)
+            actual_method = self.settings.get("multi_roblox_method", "default")
+            messagebox.showinfo("Success", f"Multi Roblox method set to: {actual_method.title()}")
             method_window.destroy()
         
         save_btn = ttk.Button(
