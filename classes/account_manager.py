@@ -111,8 +111,9 @@ class RobloxAccountManager:
                 pass
     
     def setup_chrome_driver(self):
-        """Setup Chrome driver with maximum speed optimizations"""
         profile_dir = self.create_temp_profile()
+
+        # this code looks satisfying to me
         
         chrome_options = Options()
         chrome_options.add_argument(f"--user-data-dir={profile_dir}")

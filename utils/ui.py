@@ -81,6 +81,7 @@ class AccountManagerUI:
         self.auto_rejoin_threads = {}
         self.auto_rejoin_stop_events = {}
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
+        self.auto_rejoin_pids = {}
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -4307,7 +4308,21 @@ del /f /q "%~f0"
                     
                     if success:
                         print(f"[Auto-Rejoin] [{account}] Game launched successfully")
-                        time.sleep(10)
+                        time.sleep(2)
+                        try:
+                            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
+                                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                            if result.stdout:
+                                for line in result.stdout.split('\n'):
+                                    match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
+                                    if match:
+                                        pid = int(match.group(1))
+                                        self.auto_rejoin_pids[account] = pid
+                                        print(f"[Auto-Rejoin] [{account}] Tracking new PID: {pid}")
+                                        break
+                        except Exception as e:
+                            print(f"[Auto-Rejoin] [{account}] Error tracking initial PID: {e}")
+                        time.sleep(8)
                     else:
                         retry_count += 1
                         if retry_count >= max_retries:
@@ -4321,12 +4336,50 @@ del /f /q "%~f0"
                 if not in_game:
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count + 1}/{max_retries})")
                     
+                    if account in self.auto_rejoin_pids:
+                        old_pid = self.auto_rejoin_pids[account]
+                        try:
+                            subprocess.run(['taskkill', '/F', '/PID', str(old_pid)], 
+                                         capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                            time.sleep(1)
+                            print(f"[Auto-Rejoin] [{account}] Closed Roblox instance (PID: {old_pid})")
+                        except Exception as e:
+                            print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
+                    
+                    pids_before = set()
+                    try:
+                        result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
+                                              capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                        if result.stdout:
+                            for line in result.stdout.split('\n'):
+                                match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
+                                if match:
+                                    pids_before.add(int(match.group(1)))
+                    except Exception as e:
+                        print(f"[Auto-Rejoin] [{account}] Error getting PIDs before launch: {e}")
+                    
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
                     
                     launcher_pref = self.settings.get("roblox_launcher", "default")
                     success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, rejoin_job_id)
                     
                     if success:
+                        time.sleep(2)
+                        try:
+                            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
+                                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+                            if result.stdout:
+                                for line in result.stdout.split('\n'):
+                                    match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
+                                    if match:
+                                        pid = int(match.group(1))
+                                        if pid not in pids_before:
+                                            self.auto_rejoin_pids[account] = pid
+                                            print(f"[Auto-Rejoin] [{account}] Tracking new PID: {pid}")
+                                            break
+                        except Exception as e:
+                            print(f"[Auto-Rejoin] [{account}] Error tracking new PID: {e}")
+                        
                         retry_count = 0
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
                         time.sleep(5)
