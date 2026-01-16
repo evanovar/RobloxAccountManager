@@ -29,9 +29,10 @@ from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 
 class AccountManagerUI:
-    def __init__(self, root, manager):
+    def __init__(self, root, manager, icon_path=None):
         self.root = root
         self.manager = manager
+        self.icon_path = icon_path
         self.APP_VERSION = "2.3.8"
         self._game_name_after_id = None
         self._save_settings_timer = None
@@ -349,6 +350,13 @@ class AccountManagerUI:
         if self.settings.get("enable_multi_roblox", False):
             self.root.after(100, self.initialize_multi_roblox)
 
+    def apply_window_icon(self, window):
+        if self.icon_path and os.path.exists(self.icon_path):
+            try:
+                window.iconbitmap(self.icon_path)
+            except Exception as e:
+                print(f"Could not set window icon: {e}")
+
     def check_for_updates(self):
         """Check for updates from GitHub releases"""
         try:
@@ -382,6 +390,7 @@ class AccountManagerUI:
     def show_update_notification(self, latest_version):
         """Show update notification dialog with download options"""
         update_window = tk.Toplevel(self.root)
+        self.apply_window_icon(update_window)
         update_window.title("Update Available")
         update_window.geometry("450x280")
         update_window.configure(bg=self.BG_DARK)
@@ -1232,6 +1241,7 @@ del /f /q "%~f0"
         Import an account using a .ROBLOSECURITY cookie
         """
         import_window = tk.Toplevel(self.root)
+        self.apply_window_icon(import_window)
         import_window.title("Import Cookie")
         import_window.geometry("450x250")
         import_window.configure(bg=self.BG_DARK)
@@ -1322,6 +1332,7 @@ del /f /q "%~f0"
         Launch multiple Chrome instances with custom Javascript execution
         """
         amount_window = tk.Toplevel(self.root)
+        self.apply_window_icon(amount_window)
         amount_window.title("Javascript Import - Amount")
         amount_window.geometry("350x150")
         amount_window.configure(bg=self.BG_DARK)
@@ -1390,6 +1401,7 @@ del /f /q "%~f0"
         Get website URL for Javascript import
         """
         website_window = tk.Toplevel(self.root)
+        self.apply_window_icon(website_window)
         website_window.title("Javascript Import - Website")
         website_window.geometry("450x150")
         website_window.configure(bg=self.BG_DARK)
@@ -1458,6 +1470,7 @@ del /f /q "%~f0"
         Get Javascript code to execute and launch Chrome instances
         """
         js_window = tk.Toplevel(self.root)
+        self.apply_window_icon(js_window)
         js_window.title("Javascript Import - Code")
         js_window.geometry("500x300")
         js_window.configure(bg=self.BG_DARK)
@@ -1622,6 +1635,7 @@ del /f /q "%~f0"
             title_text = f"Edit Note - {username}"
         
         note_window = tk.Toplevel(self.root)
+        self.apply_window_icon(note_window)
         note_window.title(title_text)
         note_window.geometry("450x220")
         note_window.configure(bg=self.BG_DARK)
@@ -1807,6 +1821,7 @@ del /f /q "%~f0"
     def open_auto_rejoin(self):
         """Open the auto-rejoin management window (like favorites window)"""
         auto_rejoin_window = tk.Toplevel(self.root)
+        self.apply_window_icon(auto_rejoin_window)
         auto_rejoin_window.title("Auto-Rejoin")
         auto_rejoin_window.configure(bg=self.BG_DARK)
         auto_rejoin_window.resizable(False, False)
@@ -1870,6 +1885,7 @@ del /f /q "%~f0"
         def add_auto_rejoin():
             """Open dialog to add a new auto-rejoin account"""
             add_window = tk.Toplevel(auto_rejoin_window)
+            self.apply_window_icon(add_window)
             add_window.title("Add Auto-Rejoin")
             add_window.configure(bg=self.BG_DARK)
             add_window.resizable(False, False)
@@ -1969,6 +1985,7 @@ del /f /q "%~f0"
             config = self.auto_rejoin_configs[account]
             
             edit_window = tk.Toplevel(auto_rejoin_window)
+            self.apply_window_icon(edit_window)
             edit_window.title("Edit Auto-Rejoin")
             edit_window.configure(bg=self.BG_DARK)
             edit_window.resizable(False, False)
@@ -2140,6 +2157,7 @@ del /f /q "%~f0"
             usernames = [username]
         
         join_window = tk.Toplevel(self.root)
+        self.apply_window_icon(join_window)
         join_window.title("Join User")
         join_window.geometry("450x220")
         join_window.configure(bg=self.BG_DARK)
@@ -2306,6 +2324,7 @@ del /f /q "%~f0"
             usernames = [username]
         
         job_id_window = tk.Toplevel(self.root)
+        self.apply_window_icon(job_id_window)
         job_id_window.title("Join by Job-ID")
         job_id_window.geometry("450x220")
         job_id_window.configure(bg=self.BG_DARK)
@@ -2405,7 +2424,6 @@ del /f /q "%~f0"
 
     def _close_roblox_handles(self, handle_path):
         """Close ROBLOX_singletonEvent handles for all running Roblox processes using handle64.exe"""
-        # thx multiblox
         try:
             result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
                                   capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
@@ -2604,6 +2622,7 @@ del /f /q "%~f0"
     def open_multi_roblox_method_settings(self):
         """Open Multi Roblox method selection window"""
         method_window = tk.Toplevel(self.root)
+        self.apply_window_icon(method_window)
         method_window.title("Multi Roblox Method Settings")
         method_window.geometry("400x320")
         method_window.configure(bg=self.BG_DARK)
@@ -2844,6 +2863,7 @@ del /f /q "%~f0"
             return
         
         settings_window = tk.Toplevel(self.root)
+        self.apply_window_icon(settings_window)
         self.settings_window = settings_window
         settings_window.title("Settings")
         settings_window.configure(bg=self.BG_DARK)
@@ -3610,6 +3630,7 @@ del /f /q "%~f0"
             return
         
         self.console_window = tk.Toplevel(self.root)
+        self.apply_window_icon(self.console_window)
         self.console_window.title("Console Output")
         self.console_window.geometry("700x500")
         self.console_window.configure(bg=self.BG_DARK)
@@ -3708,6 +3729,7 @@ del /f /q "%~f0"
     def open_favorites_window(self):
         """Open the favorites management window"""
         favorites_window = tk.Toplevel(self.root)
+        self.apply_window_icon(favorites_window)
         favorites_window.title("Favorite Games")
         favorites_window.configure(bg=self.BG_DARK)
         favorites_window.resizable(False, False)
@@ -3800,6 +3822,7 @@ del /f /q "%~f0"
         def add_favorite():
             """Open dialog to add a new favorite"""
             add_window = tk.Toplevel(favorites_window)
+            self.apply_window_icon(add_window)
             add_window.title("Add Favorite")
             add_window.configure(bg=self.BG_DARK)
             add_window.resizable(False, False)

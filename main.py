@@ -2,14 +2,15 @@
 Roblox Account Manager
 Main entry point for the application
 """
-# hello guys! Do you wanna know how does the Multi Instance work?
-# check out utils/ui.py, enable_multi_roblox function. Have a nice day!
-# if you find it helpful, consider starring the repo!
+
+# if you find this tool helpful, consider starring the repo!
 
 import os
 import warnings
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+import requests
+import threading
 
 warnings.filterwarnings("ignore")
 
@@ -19,6 +20,51 @@ from utils.encryption_setup import setup_encryption
 from utils.ui import AccountManagerUI
 
 
+def setup_icon(data_folder):
+    icon_path = os.path.join(data_folder, "icon.ico")
+    
+    if os.path.exists(icon_path):
+        return icon_path
+    
+    try:
+        print("Downloading application icon...")
+        icon_url = "https://github.com/evanovar/RobloxAccountManager/raw/main/icon.ico"
+        response = requests.get(icon_url, timeout=5)
+        
+        if response.status_code == 200:
+            with open(icon_path, 'wb') as f:
+                f.write(response.content)
+                print("Icon downloaded successfully.")
+            return icon_path
+        else:
+            print(f"Failed to download icon: HTTP {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Error downloading icon: {e}")
+        return None
+
+
+def apply_icon_to_window(window, icon_path):
+    if icon_path and os.path.exists(icon_path):
+        try:
+            window.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Could not set window icon: {e}")
+
+
+def apply_icon_async(root, data_folder):
+    def download_and_apply():
+        icon_path = setup_icon(data_folder)
+        if icon_path:
+            apply_icon_to_window(root, icon_path)
+    
+    thread = threading.Thread(target=download_and_apply, daemon=True)
+    thread.start()
+    
+    icon_path = os.path.join(data_folder, "icon.ico")
+    return icon_path if os.path.exists(icon_path) else None
+
+
 def main():
     """Main application entry point"""
     password = setup_encryption()
@@ -26,7 +72,7 @@ def main():
     data_folder = "AccountManagerData"
     if not os.path.exists(data_folder):
         os.makedirs(data_folder)
-    
+        
     encryption_config = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
     
     if encryption_config.is_encryption_enabled() and encryption_config.get_encryption_method() == 'password':
@@ -50,7 +96,10 @@ def main():
         return
     
     root = tk.Tk()
-    app = AccountManagerUI(root, manager)
+    
+    icon_path = apply_icon_async(root, data_folder)
+    app = AccountManagerUI(root, manager, icon_path=icon_path)
+    
     root.mainloop()
 
 
