@@ -109,7 +109,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is open source and available under the [GPL 3.0 License](LICENSE).
 
-## � Support
+## 📞 Support
 
 Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJXyEhgY)** where the community and developers can assist you!
 
