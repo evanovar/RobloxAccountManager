@@ -34,7 +34,7 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.icon_path = icon_path
-        self.APP_VERSION = "2.3.8"
+        self.APP_VERSION = "2.3.9"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
@@ -2936,10 +2936,8 @@ del /f /q "%~f0"
                 )
                 return
             
-            # Check if multi-roblox is currently active
             was_active = self.multi_roblox_handle is not None
             
-            # If multi-roblox is active and method changed, restart it
             if was_active:
                 old_method = self.settings.get("multi_roblox_method", "default")
                 if old_method != selected:
@@ -2953,7 +2951,6 @@ del /f /q "%~f0"
             except Exception as e:
                 print(f"Failed to save settings: {e}")
             
-            # Re-enable if it was active
             if was_active:
                 success = self.enable_multi_roblox()
                 if not success:
@@ -2961,7 +2958,6 @@ del /f /q "%~f0"
                     method_window.destroy()
                     return
             
-            # Get the actual method that was applied (may have changed if handle64 switched to default)
             actual_method = self.settings.get("multi_roblox_method", "default")
             messagebox.showinfo("Success", f"Multi Roblox method set to: {actual_method.title()}")
             method_window.destroy()
