@@ -296,6 +296,42 @@ class RobloxAPI:
             return None
     
     @staticmethod
+    def get_smallest_server(place_id):
+        """Get the game server with the smallest player count for a given place ID"""
+        try:
+            url = f"https://games.roblox.com/v1/games/{place_id}/servers/Public?sortOrder=Asc&limit=100"
+            headers = {
+                "User-Agent": "Roblox/WinInet"
+            }
+            
+            response = requests.get(url, headers=headers, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                servers = data.get('data', [])
+                
+                if servers:
+                    available_servers = [s for s in servers if s.get('playing', 0) < s.get('maxPlayers', 100)]
+                    
+                    if available_servers:
+                        smallest = min(available_servers, key=lambda x: x.get('playing', 0))
+                        return smallest.get('id')
+                    else:
+                        smallest = min(servers, key=lambda x: x.get('playing', 0))
+                        return smallest.get('id')
+                else:
+                    print("[WARNING] No servers found for place")
+                    return None
+            else:
+                print(f"[ERROR] Failed to get servers: HTTP {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to get smallest server: {e}")
+            return None
+    
+    
+    @staticmethod
     def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id=""):
         """Launch Roblox game with specified account"""
 

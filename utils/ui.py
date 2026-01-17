@@ -864,6 +864,22 @@ del /f /q "%~f0"
         )
         job_id_btn.pack(fill="x", padx=2, pady=1)
         
+        small_server_btn = tk.Button(
+            self.join_place_dropdown,
+            text="Small Server",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=lambda: [self.hide_join_place_dropdown(), self.join_small_server()]
+        )
+        small_server_btn.pack(fill="x", padx=2, pady=1)
+        
         self.position_join_place_dropdown()
         
         if self.settings.get("enable_topmost", False):
@@ -2454,6 +2470,77 @@ del /f /q "%~f0"
             command=job_id_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
+    def join_small_server(self):
+        """Join the smallest available server for a given place ID"""
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+        
+        place_id = self.place_entry.get().strip()
+        if not place_id:
+            messagebox.showwarning("Missing Information", "Please enter a Place ID first.")
+            return
+        
+        try:
+            int(place_id)
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
+            return
+        
+        def worker(selected_usernames, pid):
+            print(f"[INFO] Searching for smallest server in place {pid}...")
+            game_id = RobloxAPI.get_smallest_server(pid)
+            
+            if not game_id:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error",
+                    f"Could not find any available servers for place {pid}.\n\nPlease try again later or check the Place ID."
+                ))
+                return
+            
+            print(f"[SUCCESS] Found smallest server: {game_id}")
+            
+            launcher_pref = self.settings.get("roblox_launcher", "default")
+            success_count = 0
+            
+            for uname in selected_usernames:
+                try:
+                    if self.manager.launch_roblox(uname, pid, "", launcher_pref, game_id):
+                        success_count += 1
+                except Exception as e:
+                    print(f"Failed to launch game for {uname}: {e}")
+            
+            def on_done():
+                if success_count > 0:
+                    game_name = RobloxAPI.get_game_name(pid)
+                    if game_name:
+                        self.add_game_to_list(pid, game_name, "")
+                    else:
+                        self.add_game_to_list(pid, f"Place {pid}", "")
+                    
+                    if len(selected_usernames) == 1:
+                        messagebox.showinfo(
+                            "Success",
+                            f"Joining smallest server! Check your desktop."
+                        )
+                    else:
+                        messagebox.showinfo(
+                            "Success",
+                            f"Joining smallest server with {success_count} account(s)! Check your desktop."
+                        )
+                else:
+                    messagebox.showerror("Error", "Failed to launch Roblox.")
+            
+            self.root.after(0, on_done)
+        
+        threading.Thread(target=worker, args=(usernames, place_id), daemon=True).start()
+
     def _close_roblox_handles(self, handle_path):
         """Close ROBLOX_singletonEvent handles for all running Roblox processes using handle64.exe"""
         try:
@@ -2617,7 +2704,6 @@ del /f /q "%~f0"
             use_handle64 = selected_method == "handle64"
             
             if use_handle64:
-                # Check for admin permissions
                 try:
                     is_admin = ctypes.windll.shell32.IsUserAnAdmin()
                 except:
@@ -2631,7 +2717,6 @@ del /f /q "%~f0"
                         "The app is NOT running as admin.\n\n"
                         "Switching to Default method instead."
                     )
-                    # Switch to default method
                     self.settings["multi_roblox_method"] = "default"
                     self.save_settings()
                     use_handle64 = False
@@ -3901,7 +3986,6 @@ del /f /q "%~f0"
                     if self.manager.verify_password(password):
                         password_window.destroy()
                         settings_window.destroy()
-                        # Save current accounts, call encryption setup, then re-encrypt
                         self._run_encryption_switch()
                     else:
                         messagebox.showerror("Invalid Password", "Password is incorrect.")
@@ -4030,7 +4114,6 @@ del /f /q "%~f0"
         )
         self.console_text_widget.pack(side="left", fill="both", expand=True)
         
-        # Configure color tags for console keywords
         self.console_text_widget.tag_configure("success", foreground="#00FF00")
         self.console_text_widget.tag_configure("error", foreground="#FF0000")
         self.console_text_widget.tag_configure("info", foreground="#0078D7")
@@ -4590,7 +4673,6 @@ del /f /q "%~f0"
                     in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
                     disconnect_detected = not in_game
                 else:
-                    # Only check if Roblox process is still running (disconnected)
                     disconnect_detected = not self.is_roblox_running() or not self._check_roblox_process_exists(account)
                     game_id = ''
                 

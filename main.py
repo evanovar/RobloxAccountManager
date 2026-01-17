@@ -49,7 +49,7 @@ def apply_icon_to_window(window, icon_path):
         try:
             window.iconbitmap(icon_path)
         except Exception as e:
-            print(f"Could not set window icon: {e}")
+            print(f"[ERROR] Could not set window icon: {e}")
 
 
 def apply_icon_async(root, data_folder):
