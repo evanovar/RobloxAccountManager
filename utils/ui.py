@@ -1898,7 +1898,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x350+{x}+{y}")
+            add_window.geometry(f"400x400+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 add_window.attributes("-topmost", True)
@@ -1908,6 +1908,14 @@ del /f /q "%~f0"
             
             form_frame = ttk.Frame(add_window, style="Dark.TFrame")
             form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            checkbox_style = ttk.Style()
+            checkbox_style.configure(
+                "Dark.TCheckbutton",
+                background=self.BG_DARK,
+                foreground=self.FG_TEXT,
+                font=("Segoe UI", 10)
+            )
             
             ttk.Label(form_frame, text="Account:", style="Dark.TLabel").pack(anchor="w")
             account_combo = ttk.Combobox(form_frame, values=list(self.manager.accounts.keys()), state="readonly")
@@ -1939,6 +1947,10 @@ del /f /q "%~f0"
             retry_spinbox.set(5)
             retry_spinbox.pack(side="left", padx=(10, 0))
             
+            check_presence_var = tk.BooleanVar(value=True)
+            check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
+            check_presence_check.pack(anchor="w", pady=(0, 10))
+            
             def save_and_add():
                 account = account_combo.get()
                 if not account:
@@ -1960,7 +1972,8 @@ del /f /q "%~f0"
                     'private_server': private_entry.get().strip(),
                     'job_id': job_id,
                     'check_interval': int(interval_spinbox.get()),
-                    'max_retries': int(retry_spinbox.get())
+                    'max_retries': int(retry_spinbox.get()),
+                    'check_presence': check_presence_var.get()
                 }
                 
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
@@ -1998,7 +2011,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            edit_window.geometry(f"400x350+{x}+{y}")
+            edit_window.geometry(f"400x400+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 edit_window.attributes("-topmost", True)
@@ -2008,6 +2021,14 @@ del /f /q "%~f0"
             
             form_frame = ttk.Frame(edit_window, style="Dark.TFrame")
             form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            checkbox_style = ttk.Style()
+            checkbox_style.configure(
+                "Dark.TCheckbutton",
+                background=self.BG_DARK,
+                foreground=self.FG_TEXT,
+                font=("Segoe UI", 10)
+            )
             
             ttk.Label(form_frame, text=f"Account: {account}", style="Dark.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
             
@@ -2040,6 +2061,10 @@ del /f /q "%~f0"
             retry_spinbox.set(config.get('max_retries', 5))
             retry_spinbox.pack(side="left", padx=(10, 0))
             
+            check_presence_var = tk.BooleanVar(value=config.get('check_presence', True))
+            check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
+            check_presence_check.pack(anchor="w", pady=(0, 10))
+            
             def save_edit():
                 place_id = place_entry.get().strip()
                 if not place_id:
@@ -2056,7 +2081,8 @@ del /f /q "%~f0"
                     'private_server': private_entry.get().strip(),
                     'job_id': job_id,
                     'check_interval': int(interval_spinbox.get()),
-                    'max_retries': int(retry_spinbox.get())
+                    'max_retries': int(retry_spinbox.get()),
+                    'check_presence': check_presence_var.get()
                 }
                 
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
@@ -4265,6 +4291,20 @@ del /f /q "%~f0"
             traceback.print_exc()
             return False, None, None
     
+    def _check_roblox_process_exists(self, account):
+        """Check if the tracked Roblox process for this account still exists"""
+        if account not in self.auto_rejoin_pids:
+            return False
+        
+        pid = self.auto_rejoin_pids[account]
+        try:
+            result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}'], 
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+            return f"{pid}" in result.stdout
+        except Exception as e:
+            print(f"[Auto-Rejoin] Error checking process {pid}: {e}")
+            return False
+    
     def auto_rejoin_worker_for_account(self, account):
         """Background worker that monitors for disconnection and rejoins for a specific account"""        
         config = self.auto_rejoin_configs.get(account, {})
@@ -4331,9 +4371,17 @@ del /f /q "%~f0"
                         time.sleep(check_interval)
                     continue
                 
-                in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
+                check_presence = config.get('check_presence', True)
                 
-                if not in_game:
+                if check_presence:
+                    in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
+                    disconnect_detected = not in_game
+                else:
+                    # Only check if Roblox process is still running (disconnected)
+                    disconnect_detected = not self.is_roblox_running() or not self._check_roblox_process_exists(account)
+                    game_id = ''
+                
+                if disconnect_detected:
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count + 1}/{max_retries})")
                     
                     if account in self.auto_rejoin_pids:
