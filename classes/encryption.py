@@ -229,3 +229,17 @@ class EncryptionConfig:
         if 'salt' in self.config:
             del self.config['salt']
         self.save_config()
+    
+    def reset_encryption(self):
+        """Reset encryption settings completely"""
+        self.config.clear()
+        self.save_config()
+    
+    def set_encryption_method(self, method):
+        """Set encryption method without data"""
+        if method == 'hardware':
+            self.enable_hardware_encryption()
+        elif method == 'password':
+            pass
+        else:
+            raise ValueError(f"Invalid encryption method: {method}")

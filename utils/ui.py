@@ -28,6 +28,9 @@ import traceback
 import psutil
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
+from classes.account_manager import RobloxAccountManager
+from .ui import AccountManagerUI
+from .encryption_setup import EncryptionSetupUI
 
 class AccountManagerUI:
     def __init__(self, root, manager, icon_path=None):
@@ -3005,6 +3008,49 @@ del /f /q "%~f0"
         cancel_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
 
+    def _run_encryption_switch(self):
+        """Run the encryption method switch process"""
+        
+        current_accounts = self.manager.accounts.copy()
+        
+        self.manager.encryption_config.disable_encryption()
+        self.manager.encryption_config.save_config()
+        self.manager.encryptor = None
+        self.manager.accounts = current_accounts
+        self.manager.save_accounts()
+        
+        self.root.destroy()
+        
+        setup_ui = EncryptionSetupUI()
+        result = setup_ui.setup_encryption_ui()
+        
+        if setup_ui.should_exit:
+            sys.exit(0)
+        
+        
+        try:
+            new_method = setup_ui.encryption_config.get_encryption_method()
+            
+            if new_method == 'password':
+                if result is None:
+                    raise ValueError("Password setup failed - no password returned")
+                new_manager = RobloxAccountManager(password=result)
+            else:
+                new_manager = RobloxAccountManager()
+            
+            new_manager.save_accounts()
+            
+            messagebox.showinfo("Success", "Encryption method switched successfully!\nYour accounts have been re-encrypted.")
+            
+            new_root = tk.Tk()
+            app = AccountManagerUI(new_root, new_manager)
+            new_root.mainloop()
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to switch encryption: {e}")
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Failed to switch encryption: {e}")
+            sys.exit(1)
 
     def open_settings(self):
         """Open the Settings window"""
@@ -3056,6 +3102,9 @@ del /f /q "%~f0"
         
         roblox_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(roblox_tab, text="Roblox")
+        
+        tool_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(tool_tab, text="Tool")
         
         about_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(about_tab, text="About")
@@ -3744,6 +3793,141 @@ del /f /q "%~f0"
             text="Open GitHub Repository",
             style="Dark.TButton",
             command=open_github
+        ).pack(fill="x", pady=(0, 10))
+        
+        tool_frame = ttk.Frame(tool_tab, style="Dark.TFrame")
+        tool_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        ttk.Label(
+            tool_frame,
+            text="Tools",
+            style="Dark.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w", pady=(0, 15))
+        
+        def wipe_data():
+            """Wipe data"""
+            if not messagebox.askyesno("Confirm Wipe Data", "Are you sure you want to wipe ALL data?\n\nThis action cannot be undone!"):
+                return
+            
+            encryption_method = self.manager.get_encryption_method()
+            
+            if encryption_method == "password":
+                password_window = tk.Toplevel(settings_window)
+                self.apply_window_icon(password_window)
+                password_window.title("Enter Password")
+                password_window.geometry("350x150")
+                password_window.configure(bg=self.BG_DARK)
+                password_window.resizable(False, False)
+                password_window.transient(settings_window)
+                password_window.grab_set()
+                
+                settings_window.update_idletasks()
+                x = settings_window.winfo_x() + (settings_window.winfo_width() - 350) // 2
+                y = settings_window.winfo_y() + (settings_window.winfo_height() - 150) // 2
+                password_window.geometry(f"350x150+{x}+{y}")
+                
+                main_frame = ttk.Frame(password_window, style="Dark.TFrame")
+                main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+                
+                ttk.Label(main_frame, text="Enter your password:", style="Dark.TLabel").pack(anchor="w", pady=(0, 10))
+                
+                password_entry = ttk.Entry(main_frame, style="Dark.TEntry", show="*")
+                password_entry.pack(fill="x", pady=(0, 15))
+                password_entry.focus_set()
+                
+                def verify_and_wipe():
+                    password = password_entry.get()
+                    if not password:
+                        messagebox.showwarning("Missing Password", "Please enter your password.")
+                        return
+                    
+                    if self.manager.verify_password(password):
+                        password_window.destroy()
+                        if messagebox.askyesno("Final Confirmation", "This will permanently delete ALL data. Continue?"):
+                            settings_window.destroy()
+                            self.manager.wipe_all_data()
+                            messagebox.showinfo("Success", "All data has been wiped!")
+                            settings_window.quit()
+                    else:
+                        messagebox.showerror("Invalid Password", "Password is incorrect.")
+                
+                btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+                btn_frame.pack(fill="x")
+                
+                ttk.Button(btn_frame, text="Verify", style="Dark.TButton", command=verify_and_wipe).pack(side="left", fill="x", expand=True, padx=(0, 5))
+                ttk.Button(btn_frame, text="Cancel", style="Dark.TButton", command=password_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            else:
+                if messagebox.askyesno("Final Confirmation", "This will permanently delete ALL data. Continue?"):
+                    settings_window.destroy()
+                    self.manager.wipe_all_data()
+                    messagebox.showinfo("Success", "All data has been wiped!")
+                    settings_window.quit()
+        
+        
+        def switch_encryption_method():
+            """Switch encryption method"""
+            current_method = self.manager.get_encryption_method()
+            
+            if current_method == "password":
+                password_window = tk.Toplevel(settings_window)
+                self.apply_window_icon(password_window)
+                password_window.title("Verify Password")
+                password_window.geometry("350x150")
+                password_window.configure(bg=self.BG_DARK)
+                password_window.resizable(False, False)
+                password_window.transient(settings_window)
+                password_window.grab_set()
+                
+                settings_window.update_idletasks()
+                x = settings_window.winfo_x() + (settings_window.winfo_width() - 350) // 2
+                y = settings_window.winfo_y() + (settings_window.winfo_height() - 150) // 2
+                password_window.geometry(f"350x150+{x}+{y}")
+                
+                pwd_frame = ttk.Frame(password_window, style="Dark.TFrame")
+                pwd_frame.pack(fill="both", expand=True, padx=20, pady=20)
+                
+                ttk.Label(pwd_frame, text="Enter your password to continue:", style="Dark.TLabel").pack(anchor="w", pady=(0, 10))
+                
+                password_entry = ttk.Entry(pwd_frame, style="Dark.TEntry", show="*")
+                password_entry.pack(fill="x", pady=(0, 15))
+                password_entry.focus_set()
+                
+                def verify_and_proceed():
+                    password = password_entry.get()
+                    if not password:
+                        messagebox.showwarning("Missing Password", "Please enter your password.")
+                        return
+                    
+                    if self.manager.verify_password(password):
+                        password_window.destroy()
+                        settings_window.destroy()
+                        # Save current accounts, call encryption setup, then re-encrypt
+                        self._run_encryption_switch()
+                    else:
+                        messagebox.showerror("Invalid Password", "Password is incorrect.")
+                
+                pwd_btn_frame = ttk.Frame(pwd_frame, style="Dark.TFrame")
+                pwd_btn_frame.pack(fill="x")
+                
+                ttk.Button(pwd_btn_frame, text="Verify", style="Dark.TButton", command=verify_and_proceed).pack(side="left", fill="x", expand=True, padx=(0, 5))
+                ttk.Button(pwd_btn_frame, text="Cancel", style="Dark.TButton", command=password_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
+            else:
+                settings_window.destroy()
+                self._run_encryption_switch()
+        
+        ttk.Button(
+            tool_frame,
+            text="Switch Encryption Method",
+            style="Dark.TButton",
+            command=switch_encryption_method
+        ).pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            tool_frame,
+            text="Wipe Data",
+            style="Dark.TButton",
+            command=wipe_data
         ).pack(fill="x", pady=(0, 10))
         
         

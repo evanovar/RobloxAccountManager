@@ -9,10 +9,12 @@ import json
 import time
 import tempfile
 import hashlib
+import shutil
+import traceback
+import threading
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from selenium.common.exceptions import WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -105,7 +107,6 @@ class RobloxAccountManager:
         """Clean up temporary profile directory"""
         if self.temp_profile_dir and os.path.exists(self.temp_profile_dir):
             try:
-                import shutil
                 shutil.rmtree(self.temp_profile_dir)
             except:
                 pass
@@ -177,7 +178,6 @@ class RobloxAccountManager:
                 sys.stderr = original_stderr
             print(f"Error setting up Chrome driver: {e}")
             print("Please make sure Google Chrome is installed on your system")
-            import traceback
             traceback.print_exc()
             return None
     
@@ -412,14 +412,12 @@ class RobloxAccountManager:
                     
                 except Exception as e:
                     print(f"[ERROR] Error opening browser for instance {i + 1}: {e}")
-                    import traceback
                     traceback.print_exc()
             
             print(f"All {len(drivers)} browser(s) opened. Waiting for logins...")
             
             completed = [False] * len(drivers)
             
-            import threading
             
             def wait_for_instance(driver_index):
                 driver = drivers[driver_index]
@@ -537,87 +535,83 @@ class RobloxAccountManager:
         
         return RobloxAPI.validate_account(username, cookie)
     
-    def launch_home(self, username):
-        """Launch Chrome to Roblox home with account logged in"""
-        if username not in self.accounts:
-            print(f"[ERROR] Account '{username}' not found")
-            return False
+    # def launch_home(self, username):
+    #     """Launch Chrome to Roblox home with account logged in"""
+    #     if username not in self.accounts:
+    #         print(f"[ERROR] Account '{username}' not found")
+    #         return False
         
-        cookie = self.accounts[username]['cookie']
+    #     cookie = self.accounts[username]['cookie']
         
-        try:
-            from selenium import webdriver
-            from selenium.webdriver.chrome.service import Service
-            from selenium.webdriver.chrome.options import Options
-            from webdriver_manager.chrome import ChromeDriverManager
+    #     try:
             
-            print(f"Launching Chrome for {username}...")
+    #         print(f"Launching Chrome for {username}...")
             
-            chrome_options = Options()
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
+    #         chrome_options = Options()
+    #         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    #         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+    #         chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            chrome_options.add_argument("--log-level=3")
-            chrome_options.add_argument("--silent")
-            chrome_options.add_argument("--disable-logging")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-usb")
-            chrome_options.add_argument("--disable-device-discovery-notifications")
+    #         chrome_options.add_argument("--log-level=3")
+    #         chrome_options.add_argument("--silent")
+    #         chrome_options.add_argument("--disable-logging")
+    #         chrome_options.add_argument("--disable-gpu")
+    #         chrome_options.add_argument("--disable-dev-shm-usage")
+    #         chrome_options.add_argument("--no-sandbox")
+    #         chrome_options.add_argument("--disable-usb")
+    #         chrome_options.add_argument("--disable-device-discovery-notifications")
             
-            original_stderr = sys.stderr
-            sys.stderr = open(os.devnull, 'w')
+    #         original_stderr = sys.stderr
+    #         sys.stderr = open(os.devnull, 'w')
             
-            service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+    #         service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+    #         driver = webdriver.Chrome(service=service, options=chrome_options)
             
-            driver.set_page_load_timeout(120)
-            driver.implicitly_wait(10)
+    #         driver.set_page_load_timeout(120)
+    #         driver.implicitly_wait(10)
             
-            sys.stderr.close()
-            sys.stderr = original_stderr
+    #         sys.stderr.close()
+    #         sys.stderr = original_stderr
             
-            max_retries = 3
-            for retry in range(max_retries):
-                try:
-                    driver.get("https://www.roblox.com/")
-                    time.sleep(1)
-                    break
-                except Exception as nav_error:
-                    if retry < max_retries - 1:
-                        print(f"[WARNING] Navigation attempt {retry + 1} failed, retrying...")
-                        time.sleep(2)
-                    else:
-                        raise nav_error
+    #         max_retries = 3
+    #         for retry in range(max_retries):
+    #             try:
+    #                 driver.get("https://www.roblox.com/")
+    #                 time.sleep(1)
+    #                 break
+    #             except Exception as nav_error:
+    #                 if retry < max_retries - 1:
+    #                     print(f"[WARNING] Navigation attempt {retry + 1} failed, retrying...")
+    #                     time.sleep(2)
+    #                 else:
+    #                     raise nav_error
             
-            driver.add_cookie({
-                'name': '.ROBLOSECURITY',
-                'value': cookie,
-                'domain': '.roblox.com',
-                'path': '/',
-                'secure': True,
-                'httpOnly': True
-            })
+    #         driver.add_cookie({
+    #             'name': '.ROBLOSECURITY',
+    #             'value': cookie,
+    #             'domain': '.roblox.com',
+    #             'path': '/',
+    #             'secure': True,
+    #             'httpOnly': True
+    #         })
             
-            driver.get("https://www.roblox.com/home")
+    #         driver.get("https://www.roblox.com/home")
             
-            driver.execute_cdp_cmd('Page.setWebLifecycleState', {'state': 'active'})
+    #         driver.execute_cdp_cmd('Page.setWebLifecycleState', {'state': 'active'})
             
-            print(f"[SUCCESS] Chrome launched with {username} logged in!")
-            return True
+    #         print(f"[SUCCESS] Chrome launched with {username} logged in!")
+    #         return True
             
-        except Exception as e:
-            if 'original_stderr' in locals():
-                sys.stderr = original_stderr
-            print(f"[ERROR] Failed to launch Chrome: {e}")
-            try:
-                if 'driver' in locals():
-                    driver.quit()
-            except:
-                pass
-            return False
+    #     except Exception as e:
+    #         if 'original_stderr' in locals():
+    #             sys.stderr = original_stderr
+    #         print(f"[ERROR] Failed to launch Chrome: {e}")
+    #         try:
+    #             if 'driver' in locals():
+    #                 driver.quit()
+    #         except:
+    #             pass
+    #         return False
     
     def launch_roblox(self, username, game_id, private_server_id="", launcher_preference="default", job_id=""):
         """Launch Roblox game with specified account"""
@@ -644,3 +638,69 @@ class RobloxAccountManager:
         if username in self.accounts:
             return self.accounts[username].get('note', '')
         return ''
+    
+    def get_encryption_method(self):
+        """Get current encryption method"""
+        if not self.encryption_config.is_encryption_enabled():
+            return None
+        return self.encryption_config.get_encryption_method()
+    
+    def verify_password(self, password):
+        """Verify password for password-based encryption"""
+        if not self.encryption_config.is_encryption_enabled():
+            return False
+        
+        method = self.encryption_config.get_encryption_method()
+        if method != 'password':
+            return False
+        
+        stored_hash = self.encryption_config.get_password_hash()
+        entered_hash = hashlib.sha256(password.encode()).hexdigest()
+        return entered_hash == stored_hash
+    
+    def wipe_all_data(self):
+        """Wipe all saved accounts, encryption config, and settings by deleting entire AccountManagerData folder"""
+        
+        try:
+            if os.path.exists(self.data_folder):
+                shutil.rmtree(self.data_folder)
+                os.makedirs(self.data_folder, exist_ok=True)
+            
+            self.accounts.clear()
+            self.encryption_config.reset_encryption()
+            self.encryptor = None
+            
+            print("[SUCCESS] All data has been wiped")
+        except Exception as e:
+            print(f"[ERROR] Failed to wipe data: {str(e)}")
+    
+    def switch_encryption_method(self, new_method, password=None, salt=None):
+        """Switch to a different encryption method"""
+        if new_method not in ['hardware', 'password']:
+            raise ValueError("Invalid encryption method. Must be 'hardware' or 'password'")
+        
+        current_method = self.get_encryption_method()
+        if current_method == new_method:
+            print("[INFO] Already using this encryption method")
+            return
+        
+        current_data = self.accounts.copy()
+        
+        self.encryption_config.reset_encryption()
+        
+        if new_method == 'hardware':
+            self.encryption_config.set_encryption_method('hardware')
+            self.encryptor = HardwareEncryption()
+        elif new_method == 'password':
+            if password is None:
+                raise ValueError("Password must be provided for password encryption")
+            if salt is None:
+                salt = os.urandom(32).hex()
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            self.encryption_config.enable_password_encryption(salt, password_hash)
+            self.encryptor = PasswordEncryption(password, salt)
+        
+        self.accounts = current_data
+        self.save_accounts()
+        print(f"[SUCCESS] Switched to {new_method} encryption")
+
