@@ -29,8 +29,7 @@ import psutil
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
-from .ui import AccountManagerUI
-from .encryption_setup import EncryptionSetupUI
+from utils.encryption_setup import EncryptionSetupUI
 
 class AccountManagerUI:
     def __init__(self, root, manager, icon_path=None):

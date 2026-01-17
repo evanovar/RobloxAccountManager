@@ -27,20 +27,20 @@ def setup_icon(data_folder):
         return icon_path
     
     try:
-        print("Downloading application icon...")
+        print("[INFO] Downloading application icon...")
         icon_url = "https://github.com/evanovar/RobloxAccountManager/raw/main/icon.ico"
         response = requests.get(icon_url, timeout=5)
         
         if response.status_code == 200:
             with open(icon_path, 'wb') as f:
                 f.write(response.content)
-                print("Icon downloaded successfully.")
+                print("[SUCCESS] Icon downloaded successfully.")
             return icon_path
         else:
-            print(f"Failed to download icon: HTTP {response.status_code}")
+            print(f"[ERROR] Failed to download icon: HTTP {response.status_code}")
             return None
     except Exception as e:
-        print(f"Error downloading icon: {e}")
+        print(f"[ERROR] Error downloading icon: {e}")
         return None
 
 
