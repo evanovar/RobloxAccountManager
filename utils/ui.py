@@ -1881,7 +1881,6 @@ del /f /q "%~f0"
                 place_id = config.get('place_id', 'Unknown')
                 display = f"{account} - {status} - Place: {place_id}"
                 rejoin_list.insert(tk.END, display)
-        
         refresh_rejoin_list()
         
         btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
@@ -3770,10 +3769,33 @@ del /f /q "%~f0"
             try:
                 self.console_text_widget.config(state="normal")
                 self.console_text_widget.insert(tk.END, message)
+                self._apply_console_tags()
                 self.console_text_widget.see(tk.END)
                 self.console_text_widget.config(state="disabled")
             except:
                 pass
+    
+    def _apply_console_tags(self):
+        """Apply color tags to console keywords"""
+        if not self.console_text_widget:
+            return
+        
+        keywords = {
+            "[SUCCESS]": "success",
+            "[ERROR]": "error",
+            "[INFO]": "info",
+            "[WARNING]": "warning"
+        }
+        
+        for keyword, tag in keywords.items():
+            search_start = "1.0"
+            while True:
+                pos = self.console_text_widget.search(keyword, search_start, tk.END, nocase=False)
+                if not pos:
+                    break
+                end_pos = f"{pos}+{len(keyword)}c"
+                self.console_text_widget.tag_add(tag, pos, end_pos)
+                search_start = end_pos
     
     def open_console_window(self):
         """Open the Console Output window"""
@@ -3825,6 +3847,12 @@ del /f /q "%~f0"
         )
         self.console_text_widget.pack(side="left", fill="both", expand=True)
         
+        # Configure color tags for console keywords
+        self.console_text_widget.tag_configure("success", foreground="#00FF00")
+        self.console_text_widget.tag_configure("error", foreground="#FF0000")
+        self.console_text_widget.tag_configure("info", foreground="#0078D7")
+        self.console_text_widget.tag_configure("warning", foreground="#FFD700")
+        
         scrollbar = ttk.Scrollbar(text_frame, command=self.console_text_widget.yview)
         scrollbar.pack(side="right", fill="y")
         self.console_text_widget.config(yscrollcommand=scrollbar.set)
@@ -3832,6 +3860,8 @@ del /f /q "%~f0"
         self.console_text_widget.config(state="normal")
         for message in self.console_output:
             self.console_text_widget.insert(tk.END, message)
+        
+        self._apply_console_tags()
         self.console_text_widget.config(state="disabled")
         
         self.console_text_widget.see(tk.END)
