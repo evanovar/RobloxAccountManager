@@ -4941,14 +4941,17 @@ del /f /q "%~f0"
                 time.sleep(5)
     
     def send_key_to_roblox_windows(self, action):
-        """Send a key press or mouse click to all Roblox windows using Windows API"""
         try:
-            WM_KEYDOWN = 0x0100
-            WM_KEYUP = 0x0101
-            WM_LBUTTONDOWN = 0x0201
-            WM_LBUTTONUP = 0x0202
-            WM_RBUTTONDOWN = 0x0204
-            WM_RBUTTONUP = 0x0205
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            
+            KEYEVENTF_KEYUP = 0x0002
+            SW_RESTORE = 9
+            SW_MINIMIZE = 6
+            MOUSEEVENTF_LEFTDOWN = 0x0002
+            MOUSEEVENTF_LEFTUP = 0x0004
+            MOUSEEVENTF_RIGHTDOWN = 0x0008
+            MOUSEEVENTF_RIGHTUP = 0x0010
             
             vk_codes = {
                 'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
@@ -4968,41 +4971,84 @@ del /f /q "%~f0"
                     print(f"[Anti-AFK] Unknown action: {action}")
                     return
             
-            user32 = ctypes.windll.user32
+            roblox_pids = set()
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                        roblox_pids.add(proc.info['pid'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
             
-            def is_roblox_game_window(title):
-                """Check if window is an actual Roblox game instance"""
-                return title.strip() == "Roblox"
+            if not roblox_pids:
+                return
+            
+            roblox_windows = []
             
             def enum_windows_callback(hwnd, lParam):
                 if user32.IsWindowVisible(hwnd):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buff = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buff, length + 1)
-                        title = buff.value
-                        
-                        if is_roblox_game_window(title):
-                            if is_mouse:
-                                if action.upper() == 'LMB':
-                                    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, 1, 0)
-                                    time.sleep(0.05)
-                                    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, 0)
-                                    print(f"[Anti-AFK] Sent LMB click")
-                                elif action.upper() == 'RMB':
-                                    user32.PostMessageW(hwnd, WM_RBUTTONDOWN, 2, 0)
-                                    time.sleep(0.05)
-                                    user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, 0)
-                                    print(f"[Anti-AFK] Sent RMB click")
-                            else:
-                                user32.PostMessageW(hwnd, WM_KEYDOWN, vk_code, 0)
-                                time.sleep(0.05)
-                                user32.PostMessageW(hwnd, WM_KEYUP, vk_code, 0)
-                                print(f"[Anti-AFK] Sent '{action}'")
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value in roblox_pids:
+                        roblox_windows.append((hwnd, pid.value))
                 return True
             
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
             user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+            
+            if not roblox_windows:
+                return
+            
+            original_hwnd = user32.GetForegroundWindow()
+            current_thread_id = kernel32.GetCurrentThreadId()
+            
+            for hwnd, pid in roblox_windows:
+                try:
+                    was_minimized = user32.IsIconic(hwnd)
+                    if was_minimized:
+                        user32.ShowWindow(hwnd, SW_RESTORE)
+                        time.sleep(0.05)
+                    
+                    target_thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+                    user32.AttachThreadInput(current_thread_id, target_thread_id, True)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.AttachThreadInput(current_thread_id, target_thread_id, False)
+                    time.sleep(0.1)
+                    
+                    if is_mouse:
+                        if action.upper() == 'LMB':
+                            user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                            time.sleep(0.05)
+                            user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        elif action.upper() == 'RMB':
+                            user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                            time.sleep(0.05)
+                            user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+                        print(f"[Anti-AFK] Sent {action} to PID {pid}")
+                    else:
+                        scan_code = user32.MapVirtualKeyW(vk_code, 0)
+                        user32.keybd_event(vk_code, scan_code, 0, 0)
+                        time.sleep(0.05)
+                        user32.keybd_event(vk_code, scan_code, KEYEVENTF_KEYUP, 0)
+                        print(f"[Anti-AFK] Sent '{action}' to PID {pid}")
+                    
+                    if was_minimized:
+                        user32.ShowWindow(hwnd, SW_MINIMIZE)
+                    
+                    time.sleep(0.1)
+                    
+                except Exception as e:
+                    print(f"[Anti-AFK] Error on PID {pid}: {e}")
+            
+            if original_hwnd:
+                try:
+                    prev_thread_id = user32.GetWindowThreadProcessId(original_hwnd, None)
+                    user32.AttachThreadInput(current_thread_id, prev_thread_id, True)
+                    user32.BringWindowToTop(original_hwnd)
+                    user32.SetForegroundWindow(original_hwnd)
+                    user32.AttachThreadInput(current_thread_id, prev_thread_id, False)
+                except:
+                    pass
             
         except Exception as e:
             print(f"[Anti-AFK] Failed to send action: {e}")
@@ -5037,18 +5083,24 @@ del /f /q "%~f0"
             
             roblox_windows = []
             
-            def is_roblox_game_window(title):
-                return title.strip() == "Roblox"
+            roblox_pids = set()
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                        roblox_pids.add(proc.info['pid'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            
+            if not roblox_pids:
+                print("[Anti-AFK] No RobloxPlayerBeta.exe processes found")
+                return
             
             def enum_windows_callback(hwnd, lParam):
                 if user32.IsWindowVisible(hwnd):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buff = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buff, length + 1)
-                        title = buff.value
-                        if is_roblox_game_window(title):
-                            roblox_windows.append(hwnd)
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value in roblox_pids:
+                        roblox_windows.append(hwnd)
                 return True
             
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
