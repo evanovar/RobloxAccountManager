@@ -191,22 +191,49 @@ class RobloxAPI:
             return None
     
     @staticmethod
-    def get_user_id_from_username(username):
-        """Get user ID from username"""
+    def get_user_id_from_username(username, max_retries=3):
+        """Get user ID from username with retry logic for rate limiting"""
         url = "https://users.roblox.com/v1/usernames/users"
         payload = {
             "usernames": [username],
             "excludeBannedUsers": False
         }
         
-        try:
-            response = requests.post(url, json=payload, timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('data') and len(data['data']) > 0:
-                    return data['data'][0]['id']
-        except:
-            pass
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(url, json=payload, timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('data') and len(data['data']) > 0:
+                        return data['data'][0]['id']
+                    else:
+                        print(f"[WARNING] No user data found for username '{username}'")
+                        return None
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 2 ** attempt))
+                    print(f"[WARNING] Rate limited getting user ID for '{username}'. Retrying in {retry_after}s... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+                else:
+                    print(f"[WARNING] API returned status {response.status_code} for username '{username}'")
+                    if attempt < max_retries - 1:
+                        delay = 2 ** attempt
+                        print(f"[WARNING] Retrying in {delay}s... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(delay)
+                        continue
+                    
+            except requests.exceptions.Timeout:
+                print(f"[ERROR] Timeout getting user ID for '{username}' (Attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+            except Exception as e:
+                print(f"[ERROR] Exception getting user ID for '{username}': {e} (Attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+        
         return None
     
     @staticmethod

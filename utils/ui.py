@@ -26,6 +26,7 @@ import shutil
 import platform
 import traceback
 import psutil
+import random
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
@@ -4680,6 +4681,9 @@ del /f /q "%~f0"
         if not stop_event:
             return
         
+        stagger_delay = random.uniform(0.5, 3.0)
+        time.sleep(stagger_delay)
+        
         retry_count = 0
         max_retries = config.get('max_retries', 5)
         check_interval = config.get('check_interval', 10)
@@ -4704,6 +4708,7 @@ del /f /q "%~f0"
             return
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
+
         
         consecutive_failed_checks = 0
         max_consecutive_fails = 2
