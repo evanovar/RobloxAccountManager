@@ -19,7 +19,7 @@ import time
 import re
 import win32event
 import win32api
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import zipfile
 import tempfile
 import shutil
@@ -84,6 +84,8 @@ class AccountManagerUI:
         self.auto_rejoin_stop_events = {}
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
         self.auto_rejoin_pids = {}
+        self.auto_rejoin_launch_lock = threading.Lock()
+
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -950,17 +952,39 @@ del /f /q "%~f0"
         return False
 
     def on_place_id_change(self, event=None):
-        """Called when place ID changes"""
         place_id = self.place_entry.get().strip()
         self.settings["last_place_id"] = place_id
         self.save_settings()
         self.update_game_name()
 
-    def on_private_server_change(self, event=None):
-        """Called when private server ID changes"""
+    def on_private_server_change(self, event=None):        
         private_server = self.private_server_entry.get().strip()
-        self.settings["last_private_server"] = private_server
-        self.save_settings()
+        place_id_input = self.place_entry.get().strip()
+        
+        vip_match = re.search(r'roblox\.com/games/(\d+)/[^?]+\?privateServerLinkCode=([A-Za-z0-9]+)', private_server)
+        
+        if vip_match:
+            vip_place_id = vip_match.group(1)
+            vip_private_code = vip_match.group(2)
+            
+            if place_id_input and place_id_input != vip_place_id:
+                self.game_name_label.config(text="ERROR: Place ID mismatch!")
+                return
+            
+            self.place_entry.delete(0, tk.END)
+            self.place_entry.insert(0, vip_place_id)
+            
+            self.private_server_entry.delete(0, tk.END)
+            self.private_server_entry.insert(0, vip_private_code)
+            
+            self.settings["last_place_id"] = vip_place_id
+            self.settings["last_private_server"] = vip_private_code
+            self.save_settings()
+            self.update_game_name()
+        else:
+            self.settings["last_private_server"] = private_server
+            self.save_settings()
+    
 
     def update_game_name(self):
         """Debounced, non-blocking update of the game name label"""
@@ -1781,7 +1805,8 @@ del /f /q "%~f0"
         threading.Thread(target=worker, args=(usernames,), daemon=True).start()
 
     def launch_game(self):
-        """Launch Roblox game with the selected account(s) (non-blocking)"""
+        """Launch Roblox game with the selected account(s)"""
+        
         if self.settings.get("enable_multi_select", False):
             usernames = self.get_selected_usernames()
             if not usernames:
@@ -1792,14 +1817,53 @@ del /f /q "%~f0"
                 return
             usernames = [username]
 
-        game_id = self.place_entry.get().strip()
-        if not game_id:
-            messagebox.showwarning("Missing Info", "Please enter a Place ID.")
-            return
-        if not game_id.isdigit():
-            messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
-            return
-        private_server = self.private_server_entry.get().strip()
+        game_id_input = self.place_entry.get().strip()
+        private_server_input = self.private_server_entry.get().strip()
+        
+        vip_link_place_id = None
+        vip_link_private_code = None
+        
+        if private_server_input:
+            
+            vip_match = re.search(r'roblox\.com/games/(\d+)/[^?]+\?privateServerLinkCode=([A-Za-z0-9]+)', private_server_input)
+            if vip_match:
+                vip_link_place_id = vip_match.group(1)
+                vip_link_private_code = vip_match.group(2)
+        
+        final_game_id = None
+        final_private_server = None
+        
+        if vip_link_place_id:
+            if game_id_input:
+                if game_id_input == vip_link_place_id:
+                    final_game_id = vip_link_place_id
+                    final_private_server = vip_link_private_code
+                else:
+                    messagebox.showerror(
+                        "Place ID Mismatch",
+                        f"Place ID ({game_id_input}) doesn't match the Place ID in the VIP link ({vip_link_place_id}).\n\n"
+                        "Please either:\n"
+                        "- Clear Place ID to use the VIP link's Place ID, or\n"
+                        "- Enter the matching Place ID"
+                    )
+                    return
+            else:
+                final_game_id = vip_link_place_id
+                final_private_server = vip_link_private_code
+                self.place_entry.delete(0, tk.END)
+                self.place_entry.insert(0, final_game_id)
+        else:
+            if not game_id_input:
+                messagebox.showwarning("Missing Info", "Please enter a Place ID or paste a VIP server link in the Private Server field.")
+                return
+            if not game_id_input.isdigit():
+                messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
+                return
+            final_game_id = game_id_input
+            final_private_server = private_server_input
+        
+        game_id = final_game_id
+        private_server = final_private_server
 
         if self.settings.get("confirm_before_launch", False):
             game_name = RobloxAPI.get_game_name(game_id)
@@ -2160,9 +2224,11 @@ del /f /q "%~f0"
             messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {account}!")
         
         def start_all():
-            """Start auto-rejoin for all accounts"""
-            for account in self.auto_rejoin_configs.keys():
+            """Start auto-rejoin for all accounts with sequential delays"""
+            for idx, account in enumerate(self.auto_rejoin_configs.keys()):
                 self.start_auto_rejoin_for_account(account)
+                if idx < len(self.auto_rejoin_configs) - 1:
+                    time.sleep(2)
             refresh_rejoin_list()
             messagebox.showinfo("Started", f"Auto-rejoin started for all {len(self.auto_rejoin_configs)} account(s)!")
         
@@ -4602,7 +4668,12 @@ del /f /q "%~f0"
             return False
     
     def auto_rejoin_worker_for_account(self, account):
-        """Background worker that monitors for disconnection and rejoins for a specific account"""        
+        """Background worker that monitors for disconnection and rejoins for a specific account.
+        
+        Detection modes:
+        - With presence check: Uses Roblox Presence API to verify player is in the correct game
+        - Without presence check: Tracks the specific PID for this account's Roblox process
+        """        
         config = self.auto_rejoin_configs.get(account, {})
         stop_event = self.auto_rejoin_stop_events.get(account)
         
@@ -4634,50 +4705,77 @@ del /f /q "%~f0"
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
         
+        consecutive_failed_checks = 0
+        max_consecutive_fails = 2
+        
+        if account not in self.auto_rejoin_pids:
+            print(f"[Auto-Rejoin] [{account}] No tracked PID - launching game...")
+            success = self._launch_and_track_pid(account, place_id, private_server, job_id)
+            if not success:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached on initial launch. Stopping.")
+                    return
+            time.sleep(10)
+        
         while not stop_event.is_set():
             try:
-                if not self.is_roblox_running():
-                    print(f"[Auto-Rejoin] [{account}] Roblox not running - launching game...")
-                    
-                    launcher_pref = self.settings.get("roblox_launcher", "default")
-                    success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id)
-                    
-                    if success:
-                        print(f"[Auto-Rejoin] [{account}] Game launched successfully")
-                        time.sleep(2)
-                        try:
-                            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                            if result.stdout:
-                                for line in result.stdout.split('\n'):
-                                    match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
-                                    if match:
-                                        pid = int(match.group(1))
-                                        self.auto_rejoin_pids[account] = pid
-                                        print(f"[Auto-Rejoin] [{account}] Tracking new PID: {pid}")
-                                        break
-                        except Exception as e:
-                            print(f"[Auto-Rejoin] [{account}] Error tracking initial PID: {e}")
-                        time.sleep(8)
-                    else:
-                        retry_count += 1
-                        if retry_count >= max_retries:
-                            print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
-                            break
-                        time.sleep(check_interval)
-                    continue
-                
                 check_presence = config.get('check_presence', True)
+                disconnect_detected = False
+                game_id = ''
                 
                 if check_presence:
                     in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
                     disconnect_detected = not in_game
+                    
+                    if disconnect_detected:
+                        consecutive_failed_checks += 1
+                        if consecutive_failed_checks < max_consecutive_fails:
+                            print(f"[Auto-Rejoin] [{account}] Presence check failed ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
+                            disconnect_detected = False
+                            time.sleep(check_interval)
+                            continue
+                    else:
+                        consecutive_failed_checks = 0
                 else:
-                    disconnect_detected = not self.is_roblox_running() or not self._check_roblox_process_exists(account)
-                    game_id = ''
+                    presence = RobloxAPI.get_player_presence(user_id, cookie)
+                    
+                    if presence:
+                        in_game = presence.get('in_game', False)
+                        current_place_id = presence.get('place_id')
+                        game_id = presence.get('game_id', '')
+                        
+                        print(f"[Auto-Rejoin] [{account}] Presence check (any game mode) - in_game: {in_game}, place_id: {current_place_id}")
+                        
+                        if in_game:
+                            print(f"[Auto-Rejoin] [{account}] Player is in a game (place_id: {current_place_id})")
+                            disconnect_detected = False
+                            consecutive_failed_checks = 0
+                        else:
+                            consecutive_failed_checks += 1
+                            if consecutive_failed_checks < max_consecutive_fails:
+                                print(f"[Auto-Rejoin] [{account}] Not in any game ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
+                                disconnect_detected = False
+                                time.sleep(check_interval)
+                                continue
+                            else:
+                                print(f"[Auto-Rejoin] [{account}] Player not in any game")
+                                disconnect_detected = True
+                    else:
+                        consecutive_failed_checks += 1
+                        if consecutive_failed_checks < max_consecutive_fails:
+                            print(f"[Auto-Rejoin] [{account}] Presence API failed ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
+                            disconnect_detected = False
+                            time.sleep(check_interval)
+                            continue
+                        else:
+                            print(f"[Auto-Rejoin] [{account}] Presence API returned None")
+                            disconnect_detected = True
                 
                 if disconnect_detected:
-                    print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count + 1}/{max_retries})")
+                    retry_count += 1
+                    consecutive_failed_checks = 0
+                    print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
                     
                     if account in self.auto_rejoin_pids:
                         old_pid = self.auto_rejoin_pids[account]
@@ -4685,49 +4783,19 @@ del /f /q "%~f0"
                             subprocess.run(['taskkill', '/F', '/PID', str(old_pid)], 
                                          capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
                             time.sleep(1)
-                            print(f"[Auto-Rejoin] [{account}] Closed Roblox instance (PID: {old_pid})")
+                            print(f"[Auto-Rejoin] [{account}] Closed old Roblox instance (PID: {old_pid})")
                         except Exception as e:
                             print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
-                    
-                    pids_before = set()
-                    try:
-                        result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                              capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                        if result.stdout:
-                            for line in result.stdout.split('\n'):
-                                match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
-                                if match:
-                                    pids_before.add(int(match.group(1)))
-                    except Exception as e:
-                        print(f"[Auto-Rejoin] [{account}] Error getting PIDs before launch: {e}")
+                        del self.auto_rejoin_pids[account]
                     
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
-                    
-                    launcher_pref = self.settings.get("roblox_launcher", "default")
-                    success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, rejoin_job_id)
+                    success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
                     
                     if success:
-                        time.sleep(2)
-                        try:
-                            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                            if result.stdout:
-                                for line in result.stdout.split('\n'):
-                                    match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
-                                    if match:
-                                        pid = int(match.group(1))
-                                        if pid not in pids_before:
-                                            self.auto_rejoin_pids[account] = pid
-                                            print(f"[Auto-Rejoin] [{account}] Tracking new PID: {pid}")
-                                            break
-                        except Exception as e:
-                            print(f"[Auto-Rejoin] [{account}] Error tracking new PID: {e}")
-                        
-                        retry_count = 0
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
-                        time.sleep(5)
+                        retry_count = 0
+                        time.sleep(10)
                     else:
-                        retry_count += 1
                         if retry_count >= max_retries:
                             print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
                             break
@@ -4740,6 +4808,116 @@ del /f /q "%~f0"
             except Exception as e:
                 print(f"[Auto-Rejoin] [{account}] Error: {e}")
                 time.sleep(check_interval)
+    
+    def _launch_and_track_pid(self, account, place_id, private_server, job_id):
+        with self.auto_rejoin_launch_lock:
+            pids_before = self._get_roblox_pids()
+            
+            launcher_pref = self.settings.get("roblox_launcher", "default")
+            success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id)
+            
+            if not success:
+                return False
+            
+            print(f"[Auto-Rejoin] [{account}] Game launched successfully")
+            
+            time.sleep(5)
+            
+            pids_after = self._get_roblox_pids()
+            new_pids = pids_after - pids_before
+            
+            if not new_pids:
+                print(f"[Auto-Rejoin] [{account}] No new Roblox processes detected")
+                return False
+            
+            available_pids = new_pids - set(self.auto_rejoin_pids.values())
+            
+            if available_pids:
+                new_pid = max(available_pids)
+                self.auto_rejoin_pids[account] = new_pid
+                print(f"[Auto-Rejoin] [{account}] Successfully tracked PID {new_pid}")
+                return True
+            else:
+                print(f"[Auto-Rejoin] [{account}] All new PIDs are already tracked by other accounts")
+                return False
+    
+    def _get_roblox_pids(self):
+        """Get all currently running RobloxPlayerBeta.exe PIDs using psutil."""
+        try:
+            return {
+                p.info["pid"]
+                for p in psutil.process_iter(["pid", "name"])
+                if p.info["name"] and p.info["name"].lower() == "robloxplayerbeta.exe"
+            }
+        except Exception as e:
+            print(f"[Auto-Rejoin] Error getting Roblox PIDs: {e}")
+            return set()
+    
+    def _is_pid_roblox_process(self, pid):
+        """Check if a specific PID is still a running RobloxPlayerBeta.exe process"""
+        try:
+            process = psutil.Process(pid)
+            return process.is_running() and process.name().lower() == "robloxplayerbeta.exe"
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+        except Exception as e:
+            print(f"[Auto-Rejoin] Error checking PID {pid}: {e}")
+            return False
+    
+    def _get_user_id_from_pid(self, pid):
+        try:
+            
+            process = psutil.Process(pid)
+            if not (process.is_running() and process.name().lower() == "robloxplayerbeta.exe"):
+                return None
+            
+            create_time_local = datetime.fromtimestamp(process.create_time())
+            create_time_utc = datetime.fromtimestamp(process.create_time(), tz=timezone.utc).replace(tzinfo=None)
+            
+            logs_dir = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "logs")
+            if not os.path.exists(logs_dir):
+                return None
+            
+            time_window = timedelta(seconds=5)
+            matching_logs = []
+            
+            for filename in os.listdir(logs_dir):
+                if not filename.endswith("_last.log"):
+                    continue
+                
+                match = re.search(r'(\d{8}T\d{6}Z)', filename)
+                if not match:
+                    continue
+                
+                timestamp_str = match.group(1)
+                try:
+                    log_time = datetime.strptime(timestamp_str, "%Y%m%dT%H%M%SZ")
+                    
+                    if abs((log_time - create_time_utc).total_seconds()) <= time_window.total_seconds():
+                        matching_logs.append(os.path.join(logs_dir, filename))
+                except ValueError:
+                    continue
+            
+            for log_path in matching_logs:
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read(5000)
+                    
+                    if "userid:" in content:
+                        user_id = content.split("userid:")[1].split(",")[0].strip()
+                        if user_id.isdigit():
+                            return user_id
+                except Exception as e:
+                    print(f"[Auto-Rejoin] Error reading log {log_path}: {e}")
+                    continue
+            
+            return None
+            
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+        except Exception as e:
+            print(f"[Auto-Rejoin] Error getting user ID for PID {pid}: {e}")
+            return None
       
     def anti_afk_worker(self):
         """Background worker that sends key presses to Roblox windows"""
