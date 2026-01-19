@@ -9,13 +9,28 @@ import random
 import requests
 import subprocess
 import shutil
+import threading
 from pathlib import Path
 from tkinter import messagebox
 
 
-
 class RobloxAPI:
     """Handles all Roblox API interactions"""
+    
+    _rate_limiter_lock = threading.Lock()
+    _last_request_time = None
+    _min_interval = 6.0
+    
+    @classmethod
+    def _wait_for_rate_limit(cls):
+        with cls._rate_limiter_lock:
+            if cls._last_request_time is not None:
+                elapsed = time.time() - cls._last_request_time
+                if elapsed < cls._min_interval:
+                    wait_time = cls._min_interval - elapsed
+                    print(f"[Rate Limiter] Waiting {wait_time:.1f}s before next API call...")
+                    time.sleep(wait_time)
+            cls._last_request_time = time.time()
     
     @staticmethod
     def detect_custom_launcher():
@@ -190,9 +205,15 @@ class RobloxAPI:
         except:
             return None
     
+    
     @staticmethod
-    def get_user_id_from_username(username, max_retries=3):
-        """Get user ID from username with retry logic for rate limiting"""
+    def get_user_id_from_username(username, max_retries=3, use_cache=True, cache_dict=None):
+        """Get user ID from username"""
+        if use_cache and cache_dict and username in cache_dict:
+            cached_id = cache_dict[username]
+            print(f"[Cache] Using cached user ID for '{username}': {cached_id}")
+            return cached_id
+        
         url = "https://users.roblox.com/v1/usernames/users"
         payload = {
             "usernames": [username],
@@ -201,12 +222,20 @@ class RobloxAPI:
         
         for attempt in range(max_retries):
             try:
+                RobloxAPI._wait_for_rate_limit()
+                
                 response = requests.post(url, json=payload, timeout=5)
                 
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('data') and len(data['data']) > 0:
-                        return data['data'][0]['id']
+                        user_id = data['data'][0]['id']
+                        
+                        if use_cache and cache_dict is not None:
+                            cache_dict[username] = user_id
+                            print(f"[Cache] Stored user ID for '{username}': {user_id}")
+                        
+                        return user_id
                     else:
                         print(f"[WARNING] No user data found for username '{username}'")
                         return None

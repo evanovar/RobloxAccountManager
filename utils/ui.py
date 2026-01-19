@@ -2208,7 +2208,8 @@ del /f /q "%~f0"
             accounts_list = list(self.auto_rejoin_configs.keys())
             account = accounts_list[selection[0]]
             self.start_auto_rejoin_for_account(account)
-            refresh_rejoin_list()
+            
+            auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
         
         def stop_selected():
@@ -2225,12 +2226,11 @@ del /f /q "%~f0"
             messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {account}!")
         
         def start_all():
-            """Start auto-rejoin for all accounts with sequential delays"""
-            for idx, account in enumerate(self.auto_rejoin_configs.keys()):
+            """Start auto-rejoin for all accounts"""
+            for account in self.auto_rejoin_configs.keys():
                 self.start_auto_rejoin_for_account(account)
-                if idx < len(self.auto_rejoin_configs) - 1:
-                    time.sleep(2)
-            refresh_rejoin_list()
+            
+            auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for all {len(self.auto_rejoin_configs)} account(s)!")
         
         def stop_all():
@@ -4576,8 +4576,15 @@ del /f /q "%~f0"
     
     def start_auto_rejoin_for_account(self, account):
         """Start the auto-rejoin background thread for a specific account"""
-        if account in self.auto_rejoin_threads and self.auto_rejoin_threads[account].is_alive():
-            return
+        # Check if thread already exists and clean up dead threads
+        if account in self.auto_rejoin_threads:
+            existing_thread = self.auto_rejoin_threads[account]
+            if existing_thread.is_alive():
+                print(f"[Auto-Rejoin] Thread already running for {account}")
+                return
+            else:
+                print(f"[Auto-Rejoin] Cleaning up dead thread for {account}")
+                del self.auto_rejoin_threads[account]
         
         if account not in self.auto_rejoin_configs:
             print(f"[Auto-Rejoin] No config found for {account}")
@@ -4589,11 +4596,12 @@ del /f /q "%~f0"
         thread = threading.Thread(
             target=self.auto_rejoin_worker_for_account,
             args=(account,),
-            daemon=True
+            daemon=True,
+            name=f"AutoRejoin-{account}"  
         )
         self.auto_rejoin_threads[account] = thread
         thread.start()
-        print(f"[Auto-Rejoin] Started for {account}")
+        print(f"[Auto-Rejoin] Started thread {thread.name} for {account}")
     
     def stop_auto_rejoin_for_account(self, account):
         """Stop the auto-rejoin background thread for a specific account"""
@@ -4681,7 +4689,7 @@ del /f /q "%~f0"
         if not stop_event:
             return
         
-        stagger_delay = random.uniform(0.5, 3.0)
+        stagger_delay = random.uniform(6.0, 9.0)
         time.sleep(stagger_delay)
         
         retry_count = 0
@@ -4702,10 +4710,22 @@ del /f /q "%~f0"
         account_data = self.manager.accounts[account]
         cookie = account_data.get('cookie')
         
-        user_id = RobloxAPI.get_user_id_from_username(account)
+        if 'user_id_cache' not in self.settings:
+            self.settings['user_id_cache'] = {}
+        
+        user_id = RobloxAPI.get_user_id_from_username(
+            account,
+            use_cache=True,
+            cache_dict=self.settings['user_id_cache']
+        )
         if not user_id:
             print(f"[Auto-Rejoin] Could not get user ID for {account}")
             return
+        
+        try:
+            self.save_settings()
+        except Exception as e:
+            print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
 
