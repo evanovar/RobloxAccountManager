@@ -2207,6 +2207,9 @@ del /f /q "%~f0"
             
             accounts_list = list(self.auto_rejoin_configs.keys())
             account = accounts_list[selection[0]]
+            
+            self._match_pids_to_accounts([account])
+            
             self.start_auto_rejoin_for_account(account)
             
             auto_rejoin_window.after(500, refresh_rejoin_list)
@@ -2227,11 +2230,15 @@ del /f /q "%~f0"
         
         def start_all():
             """Start auto-rejoin for all accounts"""
-            for account in self.auto_rejoin_configs.keys():
+            accounts = list(self.auto_rejoin_configs.keys())
+            
+            self._match_pids_to_accounts(accounts)
+            
+            for account in accounts:
                 self.start_auto_rejoin_for_account(account)
             
             auto_rejoin_window.after(500, refresh_rejoin_list)
-            messagebox.showinfo("Started", f"Auto-rejoin started for all {len(self.auto_rejoin_configs)} account(s)!")
+            messagebox.showinfo("Started", f"Auto-rejoin started for all {len(accounts)} account(s)!")
         
         def stop_all():
             """Stop auto-rejoin for all accounts"""
@@ -4576,7 +4583,6 @@ del /f /q "%~f0"
     
     def start_auto_rejoin_for_account(self, account):
         """Start the auto-rejoin background thread for a specific account"""
-        # Check if thread already exists and clean up dead threads
         if account in self.auto_rejoin_threads:
             existing_thread = self.auto_rejoin_threads[account]
             if existing_thread.is_alive():
@@ -4733,8 +4739,10 @@ del /f /q "%~f0"
         consecutive_failed_checks = 0
         max_consecutive_fails = 2
         
-        if account not in self.auto_rejoin_pids:
-            print(f"[Auto-Rejoin] [{account}] No tracked PID - launching game...")
+        if account in self.auto_rejoin_pids:
+            print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
+        else:
+            print(f"[Auto-Rejoin] [{account}] No pre-matched PID - launching game...")
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
             if not success:
                 retry_count += 1
@@ -4889,25 +4897,97 @@ del /f /q "%~f0"
             print(f"[Auto-Rejoin] Error checking PID {pid}: {e}")
             return False
     
-    def _get_user_id_from_pid(self, pid):
+    def _match_pids_to_accounts(self, accounts):
+        """Match all running Roblox PIDs to accounts"""
+        print(f"[Auto-Rejoin] Starting global PID matching for {len(accounts)} account(s)...")
+        
+        if 'user_id_cache' not in self.settings:
+            self.settings['user_id_cache'] = {}
+        
+        account_user_ids = {}
+        for account in accounts:
+            user_id = RobloxAPI.get_user_id_from_username(
+                account,
+                use_cache=True,
+                cache_dict=self.settings['user_id_cache']
+            )
+            if user_id:
+                account_user_ids[account] = str(user_id)
+                print(f"[Auto-Rejoin] {account} -> User ID: {user_id}")
+            else:
+                print(f"[Auto-Rejoin] {account} -> Could not get user ID")
+        
         try:
+            self.save_settings()
+        except Exception as e:
+            print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
+        
+        all_pids = self._get_roblox_pids()
+        print(f"[Auto-Rejoin] Found {len(all_pids)} Roblox process(es)")
+        
+        if not all_pids:
+            return {}
+        
+        used_logs = set()
+        pid_user_ids = {}
+        for pid in all_pids:
+            if pid in self.auto_rejoin_pids.values():
+                print(f"[Auto-Rejoin] PID {pid} already tracked, skipping")
+                continue
             
+            user_id, matched_log = self._get_user_id_from_pid(pid, used_logs)
+            if user_id:
+                pid_user_ids[pid] = str(user_id)
+                print(f"[Auto-Rejoin] PID {pid} -> User ID: {user_id}")
+            else:
+                print(f"[Auto-Rejoin] PID {pid} -> Could not extract user ID")
+        
+        matches = {}
+        for account, account_user_id in account_user_ids.items():
+            if account in self.auto_rejoin_pids:
+                continue
+                
+            for pid, pid_user_id in pid_user_ids.items():
+                if account_user_id == pid_user_id:
+                    matches[account] = pid
+                    self.auto_rejoin_pids[account] = pid
+                    print(f"[Auto-Rejoin] MATCHED: {account} (user {account_user_id}) -> PID {pid}")
+                    del pid_user_ids[pid]
+                    break
+        
+        unmatched = [acc for acc in accounts if acc not in matches and acc not in self.auto_rejoin_pids]
+        if unmatched:
+            print(f"[Auto-Rejoin] Unmatched accounts (will launch new): {unmatched}")
+        
+        return matches
+    
+    def _get_user_id_from_pid(self, pid, used_logs=None):
+        """Get user ID from a Roblox process PID"""
+        if used_logs is None:
+            used_logs = set()
+            
+        try:
             process = psutil.Process(pid)
             if not (process.is_running() and process.name().lower() == "robloxplayerbeta.exe"):
-                return None
+                return None, None
             
             create_time_local = datetime.fromtimestamp(process.create_time())
             create_time_utc = datetime.fromtimestamp(process.create_time(), tz=timezone.utc).replace(tzinfo=None)
             
             logs_dir = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "logs")
             if not os.path.exists(logs_dir):
-                return None
+                return None, None
             
-            time_window = timedelta(seconds=5)
+            time_window = timedelta(seconds=10)
             matching_logs = []
             
             for filename in os.listdir(logs_dir):
                 if not filename.endswith("_last.log"):
+                    continue
+                
+                full_path = os.path.join(logs_dir, filename)
+                
+                if full_path in used_logs:
                     continue
                 
                 match = re.search(r'(\d{8}T\d{6}Z)', filename)
@@ -4917,32 +4997,36 @@ del /f /q "%~f0"
                 timestamp_str = match.group(1)
                 try:
                     log_time = datetime.strptime(timestamp_str, "%Y%m%dT%H%M%SZ")
+                    time_diff = (log_time - create_time_utc).total_seconds()
                     
-                    if abs((log_time - create_time_utc).total_seconds()) <= time_window.total_seconds():
-                        matching_logs.append(os.path.join(logs_dir, filename))
+                    if 0 <= time_diff <= 10:
+                        matching_logs.append((time_diff, full_path, log_time))
                 except ValueError:
                     continue
             
-            for log_path in matching_logs:
+            matching_logs.sort(key=lambda x: x[0])
+            
+            for time_diff, log_path, log_time in matching_logs:
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read(5000)
+                        content = f.read(50000)
                     
                     if "userid:" in content:
                         user_id = content.split("userid:")[1].split(",")[0].strip()
                         if user_id.isdigit():
-                            return user_id
+                            used_logs.add(log_path)
+                            return user_id, log_path
                 except Exception as e:
                     print(f"[Auto-Rejoin] Error reading log {log_path}: {e}")
                     continue
             
-            return None
+            return None, None
             
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return None
+            return None, None
         except Exception as e:
             print(f"[Auto-Rejoin] Error getting user ID for PID {pid}: {e}")
-            return None
+            return None, None
       
     def anti_afk_worker(self):
         """Background worker that sends key presses to Roblox windows"""
