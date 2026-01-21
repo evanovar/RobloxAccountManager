@@ -4683,12 +4683,7 @@ del /f /q "%~f0"
             return False
     
     def auto_rejoin_worker_for_account(self, account):
-        """Background worker that monitors for disconnection and rejoins for a specific account.
-        
-        Detection modes:
-        - With presence check: Uses Roblox Presence API to verify player is in the correct game
-        - Without presence check: Tracks the specific PID for this account's Roblox process
-        """        
+        """Background worker that monitors for disconnection and rejoins for a specific account."""   
         config = self.auto_rejoin_configs.get(account, {})
         stop_event = self.auto_rejoin_stop_events.get(account)
         
