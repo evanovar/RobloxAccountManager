@@ -111,12 +111,16 @@ class RobloxAccountManager:
             except:
                 pass
     
-    def setup_chrome_driver(self):
+    def setup_chrome_driver(self, browser_path=None):
+        print(f"[DEBUG] setup_chrome_driver called with browser_path: {browser_path}")
         profile_dir = self.create_temp_profile()
 
-        # this code looks satisfying to me
         
         chrome_options = Options()
+        
+        if browser_path:
+            chrome_options.binary_location = browser_path
+        
         chrome_options.add_argument(f"--user-data-dir={profile_dir}")
         chrome_options.add_argument("--no-first-run")
         chrome_options.add_argument("--no-default-browser-check")
@@ -154,10 +158,18 @@ class RobloxAccountManager:
         chrome_options.add_argument("--aggressive-cache-discard")
         
         try:
-            service = Service(
-                ChromeDriverManager().install(),
-                log_path=os.devnull
-            )
+            if browser_path and "Chromium" in browser_path:
+                chromium_dir = os.path.dirname(os.path.dirname(browser_path))
+                chromedriver_path = os.path.join(chromium_dir, "chromedriver_win32", "chromedriver.exe")
+                
+                if os.path.exists(chromedriver_path):
+                    print(f"[INFO] Using bundled chromedriver: {chromedriver_path}")
+                    service = Service(chromedriver_path, log_path=os.devnull)
+                else:
+                    print(f"[WARNING] Chromedriver not found, falling back to webdriver_manager")
+                    service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+            else:
+                service = Service(ChromeDriverManager().install(), log_path=os.devnull)
             
             original_stderr = sys.stderr
             sys.stderr = open(os.devnull, 'w')
@@ -342,12 +354,13 @@ class RobloxAccountManager:
             print(f"Error extracting user info: {e}")
             return None, None
     
-    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript=""):
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
         """
         Add accounts through browser login with optional Javascript execution
         amount: number of browser instances to open (max 10)
         website: URL to navigate to
         javascript: Javascript code to execute after page load
+        browser_path: Optional path to browser executable
         """
         if amount > 10:
             print("[WARNING] Maximum 10 instances allowed. Setting to 10.")
@@ -360,7 +373,7 @@ class RobloxAccountManager:
             print(f"Launching {amount} browser instance(s)...")
             
             for i in range(amount):
-                driver = self.setup_chrome_driver()
+                driver = self.setup_chrome_driver(browser_path)
                 if not driver:
                     print(f"[ERROR] Failed to setup Chrome driver for instance {i + 1}")
                     continue

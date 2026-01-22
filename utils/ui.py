@@ -952,6 +952,33 @@ del /f /q "%~f0"
             pass
         return False
 
+    def get_browser_path(self):
+        """Get path to the selected browser (Chrome or Chromium)."""
+        browser_type = self.settings.get("browser_type", "chrome")
+        
+        if browser_type == "chromium":
+            chromium_path = os.path.join(self.data_folder, "Chromium", "chrome-win64", "chrome.exe")
+            if os.path.exists(chromium_path):
+                return chromium_path, "Chromium"
+            browser_type = "chrome"
+        
+        if browser_type == "chrome":
+            candidates = []
+            pf = os.environ.get('ProgramFiles')
+            pfx86 = os.environ.get('ProgramFiles(x86)')
+            localapp = os.environ.get('LOCALAPPDATA')
+            if pf:
+                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if pfx86:
+                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if localapp:
+                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            for path in candidates:
+                if path and os.path.exists(path):
+                    return path, "Google Chrome"
+        
+        return None, None
+
     def on_place_id_change(self, event=None):
         place_id = self.place_entry.get().strip()
         self.settings["last_place_id"] = place_id
@@ -1245,22 +1272,26 @@ del /f /q "%~f0"
         """
         Add a new account using browser automation
         """
-        if not self.is_chrome_installed():
+        browser_path, browser_name = self.get_browser_path()
+        
+        if not browser_path:
             messagebox.showwarning(
-                "Google Chrome Required",
-                "Add Account requires Google Chrome to be installed.\n"
-                "Please install Google Chrome and try again."
+                "Browser Required",
+                "Add Account requires a browser.\n\n"
+                "Please either:\n"
+                "• Install Google Chrome, or\n"
+                "• Download Chromium in Settings → Tools → Browser Engine"
             )
             return
 
-        messagebox.showinfo("Add Account", "Browser will open for account login.\nPlease log in and wait for the process to complete.")
+        messagebox.showinfo("Add Account", f"Browser ({browser_name}) will open for account login.\nPlease log in and wait for the process to complete.")
         
         def add_account_thread():
             """
             Thread function to add account without blocking UI
             """
             try:
-                success = self.manager.add_account(1, "https://www.roblox.com/login", "")
+                success = self.manager.add_account(1, "https://www.roblox.com/login", "", browser_path)
                 self.root.after(0, lambda: self._add_account_complete(success))
             except Exception as e:
                 self.root.after(0, lambda: self._add_account_error(str(e)))
@@ -4087,8 +4118,341 @@ del /f /q "%~f0"
             command=wipe_data
         ).pack(fill="x", pady=(0, 10))
         
-        
+        ttk.Button(
+            tool_frame,
+            text="Browser Engine",
+            style="Dark.TButton",
+            command=self.open_browser_engine_window
+        ).pack(fill="x", pady=(0, 5))
     
+    def open_browser_engine_window(self):
+        """Open Browser Engine selection window"""
+        browser_window = tk.Toplevel(self.root)
+        self.apply_window_icon(browser_window)
+        browser_window.title("Browser Engine Settings")
+        browser_window.geometry("420x330")
+        browser_window.configure(bg=self.BG_DARK)
+        browser_window.resizable(False, False)
+        browser_window.transient(self.root)
+        
+        if self.settings.get("enable_topmost", False):
+            browser_window.attributes("-topmost", True)
+        
+        browser_window.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (browser_window.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (browser_window.winfo_height() // 2)
+        browser_window.geometry(f"+{x}+{y}")
+        
+        current_browser = self.settings.get("browser_type", "chrome")
+        browser_var = tk.StringVar(value=current_browser)
+        chrome_installed = self.is_chrome_installed()
+        chromium_path = os.path.join(self.data_folder, "Chromium", "chrome-win64", "chrome.exe")
+        chromium_installed = os.path.exists(chromium_path)
+        
+        container = ttk.Frame(browser_window, style="Dark.TFrame")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        header_frame = ttk.Frame(container, style="Dark.TFrame")
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(
+            header_frame,
+            text="Select Browser Engine",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w")
+        
+        ttk.Label(
+            header_frame,
+            text="Choose which browser to use for Add Account",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(2, 0))
+        
+        separator = ttk.Frame(container, style="Dark.TFrame", height=1)
+        separator.pack(fill="x", pady=(0, 15))
+        separator.configure(relief="solid", borderwidth=1)
+        
+        options_frame = ttk.Frame(container, style="Dark.TFrame")
+        options_frame.pack(fill="both", expand=True)
+        
+        radio_style = ttk.Style()
+        radio_style.configure(
+            "Browser.TRadiobutton",
+            background=self.BG_DARK,
+            foreground=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 10)
+        )
+        radio_style.map(
+            "Browser.TRadiobutton",
+            background=[("active", self.BG_DARK)],
+            foreground=[("active", self.FG_TEXT)]
+        )
+        
+        chrome_frame = ttk.Frame(options_frame, style="Dark.TFrame")
+        chrome_frame.pack(fill="x", pady=(0, 8))
+        
+        chrome_radio = ttk.Radiobutton(
+            chrome_frame,
+            text="Google Chrome",
+            variable=browser_var,
+            value="chrome",
+            style="Browser.TRadiobutton"
+        )
+        chrome_radio.pack(side="left")
+        
+        chrome_status = "✓ Installed" if chrome_installed else "Not Installed"
+        chrome_color = "#00FF00" if chrome_installed else "#FF6666"
+        tk.Label(
+            chrome_frame,
+            text=f"  [{chrome_status}]",
+            bg=self.BG_DARK,
+            fg=chrome_color,
+            font=(self.FONT_FAMILY, 9)
+        ).pack(side="left")
+        
+        chromium_frame = ttk.Frame(options_frame, style="Dark.TFrame")
+        chromium_frame.pack(fill="x", pady=(0, 15))
+        
+        chromium_radio = ttk.Radiobutton(
+            chromium_frame,
+            text="Chromium",
+            variable=browser_var,
+            value="chromium",
+            style="Browser.TRadiobutton"
+        )
+        chromium_radio.pack(side="left")
+        
+        chromium_status_text = "✓ Installed" if chromium_installed else "Not Installed"
+        chromium_color = "#00FF00" if chromium_installed else "#FF6666"
+        chromium_status_label = tk.Label(
+            chromium_frame,
+            text=f"  [{chromium_status_text}]",
+            bg=self.BG_DARK,
+            fg=chromium_color,
+            font=(self.FONT_FAMILY, 9)
+        )
+        chromium_status_label.pack(side="left")
+        
+        progress_outer = tk.Frame(options_frame, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
+        
+        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
+        progress_inner.pack(fill="x", padx=1, pady=1)
+        progress_inner.pack_propagate(False)
+        
+        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
+        progress_fill.place(x=0, y=0, relheight=1)
+        
+        progress_label = tk.Label(
+            progress_inner,
+            text="0%",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 9, "bold")
+        )
+        progress_label.place(relx=0.5, rely=0.5, anchor="center")
+        
+        status_label = ttk.Label(
+            options_frame,
+            text="",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        )
+        
+        def update_progress(percent):
+            """Update the custom progress bar"""
+            progress_inner.update_idletasks()
+            total_width = progress_inner.winfo_width()
+            fill_width = int((percent / 100) * total_width)
+            progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
+            
+            label_x = total_width // 2
+            if fill_width >= label_x:
+                progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
+            else:
+                progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
+            
+            progress_label.config(text=f"{int(percent)}%")
+            browser_window.update()
+        
+        download_btn = None
+        
+        def download_chromium():
+            """Download portable Chromium"""
+            nonlocal chromium_installed
+            
+            download_btn.config(state="disabled", text="Downloading...")
+            progress_outer.pack(fill="x", pady=(0, 10))
+            status_label.pack(anchor="w", pady=(0, 10))
+            status_label.config(text="Downloading Chromium...")
+            browser_window.update()
+            
+            def do_download():
+                try:
+                    chromium_dir = os.path.join(self.data_folder, "Chromium")
+                    os.makedirs(chromium_dir, exist_ok=True)
+                    
+                    browser_window.after(0, lambda: status_label.config(text="Fetching latest version..."))
+                    last_change_url = "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE"
+                    last_change_response = requests.get(last_change_url, timeout=30)
+                    if last_change_response.status_code != 200:
+                        raise Exception("Failed to fetch latest Chromium version")
+                    build_number = last_change_response.text.strip()
+                    
+                    download_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build_number}/chrome-win.zip"
+                    browser_window.after(0, lambda: status_label.config(text=f"Downloading build {build_number}..."))
+                    zip_path = os.path.join(chromium_dir, "chromium.zip")
+                    
+                    response = requests.get(download_url, stream=True, timeout=60)
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    last_progress = 0
+                    
+                    with open(zip_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = int((downloaded / total_size) * 100)
+                                    if progress >= last_progress + 1:
+                                        last_progress = progress
+                                        browser_window.after(10, lambda p=progress: update_progress(p))
+                    
+                    browser_window.after(0, lambda: update_progress(100))
+                    browser_window.after(0, lambda: status_label.config(text="Extracting Chromium..."))
+                    browser_window.after(50, lambda: update_progress(0))
+                    
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        file_list = zip_ref.namelist()
+                        total_files = len(file_list)
+                        for i, file in enumerate(file_list):
+                            zip_ref.extract(file, chromium_dir)
+                            if i % 50 == 0:
+                                progress = int((i / total_files) * 100)
+                                browser_window.after(0, lambda p=progress: update_progress(p))
+                    
+                    browser_window.after(0, lambda: update_progress(100))
+                    
+                    extracted_folder = os.path.join(chromium_dir, "chrome-win")
+                    target_folder = os.path.join(chromium_dir, "chrome-win64")
+                    if os.path.exists(extracted_folder) and not os.path.exists(target_folder):
+                        os.rename(extracted_folder, target_folder)
+                    
+                    os.remove(zip_path)
+                    
+                    browser_window.after(0, lambda: status_label.config(text="Downloading ChromeDriver..."))
+                    browser_window.after(50, lambda: update_progress(0))
+                    
+                    chromedriver_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build_number}/chromedriver_win32.zip"
+                    chromedriver_zip_path = os.path.join(chromium_dir, "chromedriver.zip")
+                    
+                    chromedriver_response = requests.get(chromedriver_url, stream=True, timeout=60)
+                    cd_total_size = int(chromedriver_response.headers.get('content-length', 0))
+                    cd_downloaded = 0
+                    cd_last_progress = 0
+                    
+                    with open(chromedriver_zip_path, 'wb') as f:
+                        for chunk in chromedriver_response.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                cd_downloaded += len(chunk)
+                                if cd_total_size > 0:
+                                    progress = int((cd_downloaded / cd_total_size) * 100)
+                                    if progress >= cd_last_progress + 1:
+                                        cd_last_progress = progress
+                                        browser_window.after(10, lambda p=progress: update_progress(p))
+                    
+                    browser_window.after(0, lambda: update_progress(100))
+                    browser_window.after(0, lambda: status_label.config(text="Extracting ChromeDriver..."))
+                    browser_window.after(50, lambda: update_progress(0))
+                    
+                    with zipfile.ZipFile(chromedriver_zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(chromium_dir)
+                    
+                    browser_window.after(0, lambda: update_progress(100))
+                    
+                    chromedriver_extracted = os.path.join(chromium_dir, "chromedriver-win32", "chromedriver.exe")
+                    chromedriver_target = os.path.join(target_folder, "chromedriver.exe")
+                    if os.path.exists(chromedriver_extracted):
+                        import shutil
+                        shutil.copy2(chromedriver_extracted, chromedriver_target)
+                        shutil.rmtree(os.path.join(chromium_dir, "chromedriver-win32"))
+                    
+                    os.remove(chromedriver_zip_path)
+                    
+                    def update_ui():
+                        nonlocal chromium_installed
+                        chromium_installed = os.path.exists(os.path.join(chromium_dir, "chrome-win64", "chrome.exe"))
+                        if chromium_installed:
+                            chromium_status_label.config(text="  [✓ Installed]", fg="#00FF00")
+                            download_btn.config(state="disabled", text="✓ Downloaded")
+                            status_label.config(text="Chromium downloaded successfully!")
+                        else:
+                            download_btn.config(state="normal", text="Download Chromium")
+                            status_label.config(text="Failed to extract Chromium.")
+                        progress_outer.pack_forget()
+                    
+                    browser_window.after(0, update_ui)
+                    
+                except Exception as download_error:
+                    error_msg = str(download_error)
+                    def show_error():
+                        download_btn.config(state="normal", text="Download Chromium")
+                        progress_outer.pack_forget()
+                        status_label.config(text=f"Download failed: {error_msg[:50]}...")
+                    browser_window.after(0, show_error)
+            
+            thread = threading.Thread(target=do_download, daemon=True)
+            thread.start()
+        
+        if not chromium_installed:
+            download_btn = ttk.Button(
+                options_frame,
+                text="Download Chromium",
+                style="Dark.TButton",
+                command=download_chromium
+            )
+            download_btn.pack(fill="x", pady=(0, 10))
+        else:
+            download_btn = ttk.Button(
+                options_frame,
+                text="✓ Downloaded",
+                style="Dark.TButton",
+                state="disabled"
+            )
+            download_btn.pack(fill="x", pady=(0, 10))
+        
+        def on_browser_change(*args):
+            nonlocal chromium_installed
+            selected = browser_var.get()
+            if selected == "chromium" and not chromium_installed:
+                messagebox.showwarning(
+                    "Chromium Not Installed",
+                    "Please download Chromium first."
+                )
+                browser_var.set("chrome")
+                return
+            if selected == "chrome" and not chrome_installed:
+                messagebox.showwarning(
+                    "Chrome Not Installed",
+                    "Google Chrome is not installed.\nPlease install Chrome or use Chromium."
+                )
+                if chromium_installed:
+                    browser_var.set("chromium")
+                return
+            self.settings["browser_type"] = selected
+            self.save_settings()
+        
+        browser_var.trace_add("write", on_browser_change)
+        
+        ttk.Button(
+            container,
+            text="Close",
+            style="Dark.TButton",
+            command=browser_window.destroy
+        ).pack(fill="x", pady=(10, 0))
+        
     def write(self, text):
         """Redirect stdout/stderr writes to console"""
         if text.strip():
