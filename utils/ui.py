@@ -37,7 +37,7 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.icon_path = icon_path
-        self.APP_VERSION = "2.4.1"
+        self.APP_VERSION = "2.4.2"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
@@ -3420,7 +3420,55 @@ del /f /q "%~f0"
         )
         disable_launch_popup_check.pack(anchor="w", pady=2)
         
-        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=5)
+        def is_start_menu_shortcut_present():
+            """Check if Start Menu shortcut exists"""
+            start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
+            shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
+            return os.path.exists(shortcut_path)
+        
+        def toggle_start_menu_shortcut():
+            """Create or remove Start Menu shortcut"""
+            start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
+            shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
+            
+            if start_menu_var.get():
+                try:
+                    import subprocess
+                    exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
+                    if not getattr(sys, 'frozen', False):
+                        exe_path = os.path.abspath(sys.argv[0])
+                    
+                    ps_script = f'''
+                    $WshShell = New-Object -comObject WScript.Shell
+                    $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
+                    $Shortcut.TargetPath = "{exe_path}"
+                    $Shortcut.WorkingDirectory = "{os.path.dirname(exe_path)}"
+                    $Shortcut.Description = "Roblox Account Manager"
+                    $Shortcut.Save()
+                    '''
+                    subprocess.run(["powershell", "-Command", ps_script], 
+                                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    print("[INFO] Start Menu shortcut created")
+                except Exception as e:
+                    print(f"[ERROR] Failed to create Start Menu shortcut: {e}")
+                    start_menu_var.set(False)
+            else:
+                try:
+                    if os.path.exists(shortcut_path):
+                        os.remove(shortcut_path)
+                        print("[INFO] Start Menu shortcut removed")
+                except Exception as e:
+                    print(f"[ERROR] Failed to remove Start Menu shortcut: {e}")
+        
+        start_menu_var = tk.BooleanVar(value=is_start_menu_shortcut_present())
+        start_menu_check = ttk.Checkbutton(
+            main_frame,
+            text="Add to Start Menu",
+            variable=start_menu_var,
+            style="Dark.TCheckbutton",
+            command=toggle_start_menu_shortcut
+        )
+        start_menu_check.pack(anchor="w", pady=2)
         
         max_games_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         max_games_frame.pack(fill="x", pady=2)
@@ -4113,17 +4161,17 @@ del /f /q "%~f0"
         
         ttk.Button(
             tool_frame,
-            text="Wipe Data",
-            style="Dark.TButton",
-            command=wipe_data
-        ).pack(fill="x", pady=(0, 10))
-        
-        ttk.Button(
-            tool_frame,
             text="Browser Engine",
             style="Dark.TButton",
             command=self.open_browser_engine_window
         ).pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            tool_frame,
+            text="Wipe Data",
+            style="Dark.TButton",
+            command=wipe_data
+        ).pack(side="bottom", fill="x", pady=(10, 0))
     
     def open_browser_engine_window(self):
         """Open Browser Engine selection window"""
@@ -4375,7 +4423,6 @@ del /f /q "%~f0"
                     chromedriver_extracted = os.path.join(chromium_dir, "chromedriver-win32", "chromedriver.exe")
                     chromedriver_target = os.path.join(target_folder, "chromedriver.exe")
                     if os.path.exists(chromedriver_extracted):
-                        import shutil
                         shutil.copy2(chromedriver_extracted, chromedriver_target)
                         shutil.rmtree(os.path.join(chromium_dir, "chromedriver-win32"))
                     

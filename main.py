@@ -53,16 +53,22 @@ def apply_icon_to_window(window, icon_path):
 
 
 def apply_icon_async(root, data_folder):
-    def download_and_apply():
-        icon_path = setup_icon(data_folder)
-        if icon_path:
-            apply_icon_to_window(root, icon_path)
+    icon_path = os.path.join(data_folder, "icon.ico")
     
-    thread = threading.Thread(target=download_and_apply, daemon=True)
+    if os.path.exists(icon_path):
+        apply_icon_to_window(root, icon_path)
+        return icon_path
+    
+    def download_icon():
+        try:
+            setup_icon(data_folder)
+        except:
+            pass
+    
+    thread = threading.Thread(target=download_icon, daemon=True)
     thread.start()
     
-    icon_path = os.path.join(data_folder, "icon.ico")
-    return icon_path if os.path.exists(icon_path) else None
+    return None
 
 
 def main():
@@ -96,10 +102,12 @@ def main():
         return
     
     root = tk.Tk()
+    root.withdraw()
     
     icon_path = apply_icon_async(root, data_folder)
     app = AccountManagerUI(root, manager, icon_path=icon_path)
     
+    root.deiconify()
     root.mainloop()
 
 
