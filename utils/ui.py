@@ -1627,9 +1627,21 @@ del /f /q "%~f0"
         """
         Launch account addition with Javascript execution
         """
+        browser_path, browser_name = self.get_browser_path()
+        
+        if not browser_path:
+            messagebox.showwarning(
+                "Browser Required",
+                "Javascript Import requires a browser.\n\n"
+                "Please either:\n"
+                "• Install Google Chrome, or\n"
+                "• Download Chromium in Settings → Tools → Browser Engine"
+            )
+            return
+
         def launch_thread():
             try:
-                success = self.manager.add_account(amount, website, javascript)
+                success = self.manager.add_account(amount, website, javascript, browser_path)
                 
                 if success:
                     self.root.after(0, lambda: [
