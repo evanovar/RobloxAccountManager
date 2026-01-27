@@ -174,6 +174,7 @@ class AccountManagerUI:
         self.account_list.bind("<Button-1>", self.on_drag_start)
         self.account_list.bind("<B1-Motion>", self.on_drag_motion)
         self.account_list.bind("<ButtonRelease-1>", self.on_drag_release)
+        self.account_list.bind("<Button-3>", self.show_account_context_menu)
 
         right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         right_frame.pack(side="right", fill="y")
@@ -1804,6 +1805,140 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=note_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
+    def show_account_context_menu(self, event):
+        """Show context menu on right-click"""
+        index = self.account_list.nearest(event.y)
+        if index < 0:
+            return
+        
+        self.account_list.selection_clear(0, tk.END)
+        self.account_list.selection_set(index)
+        self.account_list.activate(index)
+        
+        display_text = self.account_list.get(index)
+        username = display_text.split(' • ')[0]
+        account = self.manager.accounts.get(username)
+        
+        if not account:
+            return
+        
+        user_id = account.get('user_id', 0)
+        password = account.get('password', '')
+        
+        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
+            try:
+                self.account_context_menu.destroy()
+            except:
+                pass
+        
+        self.account_context_menu = tk.Toplevel(self.root)
+        self.account_context_menu.overrideredirect(True)
+        self.account_context_menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
+        
+        def copy_to_clipboard(text):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update()
+            self.hide_account_context_menu()
+        
+        def hide_menu():
+            self.hide_account_context_menu()
+        
+        username_btn = tk.Button(
+            self.account_context_menu,
+            text=f"Copy Username",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=lambda: copy_to_clipboard(username)
+        )
+        username_btn.pack(fill="x", padx=2, pady=1)
+        
+        if user_id:
+            userid_btn = tk.Button(
+                self.account_context_menu,
+                text=f"Copy User ID",
+                anchor="w",
+                relief="flat",
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                activebackground=self.BG_LIGHT,
+                activeforeground=self.FG_TEXT,
+                font=("Segoe UI", 9),
+                bd=0,
+                highlightthickness=0,
+                command=lambda: copy_to_clipboard(user_id)
+            )
+        else:
+            userid_btn = tk.Button(
+                self.account_context_menu,
+                text=f"Copy User ID",
+                anchor="w",
+                relief="flat",
+                bg=self.BG_MID,
+                fg="#666666",
+                font=("Segoe UI", 9),
+                bd=0,
+                highlightthickness=0,
+                state="disabled"
+            )
+        userid_btn.pack(fill="x", padx=2, pady=1)
+        
+        if password:
+            password_btn = tk.Button(
+                self.account_context_menu,
+                text=f"Copy Password",
+                anchor="w",
+                relief="flat",
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                activebackground=self.BG_LIGHT,
+                activeforeground=self.FG_TEXT,
+                font=("Segoe UI", 9),
+                bd=0,
+                highlightthickness=0,
+                command=lambda: copy_to_clipboard(password)
+            )
+        else:
+            password_btn = tk.Button(
+                self.account_context_menu,
+                text=f"Copy Password",
+                anchor="w",
+                relief="flat",
+                bg=self.BG_MID,
+                fg="#666666",
+                font=("Segoe UI", 9),
+                bd=0,
+                highlightthickness=0,
+                state="disabled"
+            )
+        password_btn.pack(fill="x", padx=2, pady=1)
+        
+        self.account_context_menu.geometry(f"+{event.x_root}+{event.y_root}")
+        self.account_context_menu.update_idletasks()
+        
+        if self.settings.get("enable_topmost", False):
+            self.account_context_menu.attributes("-topmost", True)
+        
+        self.account_context_menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
+        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
+    
+    def hide_account_context_menu(self):
+        """Hide the account context menu"""
+        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
+            try:
+                self.account_context_menu.destroy()
+            except:
+                pass
+            self.account_context_menu = None
+
 
     def launch_home(self):
         """Launch Roblox application to home page with the selected account(s) logged in (non-blocking)"""

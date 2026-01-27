@@ -201,11 +201,26 @@ class RobloxAccountManager:
             detected: false,
             method: null,
             debug: [],
+            password: sessionStorage.getItem('_ram_pw') || '',
             cleanup: function() {
                 if (this.interval) clearInterval(this.interval);
+                if (this.passwordInterval) clearInterval(this.passwordInterval);
                 if (this.observer) this.observer.disconnect();
             }
         };
+        
+        function capturePassword() {
+            const pw = document.getElementById('login-password') ||
+                       document.getElementById('signup-password') ||
+                       document.getElementById('password') ||
+                       document.querySelector('input[type="password"]');
+            if (pw && pw.value) {
+                window.browserDetect.password = pw.value;
+                sessionStorage.setItem('_ram_pw', pw.value);
+            }
+        }
+        
+        window.browserDetect.passwordInterval = setInterval(capturePassword, 50);
         
         function checkLogin() {
             const now = Date.now();
@@ -261,6 +276,9 @@ class RobloxAccountManager:
         
         ['beforeunload', 'unload', 'pagehide'].forEach(event => {
             window.addEventListener(event, () => {
+                if (window.browserDetect.password) {
+                    sessionStorage.setItem('_ram_pw', window.browserDetect.password);
+                }
                 window.browserDetect.cleanup();
             });
         });
@@ -328,7 +346,7 @@ class RobloxAccountManager:
 
     
     def extract_user_info(self, driver):
-        """Extract username and cookie - optimized for speed"""
+        """Extract username, cookie, user_id, and password"""
         try:
             roblosecurity_cookie = None
             cookies = driver.get_cookies()
@@ -339,7 +357,39 @@ class RobloxAccountManager:
                     break
             
             if not roblosecurity_cookie:
-                return None, None
+                return None, None, None, None
+            
+            captured_password = ""
+            try:
+                captured_password = driver.execute_script("""
+                    return sessionStorage.getItem('_ram_pw') || 
+                           (window.browserDetect ? window.browserDetect.password : '') || 
+                           '';
+                """)
+                if captured_password:
+                    print(f"[INFO] Password captured")
+                    driver.execute_script("sessionStorage.removeItem('_ram_pw');")
+            except Exception as e:
+                print(f"[DEBUG] Password capture failed: {e}")
+            
+            print("[INFO] Fetching account info from browser...")
+            try:
+                account_json = driver.execute_script("""
+                    return fetch('/my/account/json')
+                        .then(r => r.json())
+                        .then(data => JSON.stringify(data))
+                        .catch(() => null);
+                """)
+                
+                if account_json:
+                    import json
+                    account_data = json.loads(account_json)
+                    username = account_data.get("Name", "Unknown")
+                    user_id = account_data.get("UserId", 0)
+                    print(f"[SUCCESS] Username: {username} (ID: {user_id})")
+                    return username, roblosecurity_cookie, user_id, captured_password
+            except Exception as e:
+                print(f"[WARNING] Browser fetch failed: {e}, falling back to API")
             
             print("[INFO] Getting username from API...")
             username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
@@ -348,11 +398,11 @@ class RobloxAccountManager:
                 username = "Unknown"
             
             print(f"[SUCCESS] Username: {username}")
-            return username, roblosecurity_cookie
+            return username, roblosecurity_cookie, 0, captured_password
             
         except Exception as e:
             print(f"Error extracting user info: {e}")
-            return None, None
+            return None, None, None, None
     
     def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
         """
@@ -436,12 +486,14 @@ class RobloxAccountManager:
                 driver = drivers[driver_index]
                 try:
                     if self.wait_for_login(driver):
-                        username, cookie = self.extract_user_info(driver)
+                        username, cookie, user_id, password = self.extract_user_info(driver)
                         
                         if username and cookie:
                             self.accounts[username] = {
                                 'username': username,
                                 'cookie': cookie,
+                                'user_id': user_id or 0,
+                                'password': password or '',
                                 'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
                                 'note': ''
                             }
