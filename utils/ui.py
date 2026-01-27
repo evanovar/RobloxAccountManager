@@ -4180,6 +4180,13 @@ del /f /q "%~f0"
         
         ttk.Button(
             tool_frame,
+            text="Roblox Settings",
+            style="Dark.TButton",
+            command=self.open_roblox_settings_window
+        ).pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            tool_frame,
             text="Wipe Data",
             style="Dark.TButton",
             command=wipe_data
@@ -5695,3 +5702,235 @@ del /f /q "%~f0"
         except Exception as e:
             print(f"[Anti-AFK] Failed: {e}")
             traceback.print_exc()
+    
+    def open_roblox_settings_window(self):
+        """Open Roblox Settings window to view/edit GlobalBasicSettings_13.xml"""
+        import xml.etree.ElementTree as ET
+        
+        settings_window = tk.Toplevel(self.root)
+        self.apply_window_icon(settings_window)
+        settings_window.title("Roblox Settings")
+        settings_window.geometry("500x400")
+        settings_window.configure(bg=self.BG_DARK)
+        settings_window.resizable(False, False)
+        settings_window.minsize(600, 400)
+        
+        if self.settings.get("enable_topmost", False):
+            settings_window.attributes("-topmost", True)
+        
+        settings_window.transient(self.root)
+        
+        roblox_settings_path = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "Roblox",
+            "GlobalBasicSettings_13.xml"
+        )
+        
+        settings_data = {}
+        xml_tree = None
+        
+        def parse_settings():
+            """Parse the XML settings file"""
+            nonlocal settings_data, xml_tree
+            settings_data.clear()
+            
+            if not os.path.exists(roblox_settings_path):
+                return False
+            
+            try:
+                xml_tree = ET.parse(roblox_settings_path)
+                root = xml_tree.getroot()
+                
+                properties = root.find(".//Properties")
+                if properties is None:
+                    return False
+                
+                for child in properties:
+                    tag = child.tag
+                    name = child.get("name", "")
+                    
+                    if name:
+                        if tag == "Vector2":
+                            x_elem = child.find("X")
+                            y_elem = child.find("Y")
+                            value = f"{x_elem.text if x_elem is not None else '0'}, {y_elem.text if y_elem is not None else '0'}"
+                        else:
+                            value = child.text if child.text else ""
+                        
+                        settings_data[name] = {
+                            "type": tag,
+                            "value": value,
+                            "element": child
+                        }
+                
+                return True
+            except Exception as e:
+                print(f"[ERROR] Failed to parse settings: {e}")
+                return False
+        
+        def refresh_list(filter_text=""):
+            """Refresh the settings list, optionally filtering by search text"""
+            settings_list.delete(0, tk.END)
+            
+            for name, data in sorted(settings_data.items()):
+                if filter_text.lower() in name.lower() or filter_text.lower() in str(data["value"]).lower():
+                    display = f"{name}: {data['value']}"
+                    if len(display) > 60:
+                        display = display[:57] + "..."
+                    settings_list.insert(tk.END, display)
+        
+        def on_search(*args):
+            """Filter list based on search input"""
+            refresh_list(search_var.get())
+        
+        def on_select(event):
+            """Handle list selection"""
+            selection = settings_list.curselection()
+            if not selection:
+                return
+            
+            selected_text = settings_list.get(selection[0])
+            selected_name = selected_text.split(":")[0]
+            
+            if selected_name in settings_data:
+                data = settings_data[selected_name]
+                selected_name_label.config(text=f"Selected: {selected_name}")
+                type_label.config(text=f"Type: {data['type']}")
+                value_entry.delete(0, tk.END)
+                value_entry.insert(0, data["value"])
+        
+        def set_value():
+            """Set value locally (in memory)"""
+            selection = settings_list.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select a setting first.")
+                return
+            
+            selected_text = settings_list.get(selection[0])
+            selected_name = selected_text.split(":")[0]
+            new_value = value_entry.get()
+            
+            if selected_name in settings_data:
+                data = settings_data[selected_name]
+                element = data["element"]
+                
+                if data["type"] == "Vector2":
+                    parts = new_value.split(",")
+                    if len(parts) == 2:
+                        x_elem = element.find("X")
+                        y_elem = element.find("Y")
+                        if x_elem is not None:
+                            x_elem.text = parts[0].strip()
+                        if y_elem is not None:
+                            y_elem.text = parts[1].strip()
+                else:
+                    element.text = new_value
+                
+                settings_data[selected_name]["value"] = new_value
+                refresh_list(search_var.get())
+                messagebox.showinfo("Set", f"Value for '{selected_name}' set locally.")
+        
+        def refresh_settings():
+            """Reload settings from XML file"""
+            if parse_settings():
+                refresh_list(search_var.get())
+                messagebox.showinfo("Refreshed", "Settings reloaded from file.")
+            else:
+                messagebox.showerror("Error", f"Could not load settings from:\n{roblox_settings_path}")
+        
+        def save_settings():
+            """Save settings to XML file"""
+            nonlocal xml_tree
+            if xml_tree is None:
+                messagebox.showerror("Error", "No settings loaded to save.")
+                return
+            
+            try:
+                xml_tree.write(roblox_settings_path, encoding="utf-8", xml_declaration=True)
+                messagebox.showinfo("Saved", "Settings saved to file successfully!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save settings: {e}")
+        
+        def auto_apply_setting():
+            """Auto Apply settings whenever roblox is launched."""
+            # ok so basically what this DO:
+            # before roblox is running, it applies this setting immediately
+            # why? because when you experienes error code 429, the roblox setting get reseted
+            # so, with this, it will apply the setting again automatically
+            print("placeholder")
+        
+        main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        search_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        search_frame.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(search_frame, text="Search:", style="Dark.TLabel").pack(side="left", padx=(0, 5))
+        
+        search_var = tk.StringVar()
+        search_var.trace("w", on_search)
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, style="Dark.TEntry")
+        search_entry.pack(side="left", fill="x", expand=True)
+        
+        content_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        content_frame.pack(fill="both", expand=True)
+        
+        list_frame = ttk.Frame(content_frame, style="Dark.TFrame")
+        list_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ttk.Label(list_frame, text="Roblox Settings", style="Dark.TLabel", 
+                  font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 5))
+        
+        list_container = ttk.Frame(list_frame, style="Dark.TFrame")
+        list_container.pack(fill="both", expand=True)
+        
+        settings_list = tk.Listbox(
+            list_container,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            selectbackground=self.FG_ACCENT,
+            selectforeground="white",
+            font=(self.FONT_FAMILY, 9),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightcolor=self.BG_LIGHT,
+            highlightbackground=self.BG_LIGHT,
+            exportselection=False
+        )
+        settings_list.pack(side="left", fill="both", expand=True)
+        settings_list.bind("<<ListboxSelect>>", on_select)
+        
+        list_scrollbar = ttk.Scrollbar(list_container, command=settings_list.yview)
+        list_scrollbar.pack(side="right", fill="y")
+        settings_list.config(yscrollcommand=list_scrollbar.set)
+        
+        edit_frame = ttk.Frame(content_frame, style="Dark.TFrame", width=200)
+        edit_frame.pack(side="right", fill="y", padx=(10, 0))
+        edit_frame.pack_propagate(False)
+        
+        ttk.Label(edit_frame, text="Edit Setting", style="Dark.TLabel",
+                  font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 10))
+        
+        selected_name_label = ttk.Label(edit_frame, text="Selected: (none)", style="Dark.TLabel",
+                                         font=(self.FONT_FAMILY, 9))
+        selected_name_label.pack(anchor="w", pady=(0, 5))
+        
+        type_label = ttk.Label(edit_frame, text="Type: -", style="Dark.TLabel",
+                               font=(self.FONT_FAMILY, 9))
+        type_label.pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(edit_frame, text="Set Value:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        
+        value_entry = ttk.Entry(edit_frame, style="Dark.TEntry")
+        value_entry.pack(fill="x", pady=(0, 10))
+        
+        ttk.Button(edit_frame, text="Set", style="Dark.TButton", command=set_value).pack(fill="x", pady=(0, 5))
+        ttk.Button(edit_frame, text="Refresh", style="Dark.TButton", command=refresh_settings).pack(fill="x", pady=(0, 5))
+        ttk.Button(edit_frame, text="Save", style="Dark.TButton", command=save_settings).pack(fill="x", pady=(0, 5))
+
+        if parse_settings():
+            refresh_list()
+        else:
+            settings_list.insert(tk.END, "Could not load settings file.")
+            settings_list.insert(tk.END, "Make sure Roblox has been run at least once.")
