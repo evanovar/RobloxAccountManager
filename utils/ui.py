@@ -1353,7 +1353,7 @@ del /f /q "%~f0"
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 15))
         
-        ttk.Label(main_frame, text="Cookie (.ROBLOSECURITY):", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(main_frame, text="Cookie(s)", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
         
         cookie_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         cookie_frame.pack(fill="both", expand=True, pady=(0, 15))
@@ -1373,22 +1373,51 @@ del /f /q "%~f0"
         cookie_text.config(yscrollcommand=cookie_scrollbar.set)
         
         def do_import():
-            cookie = cookie_text.get("1.0", "end-1c").strip()
+            cookie_input = cookie_text.get("1.0", "end-1c").strip()
             
-            if not cookie:
-                messagebox.showwarning("Missing Information", "Please enter the cookie.")
+            if not cookie_input:
+                messagebox.showwarning("Missing Information", "Please enter the cookie(s).")
                 return
             
-            try:
-                success, username = self.manager.import_cookie_account(cookie)
-                if success:
-                    self.refresh_accounts()
-                    messagebox.showinfo("Success", f"Account '{username}' imported successfully!")
-                    import_window.destroy()
+            cookies = []
+            if "_|WARNING:-" in cookie_input:
+                parts = cookie_input.split("_|WARNING:-")
+                for part in parts:
+                    if part.strip():
+                        cookies.append("_|WARNING:-" + part.strip())
+            else:
+                cookies = [cookie_input]
+            
+            imported_count = 0
+            failed_count = 0
+            imported_accounts = []
+            
+            for cookie in cookies:
+                try:
+                    success, username = self.manager.import_cookie_account(cookie)
+                    if success:
+                        imported_count += 1
+                        imported_accounts.append(username)
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    print(f"[ERROR] Failed to import cookie: {e}")
+            
+            self.refresh_accounts()
+            
+            if imported_count > 0:
+                if imported_count == 1:
+                    messagebox.showinfo("Success", f"Account '{imported_accounts[0]}' imported successfully!")
                 else:
-                    messagebox.showerror("Error", "Failed to import account. Please check the cookie.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to import account: {str(e)}")
+                    messagebox.showinfo("Success", f"Successfully imported {imported_count} account(s)!\n\n{', '.join(imported_accounts)}")
+                import_window.destroy()
+            
+            if failed_count > 0:
+                if imported_count == 0:
+                    messagebox.showerror("Error", f"Failed to import {failed_count} cookie(s). Please check the cookies.")
+                else:
+                    messagebox.showwarning("Partial Success", f"Imported {imported_count} account(s), but {failed_count} failed.")
         
         button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         button_frame.pack(fill="x")
