@@ -2187,7 +2187,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x400+{x}+{y}")
+            add_window.geometry(f"400x470+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 add_window.attributes("-topmost", True)
@@ -2206,9 +2206,30 @@ del /f /q "%~f0"
                 font=("Segoe UI", 10)
             )
             
-            ttk.Label(form_frame, text="Account:", style="Dark.TLabel").pack(anchor="w")
-            account_combo = ttk.Combobox(form_frame, values=list(self.manager.accounts.keys()), state="readonly")
-            account_combo.pack(fill="x", pady=(0, 10))
+            ttk.Label(form_frame, text="Account(s) - Hold Ctrl to select multiple:", style="Dark.TLabel").pack(anchor="w")
+            
+            account_frame = ttk.Frame(form_frame, style="Dark.TFrame")
+            account_frame.pack(fill="both", expand=True, pady=(0, 10))
+            
+            account_listbox = tk.Listbox(
+                account_frame,
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                selectbackground=self.FG_ACCENT,
+                highlightthickness=0,
+                border=1,
+                font=("Segoe UI", 9),
+                selectmode=tk.EXTENDED,
+                height=6
+            )
+            account_listbox.pack(side="left", fill="both", expand=True)
+            
+            account_scrollbar = ttk.Scrollbar(account_frame, command=account_listbox.yview)
+            account_scrollbar.pack(side="right", fill="y")
+            account_listbox.config(yscrollcommand=account_scrollbar.set)
+            
+            for account in sorted(self.manager.accounts.keys()):
+                account_listbox.insert(tk.END, account)
             
             ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
             place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
@@ -2241,10 +2262,12 @@ del /f /q "%~f0"
             check_presence_check.pack(anchor="w", pady=(0, 10))
             
             def save_and_add():
-                account = account_combo.get()
-                if not account:
-                    messagebox.showwarning("Missing Info", "Please select an account.")
+                selected_indices = account_listbox.curselection()
+                if not selected_indices:
+                    messagebox.showwarning("Missing Info", "Please select at least one account.")
                     return
+                
+                selected_accounts = [account_listbox.get(i) for i in selected_indices]
                 
                 place_id = place_entry.get().strip()
                 if not place_id:
@@ -2256,7 +2279,7 @@ del /f /q "%~f0"
                 
                 job_id = job_entry.get().strip()
                 
-                self.auto_rejoin_configs[account] = {
+                config = {
                     'place_id': place_id,
                     'private_server': private_entry.get().strip(),
                     'job_id': job_id,
@@ -2265,12 +2288,20 @@ del /f /q "%~f0"
                     'check_presence': check_presence_var.get()
                 }
                 
+                for account in selected_accounts:
+                    self.auto_rejoin_configs[account] = config.copy()
+                
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
                 self.save_settings()
                 
                 add_window.destroy()
                 refresh_rejoin_list()
-                messagebox.showinfo("Success", f"Added auto-rejoin for {account}!")
+                
+                if len(selected_accounts) == 1:
+                    messagebox.showinfo("Success", f"Added auto-rejoin for {selected_accounts[0]}!")
+                else:
+                    messagebox.showinfo("Success", f"Added auto-rejoin for {len(selected_accounts)} accounts:\n{', '.join(selected_accounts)}")
+                
                 auto_rejoin_window.lift()
                 auto_rejoin_window.focus_force()
             
