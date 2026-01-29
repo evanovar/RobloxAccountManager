@@ -64,7 +64,6 @@ class EncryptionSetupUI:
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.should_exit = False
         
-        # Load theme settings
         settings_file = os.path.join(self.data_folder, "ui_settings.json")
         settings = {}
         if os.path.exists(settings_file):
@@ -82,7 +81,7 @@ class EncryptionSetupUI:
     
     def setup_encryption_ui(self):
         """Show encryption setup UI and return password if needed"""
-        if self.encryption_config.is_encryption_enabled():
+        if self.encryption_config.is_setup_complete():
             return None
         
         root = tk.Tk()

@@ -191,6 +191,14 @@ class EncryptionConfig:
         """Check if encryption is enabled"""
         return self.config.get('encryption_enabled', False)
     
+    def is_setup_complete(self):
+        """Check if encryption setup has been completed"""
+        if self.config.get('setup_completed', False):
+            return True
+        if 'encryption_method' in self.config or 'encryption_enabled' in self.config:
+            return True
+        return False
+    
     def get_encryption_method(self):
         """Get current encryption method"""
         return self.config.get('encryption_method', None)
@@ -207,6 +215,7 @@ class EncryptionConfig:
         """Enable hardware-based encryption"""
         self.config['encryption_enabled'] = True
         self.config['encryption_method'] = 'hardware'
+        self.config['setup_completed'] = True
         self.save_config()
     
     def enable_password_encryption(self, salt, password_hash):
@@ -216,6 +225,7 @@ class EncryptionConfig:
         self.config['salt'] = salt
         self.config['password_hash'] = password_hash
         self.config['password_verified'] = True
+        self.config['setup_completed'] = True
         self.save_config()
     
     def is_password_verified(self):
@@ -226,6 +236,7 @@ class EncryptionConfig:
         """Disable encryption"""
         self.config['encryption_enabled'] = False
         self.config['encryption_method'] = None
+        self.config['setup_completed'] = True
         if 'salt' in self.config:
             del self.config['salt']
         self.save_config()

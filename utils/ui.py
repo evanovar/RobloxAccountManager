@@ -69,7 +69,12 @@ class AccountManagerUI:
         self.load_settings()
         
         self.root.title("Roblox Account Manager - Made by evanovar")
-        self.root.geometry("450x520")
+        
+        saved_pos = self.settings.get('main_window_position')
+        if saved_pos:
+            self.root.geometry(f"450x520+{saved_pos['x']}+{saved_pos['y']}")
+        else:
+            self.root.geometry("450x520")
         self.root.configure(bg=self.settings.get("theme_bg_dark", "#2b2b2b"))
         self.root.resizable(False, False)
         
@@ -302,6 +307,12 @@ class AccountManagerUI:
     
     def on_closing(self):
         """Handle application closing - restore installers and exit"""
+        
+        self.settings['main_window_position'] = {
+            'x': self.root.winfo_x(),
+            'y': self.root.winfo_y()
+        }
+        self.save_settings(force_immediate=True)
         
         if hasattr(self, 'anti_afk_stop_event'):
             self.stop_anti_afk()
@@ -914,7 +925,7 @@ del /f /q "%~f0"
             self.join_place_dropdown = None
         self.join_place_dropdown_visible = False
 
-    def save_settings(self):
+    def save_settings(self, force_immediate=False):
         """Save UI settings to file with debouncing"""
         if self._save_settings_timer is not None:
             try:
@@ -931,7 +942,10 @@ del /f /q "%~f0"
                 print(f"Failed to save settings: {e}")
             self._save_settings_timer = None
         
-        self._save_settings_timer = self.root.after(500, do_save)
+        if force_immediate:
+            do_save()
+        else:
+            self._save_settings_timer = self.root.after(500, do_save)
 
     def is_chrome_installed(self):
         """Best-effort check to see if Google Chrome is installed (Windows)."""
@@ -1850,6 +1864,9 @@ del /f /q "%~f0"
         account = self.manager.accounts.get(username)
         
         if not account:
+            return
+        
+        if not isinstance(account, dict):
             return
         
         user_id = account.get('user_id', 0)
@@ -3409,8 +3426,7 @@ del /f /q "%~f0"
         
         current_accounts = self.manager.accounts.copy()
         
-        self.manager.encryption_config.disable_encryption()
-        self.manager.encryption_config.save_config()
+        self.manager.encryption_config.reset_encryption()
         self.manager.encryptor = None
         self.manager.accounts = current_accounts
         self.manager.save_accounts()
