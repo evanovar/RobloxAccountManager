@@ -491,6 +491,24 @@ class RobloxAPI:
                 print("[SUCCESS] Launched with Fishstrap!")
                 return True
             
+            elif launcher_preference == "froststrap":
+                local_appdata = os.getenv('LOCALAPPDATA')
+                if not local_appdata:
+                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
+                    return False
+                
+                froststrap_path = Path(local_appdata) / 'Froststrap' / 'Froststrap.exe'
+                if not froststrap_path.exists():
+                    messagebox.showerror(
+                        "Froststrap Not Found",
+                        f"Froststrap is not installed.\n\nExpected location:\n{froststrap_path}\n\nPlease install Froststrap or select a different launcher."
+                    )
+                    return False
+                
+                subprocess.Popen([str(froststrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("[SUCCESS] Launched with Froststrap!")
+                return True
+            
             elif launcher_preference == "client":
                 RobloxAPI.quarantine_installers()
                 

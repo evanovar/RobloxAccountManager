@@ -3775,68 +3775,115 @@ del /f /q "%~f0"
         roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
         roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
-        launcher_label = ttk.Label(
+        def get_launcher_display_name(launcher):
+            launcher_names = {
+                "default": "Default",
+                "bloxstrap": "Bloxstrap",
+                "fishstrap": "Fishstrap",
+                "froststrap": "Froststrap",
+                "client": "Roblox Client"
+            }
+            return launcher_names.get(launcher, "Default")
+        
+        def open_launcher_selection():
+            launcher_window = tk.Toplevel(settings_window)
+            launcher_window.title("Roblox Launcher")
+            launcher_window.geometry("350x300")
+            launcher_window.configure(bg=self.BG_DARK)
+            launcher_window.resizable(False, False)
+            launcher_window.transient(settings_window)
+            launcher_window.grab_set()
+            self.apply_window_icon(launcher_window)
+            
+            if self.settings.get("enable_topmost", False):
+                launcher_window.attributes("-topmost", True)
+            
+            launcher_window.update_idletasks()
+            x = settings_window.winfo_x() + (settings_window.winfo_width() // 2) - (launcher_window.winfo_width() // 2)
+            y = settings_window.winfo_y() + (settings_window.winfo_height() // 2) - (launcher_window.winfo_height() // 2)
+            launcher_window.geometry(f"+{x}+{y}")
+            
+            container = ttk.Frame(launcher_window, style="Dark.TFrame")
+            container.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            header_frame = ttk.Frame(container, style="Dark.TFrame")
+            header_frame.pack(fill="x", pady=(0, 15))
+            
+            ttk.Label(
+                header_frame,
+                text="Select a Launcher",
+                style="Dark.TLabel",
+                font=(self.FONT_FAMILY, 11, "bold")
+            ).pack(anchor="w")
+            
+            ttk.Label(
+                header_frame,
+                text="Choose how to launch Roblox games",
+                style="Dark.TLabel",
+                font=(self.FONT_FAMILY, 8)
+            ).pack(anchor="w", pady=(2, 0))
+            
+            separator = ttk.Frame(container, style="Dark.TFrame", height=1)
+            separator.pack(fill="x", pady=(0, 15))
+            separator.configure(relief="solid", borderwidth=1)
+            
+            current_launcher = self.settings.get("roblox_launcher", "default")
+            launcher_var = tk.StringVar(value=current_launcher)
+            
+            radio_style = ttk.Style()
+            radio_style.configure(
+                "Dark.TRadiobutton",
+                background=self.BG_DARK,
+                foreground=self.FG_TEXT,
+                font=(self.FONT_FAMILY, 9)
+            )
+            radio_style.map(
+                "Dark.TRadiobutton",
+                background=[('active', self.BG_DARK)],
+                foreground=[('active', self.FG_TEXT)]
+            )
+            
+            launchers_frame = ttk.Frame(container, style="Dark.TFrame")
+            launchers_frame.pack(fill="both", expand=True)
+            
+            launchers = [
+                ("Default", "default"),
+                ("Bloxstrap", "bloxstrap"),
+                ("Fishstrap", "fishstrap"),
+                ("Froststrap", "froststrap"),
+                ("Roblox Client", "client")
+            ]
+            
+            for name, value in launchers:
+                rb = ttk.Radiobutton(
+                    launchers_frame,
+                    text=name,
+                    variable=launcher_var,
+                    value=value,
+                    style="Dark.TRadiobutton"
+                )
+                rb.pack(anchor="w", pady=3)
+            
+            def save_and_close():
+                selected = launcher_var.get()
+                self.settings["roblox_launcher"] = selected
+                self.save_settings()
+                launcher_window.destroy()
+            
+            ttk.Button(
+                container,
+                text="Close",
+                style="Dark.TButton",
+                command=save_and_close
+            ).pack(fill="x", pady=(15, 0))
+        
+        launcher_btn = ttk.Button(
             roblox_frame,
-            text="Roblox Launcher:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 10, "bold")
+            text="Roblox Launcher",
+            style="Dark.TButton",
+            command=open_launcher_selection
         )
-        launcher_label.pack(anchor="w", pady=(0, 10))
-        
-        launcher_var = tk.StringVar(value=self.settings.get("roblox_launcher", "default"))
-        
-        radio_style = ttk.Style()
-        radio_style.configure(
-            "Dark.TRadiobutton",
-            background=self.BG_DARK,
-            foreground=self.FG_TEXT,
-            font=("Segoe UI", 9)
-        )
-        radio_style.map(
-            "Dark.TRadiobutton",
-            background=[('active', self.BG_DARK)],
-            foreground=[('active', self.FG_TEXT)]
-        )
-        
-        def on_launcher_change():
-            self.settings["roblox_launcher"] = launcher_var.get()
-            self.save_settings()
-        
-        ttk.Radiobutton(
-            roblox_frame,
-            text="Default",
-            variable=launcher_var,
-            value="default",
-            style="Dark.TRadiobutton",
-            command=on_launcher_change
-        ).pack(anchor="w", pady=2)
-        
-        ttk.Radiobutton(
-            roblox_frame,
-            text="Bloxstrap",
-            variable=launcher_var,
-            value="bloxstrap",
-            style="Dark.TRadiobutton",
-            command=on_launcher_change
-        ).pack(anchor="w", pady=2)
-        
-        ttk.Radiobutton(
-            roblox_frame,
-            text="Fishstrap",
-            variable=launcher_var,
-            value="fishstrap",
-            style="Dark.TRadiobutton",
-            command=on_launcher_change
-        ).pack(anchor="w", pady=2)
-        
-        ttk.Radiobutton(
-            roblox_frame,
-            text="Roblox Client (RobloxPlayerBeta.exe)",
-            variable=launcher_var,
-            value="client",
-            style="Dark.TRadiobutton",
-            command=on_launcher_change
-        ).pack(anchor="w", pady=2)
+        launcher_btn.pack(fill="x", pady=(0, 5))
         
         def force_close_roblox():
             try:
@@ -3860,7 +3907,7 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=force_close_roblox
         )
-        force_close_btn.pack(fill="x", pady=(15, 0))
+        force_close_btn.pack(fill="x", pady=(0, 0))
         
         ttk.Label(
             roblox_frame,
