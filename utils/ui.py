@@ -2153,8 +2153,14 @@ del /f /q "%~f0"
         auto_rejoin_window.resizable(False, False)
         
         self.root.update_idletasks()
-        x = self.root.winfo_x() + 50
-        y = self.root.winfo_y() + 50
+        
+        saved_pos = self.settings.get('auto_rejoin_window_position')
+        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
+            x = saved_pos['x']
+            y = saved_pos['y']
+        else:
+            x = self.root.winfo_x() + 50
+            y = self.root.winfo_y() + 50
         auto_rejoin_window.geometry(f"450x400+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
@@ -2515,6 +2521,17 @@ del /f /q "%~f0"
                 self.stop_auto_rejoin_for_account(account)
             refresh_rejoin_list()
             messagebox.showinfo("Stopped", "Auto-rejoin stopped for all accounts!")
+        
+        def on_auto_rejoin_close():
+            """Save window position before closing"""
+            self.settings['auto_rejoin_window_position'] = {
+                'x': auto_rejoin_window.winfo_x(),
+                'y': auto_rejoin_window.winfo_y()
+            }
+            self.save_settings()
+            auto_rejoin_window.destroy()
+        
+        auto_rejoin_window.protocol("WM_DELETE_WINDOW", on_auto_rejoin_close)
         
         row1_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
         row1_frame.pack(fill="x", pady=(0, 5))
@@ -3498,22 +3515,37 @@ del /f /q "%~f0"
             self.settings_window = None
             settings_window.destroy()
         
-        settings_window.protocol("WM_DELETE_WINDOW", on_close)
+        def on_settings_close():
+            """Save window position before closing"""
+            self.settings['settings_window_position'] = {
+                'x': settings_window.winfo_x(),
+                'y': settings_window.winfo_y()
+            }
+            self.save_settings()
+            self.settings_window = None
+            settings_window.destroy()
+        
+        settings_window.protocol("WM_DELETE_WINDOW", on_settings_close)
         
         if self.settings.get("enable_topmost", False):
             settings_window.attributes("-topmost", True)
         
         self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
         
         settings_width = 300
         settings_height = 385
         
-        x = main_x + (main_width - settings_width) // 2
-        y = main_y + (main_height - settings_height) // 2
+        saved_pos = self.settings.get('settings_window_position')
+        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
+            x = saved_pos['x']
+            y = saved_pos['y']
+        else:
+            main_x = self.root.winfo_x()
+            main_y = self.root.winfo_y()
+            main_width = self.root.winfo_width()
+            main_height = self.root.winfo_height()
+            x = main_x + (main_width - settings_width) // 2
+            y = main_y + (main_height - settings_height) // 2
         
         settings_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
         
@@ -4849,7 +4881,6 @@ del /f /q "%~f0"
         self.console_window = tk.Toplevel(self.root)
         self.apply_window_icon(self.console_window)
         self.console_window.title("Console Output")
-        self.console_window.geometry("700x500")
         self.console_window.configure(bg=self.BG_DARK)
         self.console_window.minsize(500, 450)
         
@@ -4857,14 +4888,22 @@ del /f /q "%~f0"
             self.console_window.attributes("-topmost", True)
         
         self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
         
-        x = main_x + (main_width - 700) // 2
-        y = main_y + (main_height - 500) // 2
-        self.console_window.geometry(f"700x500+{x}+{y}")
+        saved_console = self.settings.get('console_window_geometry')
+        if saved_console and saved_console.get('x') is not None and saved_console.get('y') is not None:
+            width = saved_console.get('width', 700)
+            height = saved_console.get('height', 500)
+            x = saved_console['x']
+            y = saved_console['y']
+            self.console_window.geometry(f"{width}x{height}+{x}+{y}")
+        else:
+            main_x = self.root.winfo_x()
+            main_y = self.root.winfo_y()
+            main_width = self.root.winfo_width()
+            main_height = self.root.winfo_height()
+            x = main_x + (main_width - 700) // 2
+            y = main_y + (main_height - 500) // 2
+            self.console_window.geometry(f"700x500+{x}+{y}")
         
         main_frame = ttk.Frame(self.console_window, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -4943,12 +4982,20 @@ del /f /q "%~f0"
             command=self.console_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
         
-        def on_close():
+        def on_console_close():
+            """Save window geometry (position and size) before closing"""
+            self.settings['console_window_geometry'] = {
+                'x': self.console_window.winfo_x(),
+                'y': self.console_window.winfo_y(),
+                'width': self.console_window.winfo_width(),
+                'height': self.console_window.winfo_height()
+            }
+            self.save_settings()
             self.console_text_widget = None
             self.console_window.destroy()
             self.console_window = None
         
-        self.console_window.protocol("WM_DELETE_WINDOW", on_close)
+        self.console_window.protocol("WM_DELETE_WINDOW", on_console_close)
     
     def open_favorites_window(self):
         """Open the favorites management window"""
@@ -4959,8 +5006,14 @@ del /f /q "%~f0"
         favorites_window.resizable(False, False)
         
         self.root.update_idletasks()
-        x = self.root.winfo_x() + 50
-        y = self.root.winfo_y() + 50
+        
+        saved_pos = self.settings.get('favorites_window_position')
+        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
+            x = saved_pos['x']
+            y = saved_pos['y']
+        else:
+            x = self.root.winfo_x() + 50
+            y = self.root.winfo_y() + 50
         favorites_window.geometry(f"400x350+{x}+{y}")
         
         if self.settings.get("enable_topmost", False):
@@ -5106,23 +5159,17 @@ del /f /q "%~f0"
                 messagebox.showinfo("Success", f"Added '{name}' to favorites!")
                 favorites_window.lift()
                 favorites_window.focus_force()
-            
-            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            button_frame.pack(fill="x", pady=(10, 0))
-            
-            ttk.Button(
-                button_frame,
-                text="Save",
-                style="Dark.TButton",
-                command=save_favorite
-            ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-            
-            ttk.Button(
-                button_frame,
-                text="Cancel",
-                style="Dark.TButton",
-                command=add_window.destroy
-            ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        def on_favorites_close():
+            """Save window position before closing"""
+            self.settings['favorites_window_position'] = {
+                'x': favorites_window.winfo_x(),
+                'y': favorites_window.winfo_y()
+            }
+            self.save_settings()
+            favorites_window.destroy()
+        
+        favorites_window.protocol("WM_DELETE_WINDOW", on_favorites_close)
         
         def edit_favorite():
             """Edit selected favorite"""
