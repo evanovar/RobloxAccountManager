@@ -299,7 +299,7 @@ class AccountManagerUI:
 
         self.refresh_accounts()
         self.refresh_game_list()
-        self.update_game_name()
+        self.update_game_name_on_startup()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
@@ -994,6 +994,19 @@ del /f /q "%~f0"
         
         return None, None
 
+    def update_game_name_on_startup(self):
+        """Check both Place ID and Private Server fields to update game name on startup"""
+        place_id = self.place_entry.get().strip()
+        private_server = self.private_server_entry.get().strip()
+        
+        if place_id:
+            self.update_game_name()
+        elif private_server:
+            vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
+            if vip_match:
+                vip_place_id = vip_match.group(1)
+                self.update_game_name_from_id(vip_place_id)
+
     def on_place_id_change(self, event=None):
         place_id = self.place_entry.get().strip()
         self.settings["last_place_id"] = place_id
@@ -1004,29 +1017,50 @@ del /f /q "%~f0"
         private_server = self.private_server_entry.get().strip()
         place_id_input = self.place_entry.get().strip()
         
-        vip_match = re.search(r'roblox\.com/games/(\d+)/[^?]+\?privateServerLinkCode=([A-Za-z0-9]+)', private_server)
+        self.settings["last_private_server"] = private_server
+        self.save_settings()
         
-        if vip_match:
-            vip_place_id = vip_match.group(1)
-            vip_private_code = vip_match.group(2)
-            
-            if place_id_input and place_id_input != vip_place_id:
-                self.game_name_label.config(text="ERROR: Place ID mismatch!")
+        if not place_id_input and private_server:
+            vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
+            if vip_match:
+                vip_place_id = vip_match.group(1)
+                self.update_game_name_from_id(vip_place_id)
+    
+    def update_game_name_from_id(self, place_id):
+        """Update game name label from a specific place ID (without reading from text box)"""
+        if self._game_name_after_id is not None:
+            try:
+                self.root.after_cancel(self._game_name_after_id)
+            except Exception:
+                pass
+            self._game_name_after_id = None
+
+        def schedule_fetch():
+            if not place_id or not place_id.isdigit():
+                self.game_name_label.config(text="")
                 return
-            
-            self.place_entry.delete(0, tk.END)
-            self.place_entry.insert(0, vip_place_id)
-            
-            self.private_server_entry.delete(0, tk.END)
-            self.private_server_entry.insert(0, vip_private_code)
-            
-            self.settings["last_place_id"] = vip_place_id
-            self.settings["last_private_server"] = vip_private_code
-            self.save_settings()
-            self.update_game_name()
-        else:
-            self.settings["last_private_server"] = private_server
-            self.save_settings()
+
+            def worker(pid):
+                name = RobloxAPI.get_game_name(pid)
+                if name:
+                    max_name_length = 20
+                    if len(name) > max_name_length:
+                        name = name[:max_name_length-2] + ".."
+                    display_text = f"Current: {name}"
+                else:
+                    display_text = ""
+                
+                def update_label(text=display_text):
+                    try:
+                        self.game_name_label.config(text=text)
+                    except:
+                        pass
+                
+                self.root.after(0, update_label)
+
+            threading.Thread(target=worker, args=(place_id,), daemon=True).start()
+
+        self._game_name_after_id = self.root.after(350, schedule_fetch)
     
 
     def update_game_name(self):
@@ -2049,34 +2083,17 @@ del /f /q "%~f0"
         vip_link_private_code = None
         
         if private_server_input:
-            
             vip_match = re.search(r'roblox\.com/games/(\d+)/[^?]+\?privateServerLinkCode=([A-Za-z0-9]+)', private_server_input)
             if vip_match:
                 vip_link_place_id = vip_match.group(1)
                 vip_link_private_code = vip_match.group(2)
         
-        final_game_id = None
-        final_private_server = None
-        
         if vip_link_place_id:
             if game_id_input:
-                if game_id_input == vip_link_place_id:
-                    final_game_id = vip_link_place_id
-                    final_private_server = vip_link_private_code
-                else:
-                    messagebox.showerror(
-                        "Place ID Mismatch",
-                        f"Place ID ({game_id_input}) doesn't match the Place ID in the VIP link ({vip_link_place_id}).\n\n"
-                        "Please either:\n"
-                        "- Clear Place ID to use the VIP link's Place ID, or\n"
-                        "- Enter the matching Place ID"
-                    )
-                    return
+                game_id = game_id_input
             else:
-                final_game_id = vip_link_place_id
-                final_private_server = vip_link_private_code
-                self.place_entry.delete(0, tk.END)
-                self.place_entry.insert(0, final_game_id)
+                game_id = vip_link_place_id
+            private_server = vip_link_private_code
         else:
             if not game_id_input:
                 messagebox.showwarning("Missing Info", "Please enter a Place ID or paste a VIP server link in the Private Server field.")
@@ -2084,11 +2101,8 @@ del /f /q "%~f0"
             if not game_id_input.isdigit():
                 messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                 return
-            final_game_id = game_id_input
-            final_private_server = private_server_input
-        
-        game_id = final_game_id
-        private_server = final_private_server
+            game_id = game_id_input
+            private_server = private_server_input
 
         if self.settings.get("confirm_before_launch", False):
             game_name = RobloxAPI.get_game_name(game_id)
