@@ -3990,29 +3990,83 @@ del /f /q "%~f0"
         
         ttk.Label(
             action_frame,
-            text="Action:",
+            text="Action Key:",
             style="Dark.TLabel",
             font=("Segoe UI", 9)
         ).pack(side="left")
         
-        action_options = ["w", "a", "s", "d", "space", "LMB", "RMB"]
-        action_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
+        current_key = self.settings.get("anti_afk_key", "w")
         
-        def on_action_change(*args):
-            self.settings["anti_afk_key"] = action_var.get()
-            self.save_settings()
-        
-        action_var.trace('w', on_action_change)
-        
-        action_dropdown = ttk.Combobox(
+        key_button = ttk.Button(
             action_frame,
-            textvariable=action_var,
-            values=action_options,
-            state="readonly",
-            width=10,
-            font=(self.FONT_FAMILY, 9)
+            text=current_key.upper(),
+            style="Dark.TButton",
+            width=14
         )
-        action_dropdown.pack(side="right")
+        key_button.pack(side="right")
+        
+        def start_key_recording():
+            key_button.config(text="Press...")
+            key_button.focus_set()
+            
+            def finish_recording(recorded_key):
+                key_button.config(text=recorded_key.upper())
+                self.settings["anti_afk_key"] = recorded_key
+                self.save_settings()
+                
+                key_button.unbind("<KeyPress>")
+                key_button.unbind("<Button-1>")
+                key_button.unbind("<Button-2>")
+                key_button.unbind("<Button-3>")
+                key_button.unbind("<Button-4>")
+                key_button.unbind("<Button-5>")
+                key_button.unbind("<MouseWheel>")
+            
+            def on_key_press(event):
+                key = event.keysym.lower()
+                
+                key_mapping = {
+                    "return": "enter",
+                    "control_l": "ctrl",
+                    "control_r": "ctrl",
+                    "shift_l": "shift",
+                    "shift_r": "shift",
+                    "alt_l": "alt",
+                    "alt_r": "alt"
+                }
+                
+                key = key_mapping.get(key, key)
+                finish_recording(key)
+                return "break"
+            
+            def on_mouse_button(event):
+                mouse_mapping = {
+                    1: "lmb",
+                    2: "mmb",
+                    3: "rmb",
+                    4: "xbutton1",
+                    5: "xbutton2"
+                }
+                button = mouse_mapping.get(event.num, f"mouse{event.num}")
+                finish_recording(button)
+                return "break"
+            
+            def on_scroll(event):
+                if event.delta > 0:
+                    finish_recording("scroll_up")
+                else:
+                    finish_recording("scroll_down")
+                return "break"
+            
+            key_button.bind("<KeyPress>", on_key_press)
+            key_button.bind("<Button-1>", on_mouse_button)
+            key_button.bind("<Button-2>", on_mouse_button)
+            key_button.bind("<Button-3>", on_mouse_button)
+            key_button.bind("<Button-4>", on_mouse_button)
+            key_button.bind("<Button-5>", on_mouse_button)
+            key_button.bind("<MouseWheel>", on_scroll)
+        
+        key_button.config(command=start_key_recording)
         
         interval_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
         interval_frame.pack(fill="x", pady=2)
@@ -4037,7 +4091,7 @@ del /f /q "%~f0"
         interval_spinner = tk.Spinbox(
             interval_frame,
             from_=1,
-            to=60,
+            to=19,
             textvariable=interval_var,
             width=8,
             bg=self.BG_MID,
@@ -4057,6 +4111,50 @@ del /f /q "%~f0"
         
         interval_spinner.bind("<KeyRelease>", lambda e: on_interval_change())
         interval_spinner.bind("<FocusOut>", lambda e: on_interval_change())
+        
+        amount_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
+        amount_frame.pack(fill="x", pady=2)
+        
+        ttk.Label(
+            amount_frame,
+            text="Key Press Amount:",
+            style="Dark.TLabel",
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+        
+        amount_var = tk.IntVar(value=self.settings.get("anti_afk_key_amount", 1))
+        
+        def on_amount_change():
+            try:
+                new_value = amount_var.get()
+                self.settings["anti_afk_key_amount"] = new_value
+                self.save_settings()
+            except:
+                pass
+        
+        amount_spinner = tk.Spinbox(
+            amount_frame,
+            from_=1,
+            to=10,
+            textvariable=amount_var,
+            width=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_LIGHT,
+            font=(self.FONT_FAMILY, 9),
+            command=on_amount_change,
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0
+        )
+        amount_spinner.pack(side="right")
+        
+        amount_spinner.bind("<KeyRelease>", lambda e: on_amount_change())
+        amount_spinner.bind("<FocusOut>", lambda e: on_amount_change())
         
         if self.settings.get("anti_afk_enabled", False):
             self.root.after(1000, self.start_anti_afk)
