@@ -377,12 +377,12 @@ class AccountManagerUI:
             try:
                 window.iconbitmap(self.icon_path)
             except Exception as e:
-                print(f"Could not set window icon: {e}")
+                print(f"[ERROR] Could not set window icon: {e}")
 
     def check_for_updates(self):
         """Check for updates from GitHub releases"""
         try:
-            print("[Update Checker] Checking for updates...")
+            print("[INFO] Checking for updates...")
             response = requests.get(
                 "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
                 timeout=5
@@ -399,15 +399,15 @@ class AccountManagerUI:
                 latest_parts = tuple(map(int, latest_clean.split(".")))
                 
                 if latest_parts > current_parts:
-                    print(f"[Update Checker] New version available: {latest_version}")
+                    print(f"[WARNING] New version available: {latest_version}")
                     self.root.after(0, lambda: self.show_update_notification(latest_version))
                 else:
-                    print(f"[Update Checker] You are on the latest version ({self.APP_VERSION})")
+                    print(f"[SUCCESS] You are on the latest version ({self.APP_VERSION})")
             else:
-                print(f"[Update Checker] Failed to check for updates (Status: {response.status_code})")
+                print(f"[ERROR] Failed to check for updates (Status: {response.status_code})")
                 
         except Exception as e:
-            print(f"[Update Checker] Error checking for updates: {str(e)}")
+            print(f"[ERROR] Error checking for updates: {str(e)}")
 
     def show_update_notification(self, latest_version):
         """Show update notification dialog with download options"""
@@ -939,7 +939,7 @@ del /f /q "%~f0"
                 with open(self.settings_file, 'w') as f:
                     json.dump(self.settings, f, indent=2)
             except Exception as e:
-                print(f"Failed to save settings: {e}")
+                print(f"[ERROR] Failed to save settings: {e}")
             self._save_settings_timer = None
         
         if force_immediate:
@@ -2047,7 +2047,7 @@ del /f /q "%~f0"
                     if self.manager.launch_roblox(uname, "", "", launcher_pref):
                         success_count += 1
                 except Exception as e:
-                    print(f"Failed to launch Roblox home for {uname}: {e}")
+                    print(f"[ERROR] Failed to launch Roblox home for {uname}: {e}")
             
             def on_done():
                 if success_count > 0:
@@ -2123,7 +2123,7 @@ del /f /q "%~f0"
                     if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
                         success_count += 1
                 except Exception as e:
-                    print(f"Failed to launch game for {uname}: {e}")
+                    print(f"[ERROR] Failed to launch game for {uname}: {e}")
 
             def on_done():
                 if success_count > 0:
@@ -2675,7 +2675,7 @@ del /f /q "%~f0"
                         if self.manager.launch_roblox(uname, place_id, "", launcher_pref, game_id):
                             success_count += 1
                     except Exception as e:
-                        print(f"Failed to launch game for {uname}: {e}")
+                        print(f"[ERROR] Failed to launch game for {uname}: {e}")
                 
                 def on_done():
                     if success_count > 0:
@@ -2792,7 +2792,7 @@ del /f /q "%~f0"
                         if self.manager.launch_roblox(uname, pid, "", launcher_pref, jid):
                             success_count += 1
                     except Exception as e:
-                        print(f"Failed to launch game for {uname}: {e}")
+                        print(f"[ERROR] Failed to launch game for {uname}: {e}")
                 
                 def on_done():
                     if success_count > 0:
@@ -2874,7 +2874,7 @@ del /f /q "%~f0"
                     if self.manager.launch_roblox(uname, pid, "", launcher_pref, game_id):
                         success_count += 1
                 except Exception as e:
-                    print(f"Failed to launch game for {uname}: {e}")
+                    print(f"[ERROR] Failed to launch game for {uname}: {e}")
             
             def on_done():
                 if success_count > 0:
@@ -3140,7 +3140,7 @@ del /f /q "%~f0"
                 try:
                     cookie_file = open(cookies_path, 'r+b')
                     msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
-                    print("[INFO] Error 773 fix applied.")
+                    print("[SUCCESS] Error 773 fix applied.")
                 except OSError:
                     print("[WARNING] Could not lock RobloxCookies.dat. It may already be locked.")
             else:
@@ -3174,7 +3174,7 @@ del /f /q "%~f0"
                         if os.path.exists(cookies_path):
                             try:
                                 msvcrt.locking(cookie_file.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
-                                print("[INFO] Cookie file unlocked.")
+                                print("[SUCCESS] Cookie file unlocked.")
                             except Exception as unlock_error:
                                 print(f"[ERROR] Failed to unlock cookie file: {unlock_error}")
                         cookie_file.close()
@@ -3186,13 +3186,13 @@ del /f /q "%~f0"
                         mutex_handle = self.multi_roblox_handle['mutex']
                         win32event.ReleaseMutex(mutex_handle)
                         win32api.CloseHandle(mutex_handle)
-                        print("[INFO] Multi Roblox mutex released and closed.")
+                        print("[SUCCESS] Multi Roblox mutex released and closed.")
                     except Exception as mutex_error:
                         print(f"[ERROR] Failed to release mutex: {mutex_error}")
                 
                 self.multi_roblox_handle = None
         except Exception as e:
-            print(f"Error disabling Multi Roblox: {e}")
+            print(f"[ERROR] Error disabling Multi Roblox: {e}")
     
     def initialize_multi_roblox(self):
         """Initialize Multi Roblox on startup if enabled in settings"""
@@ -3422,7 +3422,7 @@ del /f /q "%~f0"
                 with open(self.settings_file, 'w') as f:
                     json.dump(self.settings, f, indent=2)
             except Exception as e:
-                print(f"Failed to save settings: {e}")
+                print(f"[ERROR] Failed to save settings: {e}")
             
             if was_active:
                 success = self.enable_multi_roblox()

@@ -77,11 +77,11 @@ class RobloxAPI:
                             dest = version_quarantine / 'RobloxPlayerInstaller.exe'
                             if not dest.exists():
                                 shutil.move(str(installer), str(dest))
-                                print(f"[Quarantine] Moved installer from {folder.name}")
+                                print(f"[INFO] Moved installer from {folder.name}")
                         except Exception as e:
-                            print(f"[Quarantine] Failed to move installer from {folder.name}: {e}")
+                            print(f"[ERROR] Failed to move installer from {folder.name}: {e}")
         except Exception as e:
-            print(f"[Quarantine] Error accessing versions folder: {e}")
+            print(f"[ERROR] Error accessing versions folder: {e}")
     
     @staticmethod
     def restore_installers():
@@ -112,17 +112,17 @@ class RobloxAPI:
                 installer_restore = roblox_folder / 'RobloxPlayerInstaller.exe'
                 try:
                     shutil.move(str(installer_q), str(installer_restore))
-                    print(f"[Restore] Restored installer to {roblox_folder.name}")
+                    print(f"[SUCCESS] Restored installer to {roblox_folder.name}")
                 except Exception as e:
-                    print(f"[Restore] Failed to restore installer to {roblox_folder.name}: {e}")
+                    print(f"[ERROR] Failed to restore installer to {roblox_folder.name}: {e}")
             
             try:
                 shutil.rmtree(str(quarantine_path), ignore_errors=True)
-                print("[Restore] Cleaned up quarantine folder")
+                print("[SUCCESS] Cleaned up quarantine folder")
             except:
                 pass
         except Exception as e:
-            print(f"[Restore] Error restoring installers: {e}")
+            print(f"[ERROR] Error restoring installers: {e}")
     
     @staticmethod
     def extract_private_server_code(private_server_input):
@@ -161,7 +161,7 @@ class RobloxAPI:
                 return user_data.get('name', 'Unknown')
             
         except Exception as e:
-            print(f"Error getting username from API: {e}")
+            print(f"[ERROR] Error getting username from API: {e}")
         
         return "Unknown"
     
@@ -211,7 +211,7 @@ class RobloxAPI:
         """Get user ID from username"""
         if use_cache and cache_dict and username in cache_dict:
             cached_id = cache_dict[username]
-            print(f"[Cache] Using cached user ID for '{username}': {cached_id}")
+            print(f"[INFO] Using cached user ID for '{username}': {cached_id}")
             return cached_id
         
         url = "https://users.roblox.com/v1/usernames/users"
@@ -233,7 +233,7 @@ class RobloxAPI:
                         
                         if use_cache and cache_dict is not None:
                             cache_dict[username] = user_id
-                            print(f"[Cache] Stored user ID for '{username}': {user_id}")
+                            print(f"[INFO] Stored user ID for '{username}': {user_id}")
                         
                         return user_id
                     else:
@@ -331,7 +331,7 @@ class RobloxAPI:
             if response.status_code == 403 and "x-csrf-token" in response.headers:
                 csrf_token = response.headers["x-csrf-token"]
             else:
-                print(f"Failed to get CSRF token, status: {response.status_code}")
+                print(f"[ERROR] Failed to get CSRF token, status: {response.status_code}")
                 return None
 
             headers["X-CSRF-TOKEN"] = csrf_token
@@ -341,14 +341,14 @@ class RobloxAPI:
                 if auth_ticket:
                     return auth_ticket
                 else:
-                    print("Authentication ticket header missing in response.")
+                    print("[ERROR] Authentication ticket header missing in response.")
                     return None
             else:
-                print(f"Failed to get auth ticket, status: {response2.status_code}")
+                print(f"[ERROR] Failed to get auth ticket, status: {response2.status_code}")
                 return None
 
         except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
+            print(f"[ERROR] Request failed: {e}")
             return None
     
     @staticmethod
@@ -391,7 +391,7 @@ class RobloxAPI:
     def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id=""):
         """Launch Roblox game with specified account"""
 
-        print(f"Getting authentication ticket for {username}...")
+        print(f"[INFO] Getting authentication ticket for {username}...")
         auth_ticket = RobloxAPI.get_auth_ticket(cookie)
         if not auth_ticket:
             print("[ERROR] Failed to get authentication ticket")
@@ -440,14 +440,14 @@ class RobloxAPI:
             "+robloxLocale:en_us+gameLocale:en_us"
         )
 
-        print(f"Launching Roblox...")
-        print(f"Account: {username}")
-        print(f"Game ID: {game_id}")
+        print(f"[INFO] Launching Roblox...")
+        print(f"[INFO] Account: {username}")
+        print(f"[INFO] Game ID: {game_id}")
         if private_server_code:
-            print(f"Private Server: {private_server_code}")
+            print(f"[INFO] Private Server: {private_server_code}")
         elif job_id:
-            print(f"Job ID: {job_id}")
-        print(f"Launcher: {launcher_preference}")
+            print(f"[INFO] Job ID: {job_id}")
+        print(f"[INFO] Launcher: {launcher_preference}")
         
         return RobloxAPI._execute_launch(url, launcher_preference)
     
@@ -573,46 +573,46 @@ class RobloxAPI:
             
             is_valid = response.status_code == 200
             
-            print(f"Valid: {'Yes' if is_valid else 'No'}")
+            print(f"[INFO] Valid: {'Yes' if is_valid else 'No'}")
             
             if cookie:
                 if len(cookie) > 60:
                     token_preview = f"{cookie[:50]}...{cookie[-10:]}"
                 else:
                     token_preview = cookie
-                print(f"Token: {token_preview}")
-                print(f"Token Length: {len(cookie)} characters")
+                print(f"[INFO] Token: {token_preview}")
+                print(f"[INFO] Token Length: {len(cookie)} characters")
             else:
-                print("Token: (No token found)")
+                print("[INFO] Token: (No token found)")
             
             if is_valid and response.status_code == 200:
                 try:
                     user_data = response.json()
-                    print(f"User ID: {user_data.get('id', 'Unknown')}")
-                    print(f"Display Name: {user_data.get('displayName', 'Unknown')}")
-                    print(f"Username: {user_data.get('name', 'Unknown')}")
+                    print(f"[INFO] User ID: {user_data.get('id', 'Unknown')}")
+                    print(f"[INFO] Display Name: {user_data.get('displayName', 'Unknown')}")
+                    print(f"[INFO] Username: {user_data.get('name', 'Unknown')}")
                 except:
-                    print("Additional info: Could not retrieve user details")
+                    print("[ERROR] Additional info: Could not retrieve user details")
             else:
-                print(f"Status Code: {response.status_code}")
+                print(f"[INFO] Status Code: {response.status_code}")
                 if response.status_code == 401:
-                    print("Reason: Token expired or invalid")
+                    print("[ERROR] Reason: Token expired or invalid")
                 elif response.status_code == 403:
-                    print("Reason: Access forbidden")
+                    print("[ERROR] Reason: Access forbidden")
                 else:
-                    print("Reason: Unknown error")
+                    print("[ERROR] Reason: Unknown error")
             
             return is_valid
             
         except Exception as e:
-            print(f"Account: {username}")
-            print(f"Valid: No")
+            print(f"[INFO] Account: {username}")
+            print(f"[INFO] Valid: No")
             if cookie:
                 if len(cookie) > 60:
                     token_preview = f"{cookie[:50]}...{cookie[-10:]}"
                 else:
                     token_preview = cookie
-                print(f"Token: {token_preview}")
-            print(f"Error: {str(e)}")
+                print(f"[INFO] Token: {token_preview}")
+            print(f"[INFO] Error: {str(e)}")
             print(f"{'='*60}")
             return False

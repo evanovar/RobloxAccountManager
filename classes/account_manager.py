@@ -74,7 +74,7 @@ class RobloxAccountManager:
             except ValueError:
                 raise
             except Exception as e:
-                print(f"[WARNING] Error loading accounts: {e}")
+                print(f"[ERROR] Error loading accounts: {e}")
                 return {}
         return {}
     
@@ -112,7 +112,7 @@ class RobloxAccountManager:
                 pass
     
     def setup_chrome_driver(self, browser_path=None):
-        print(f"[DEBUG] setup_chrome_driver called with browser_path: {browser_path}")
+        print(f"[INFO] setup_chrome_driver called with browser_path: {browser_path}")
         profile_dir = self.create_temp_profile()
 
         
@@ -188,8 +188,8 @@ class RobloxAccountManager:
         except Exception as e:
             if 'original_stderr' in locals():
                 sys.stderr = original_stderr
-            print(f"Error setting up Chrome driver: {e}")
-            print("Please make sure Google Chrome is installed on your system")
+            print(f"[ERROR] Error setting up Chrome driver: {e}")
+            print("[INFO] Please make sure Google Chrome is installed on your system")
             traceback.print_exc()
             return None
     
@@ -288,7 +288,7 @@ class RobloxAccountManager:
             driver.execute_script(detector_script)
             print("[SUCCESS] Detection script injected successfully")
         except Exception as e:
-            print(f"[WARNING] Warning: Could not inject detection script: {e}")
+            print(f"[ERROR] Could not inject detection script: {e}")
         
         start_time = time.time()
         last_debug_time = 0
@@ -324,7 +324,7 @@ class RobloxAccountManager:
                 if current_time - last_debug_time > 5:
                     last_debug_time = current_time
                     try:
-                        print(f"Still checking... URL: {driver.current_url} (checks: {check_count})")
+                        print(f"[INFO] Still checking... URL: {driver.current_url} (checks: {check_count})")
                     except:
                         pass
                 
@@ -337,7 +337,7 @@ class RobloxAccountManager:
                     pass
                 return False
         
-        print("[WARNING] Login timeout. Please try again.")
+        print("[ERROR] Login timeout. Please try again.")
         try:
             driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
         except:
@@ -370,7 +370,7 @@ class RobloxAccountManager:
                     print(f"[INFO] Password captured")
                     driver.execute_script("sessionStorage.removeItem('_ram_pw');")
             except Exception as e:
-                print(f"[DEBUG] Password capture failed: {e}")
+                print(f"[ERROR] Password capture failed: {e}")
             
             print("[INFO] Fetching account info from browser...")
             try:
@@ -389,7 +389,7 @@ class RobloxAccountManager:
                     print(f"[SUCCESS] Username: {username} (ID: {user_id})")
                     return username, roblosecurity_cookie, user_id, captured_password
             except Exception as e:
-                print(f"[WARNING] Browser fetch failed: {e}, falling back to API")
+                print(f"[ERROR] Browser fetch failed: {e}, falling back to API")
             
             print("[INFO] Getting username from API...")
             username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
@@ -401,7 +401,7 @@ class RobloxAccountManager:
             return username, roblosecurity_cookie, 0, captured_password
             
         except Exception as e:
-            print(f"Error extracting user info: {e}")
+            print(f"[ERROR] Error extracting user info: {e}")
             return None, None, None, None
     
     def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
@@ -413,14 +413,14 @@ class RobloxAccountManager:
         browser_path: Optional path to browser executable
         """
         if amount > 10:
-            print("[WARNING] Maximum 10 instances allowed. Setting to 10.")
+            print("[WARNING] The maximum instance is only 10. Setting to 10.")
             amount = 10
         
         success_count = 0
         drivers = []
         
         try:
-            print(f"Launching {amount} browser instance(s)...")
+            print(f"[INFO] Launching {amount} browser instance(s)...")
             
             for i in range(amount):
                 driver = self.setup_chrome_driver(browser_path)
@@ -449,7 +449,7 @@ class RobloxAccountManager:
                 drivers.append(driver)
                 
                 try:
-                    print(f"Opening {website} (instance {i + 1}/{amount})...")
+                    print(f"[INFO] Opening {website} (instance {i + 1}/{amount})...")
                     
                     max_retries = 3
                     for retry in range(max_retries):
@@ -465,7 +465,7 @@ class RobloxAccountManager:
                                 raise nav_error
                     
                     if javascript:
-                        print(f"Executing Javascript for instance {i + 1}...")
+                        print(f"[INFO] Executing Javascript for instance {i + 1}...")
                         try:
                             driver.execute_script("return document.readyState") 
                             driver.execute_script(javascript)
@@ -477,7 +477,7 @@ class RobloxAccountManager:
                     print(f"[ERROR] Error opening browser for instance {i + 1}: {e}")
                     traceback.print_exc()
             
-            print(f"All {len(drivers)} browser(s) opened. Waiting for logins...")
+            print(f"[INFO] All {len(drivers)} browser(s) opened. Waiting for logins...")
             
             completed = [False] * len(drivers)
             
@@ -505,7 +505,7 @@ class RobloxAccountManager:
                         else:
                             print(f"[ERROR] Failed to extract account information for instance {driver_index + 1}")
                     else:
-                        print(f"[WARNING] Login timeout for instance {driver_index + 1}")
+                        print(f"[ERROR] Login timeout for instance {driver_index + 1}")
                 except Exception as e:
                     print(f"[ERROR] Error waiting for login on instance {driver_index + 1}: {e}")
                 finally:
@@ -768,4 +768,3 @@ class RobloxAccountManager:
         self.accounts = current_data
         self.save_accounts()
         print(f"[SUCCESS] Switched to {new_method} encryption")
-
