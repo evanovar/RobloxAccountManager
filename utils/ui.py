@@ -38,7 +38,7 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.icon_path = icon_path
-        self.APP_VERSION = "2.4.3"
+        self.APP_VERSION = "2.4.4"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
