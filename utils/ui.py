@@ -19,6 +19,7 @@ import time
 import re
 import win32event
 import win32api
+import win32gui
 from datetime import datetime, timedelta, timezone
 import zipfile
 import tempfile
@@ -85,6 +86,10 @@ class AccountManagerUI:
         
         self.anti_afk_thread = None
         self.anti_afk_stop_event = threading.Event()
+        
+        self.rename_thread = None
+        self.rename_stop_event = threading.Event()
+        self.renamed_pids = set()
         
         self.auto_rejoin_threads = {}
         self.auto_rejoin_stop_events = {}
@@ -316,6 +321,9 @@ class AccountManagerUI:
         
         if hasattr(self, 'anti_afk_stop_event'):
             self.stop_anti_afk()
+        
+        if hasattr(self, 'rename_stop_event'):
+            self.stop_rename_monitoring()
         
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
@@ -3953,7 +3961,27 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=force_close_roblox
         )
-        force_close_btn.pack(fill="x", pady=(0, 0))
+        force_close_btn.pack(fill="x", pady=(0, 5))
+        
+        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", False))
+        
+        def on_rename_toggle():
+            enabled = rename_var.get()
+            self.settings["rename_roblox_windows"] = enabled
+            self.save_settings()
+            
+            if enabled:
+                self.start_rename_monitoring()
+            else:
+                self.stop_rename_monitoring()
+        
+        ttk.Checkbutton(
+            roblox_frame,
+            text="Rename Roblox Windows",
+            variable=rename_var,
+            style="Dark.TCheckbutton",
+            command=on_rename_toggle
+        ).pack(anchor="w", pady=(0, 10))
         
         ttk.Label(
             roblox_frame,
@@ -4158,6 +4186,9 @@ del /f /q "%~f0"
         
         if self.settings.get("anti_afk_enabled", False):
             self.root.after(1000, self.start_anti_afk)
+        
+        if self.settings.get("rename_roblox_windows", False):
+            self.root.after(1000, self.start_rename_monitoring)
         
         themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
         themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
@@ -5410,6 +5441,82 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=favorites_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(2, 0))
+    
+    def start_rename_monitoring(self):
+        """Start monitoring and renaming Roblox windows"""
+        if self.rename_thread and self.rename_thread.is_alive():
+            return
+        
+        self.rename_stop_event.clear()
+        self.renamed_pids.clear()
+        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True)
+        self.rename_thread.start()
+        print("[INFO] Rename monitoring started")
+    
+    def stop_rename_monitoring(self):
+        """Stop rename monitoring"""
+        if self.rename_thread:
+            self.rename_stop_event.set()
+            self.rename_thread = None
+            self.renamed_pids.clear()
+            print("[INFO] Rename monitoring stopped")
+    
+    def _rename_monitoring_worker(self):
+        """Monitor for new Roblox PIDs and renames them"""
+        import psutil
+        
+        while not self.rename_stop_event.is_set():
+            try:
+                current_pids = set()
+                for proc in psutil.process_iter(['pid', 'name']):
+                    try:
+                        if proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                            current_pids.add(proc.info['pid'])
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                
+                new_pids = current_pids - self.renamed_pids
+                
+                for pid in new_pids:
+                    if self.rename_stop_event.is_set():
+                        break
+                    
+                    user_id, _ = self._get_user_id_from_pid(pid)
+                    
+                    if user_id:
+                        username = RobloxAPI.get_username_from_user_id(user_id)
+                        
+                        if username:
+                            self._rename_roblox_window(pid, username)
+                            self.renamed_pids.add(pid)
+                            print(f"[INFO] Renamed Roblox window for PID {pid} to '{username}'")
+                    
+                    time.sleep(0.5)
+                
+                self.renamed_pids = self.renamed_pids.intersection(current_pids)
+                
+            except Exception as e:
+                print(f"[ERROR] Error in rename monitoring: {e}")
+            
+            time.sleep(2)
+    
+    def _rename_roblox_window(self, pid, username):
+        """Rename a Roblox window by PID"""
+        try:
+            def enum_windows_callback(hwnd, pid_target):
+                _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
+                if found_pid == pid_target:
+                    if win32gui.IsWindowVisible(hwnd):
+                        current_title = win32gui.GetWindowText(hwnd)
+                        if 'roblox' in current_title.lower():
+                            win32gui.SetWindowText(hwnd, username)
+                            return False
+                return True
+            
+            import win32process
+            win32gui.EnumWindows(enum_windows_callback, pid)
+        except Exception as e:
+            print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
     
     def start_anti_afk(self):
         """Start the Anti-AFK background thread"""

@@ -266,6 +266,23 @@ class RobloxAPI:
         return None
     
     @staticmethod
+    def get_username_from_user_id(user_id):
+        """Get username from user ID using Roblox API"""
+        try:
+            url = f"https://users.roblox.com/v1/users/{user_id}"
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('name', data.get('displayName', None))
+            else:
+                print(f"[WARNING] Failed to get username for user ID {user_id}: Status {response.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get username for user ID {user_id}: {e}")
+        
+        return None
+    
+    @staticmethod
     def get_player_presence(user_id, cookie):
         """Get player's current presence (online status and game info)"""
         url = "https://presence.roblox.com/v1/presence/users"
