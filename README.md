@@ -19,7 +19,6 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 
 - [Installation](#-installation)
 - [Requirements](#-requirements)
-- [Encryption & Security](#-encryption--security)
 - [Disclaimer](#-disclaimer)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -79,23 +78,6 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
-
-## 🔐 Encryption Methods
-
-**1. Hardware Encryption (Not Portable)**
-- ✅ Automatic encryption using your computer's unique hardware ID
-- ✅ No password needed, completely automatic
-- ⚠️ **Data ONLY works on THIS computer**
-  
-**2. Password Encryption (Portable, Recommended)**
-- ✅ Encrypt with a password you create
-- ✅ **Works on any computer** with the password
-- ⚠️ **MUST remember your password** - there is NO recovery method!
-
-**3. No Encryption (Not Recommended)**
-- ✅ Store accounts without any encryption
-- ✅ Easy to transfer and backup
-- ⚠️ **NOT SECURE** - Anyone with access to files can see your data
 
 ## ⚠️ Disclaimer
 
