@@ -283,6 +283,25 @@ class RobloxAPI:
         return None
     
     @staticmethod
+    def get_user_avatar_url(user_id, size="150x150"):
+        """Get user avatar/thumbnail URL from Roblox API"""
+        try:
+            url = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size={size}&format=Png&isCircular=false"
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('data') and len(data['data']) > 0:
+                    image_url = data['data'][0].get('imageUrl')
+                    return image_url
+            else:
+                print(f"[WARNING] Failed to get avatar for user ID {user_id}: Status {response.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get avatar for user ID {user_id}: {e}")
+        
+        return None
+    
+    @staticmethod
     def get_player_presence(user_id, cookie):
         """Get player's current presence (online status and game info)"""
         url = "https://presence.roblox.com/v1/presence/users"

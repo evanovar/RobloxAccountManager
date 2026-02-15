@@ -91,6 +91,16 @@ class AccountManagerUI:
         self.rename_stop_event = threading.Event()
         self.renamed_pids = set()
         
+        self.instances_monitor_thread = None
+        self.instances_monitor_stop = threading.Event()
+        self.instances_data = []
+        self.instances_pids = set()
+        self.instances_cache = {
+            "user_id_to_username": {},
+            "user_id_to_avatar": {},
+            "user_id_to_photo": {}
+        }
+        
         self.auto_rejoin_threads = {}
         self.auto_rejoin_stop_events = {}
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
@@ -2954,11 +2964,13 @@ del /f /q "%~f0"
         
         while self.handle64_monitoring and self.handle64_path:
             try:
-                current = {
-                    p.info["pid"]
-                    for p in psutil.process_iter(["pid", "name"])
-                    if p.info["name"] and p.info["name"].lower() == target
-                }
+                current = set()
+                for p in psutil.process_iter(["pid", "name"]):
+                    if p.info["name"] and p.info["name"].lower() == target:
+                        pid = p.info["pid"]
+                        if self._is_valid_roblox_game_client(pid, target):
+                            current.add(pid)
+                
                 new = current - known
                 if new:
                     threading.Thread(target=self._handle64_close_handles, args=(list(new),), daemon=True).start()
@@ -4190,6 +4202,9 @@ del /f /q "%~f0"
         if self.settings.get("rename_roblox_windows", False):
             self.root.after(1000, self.start_rename_monitoring)
         
+        if self.settings.get("active_instances_monitoring", False):
+            self.root.after(1500, self.start_instances_monitoring)
+        
         themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
         themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
     
@@ -4620,10 +4635,399 @@ del /f /q "%~f0"
         
         ttk.Button(
             tool_frame,
+            text="Active Instances",
+            style="Dark.TButton",
+            command=self.open_active_instances_window
+        ).pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            tool_frame,
             text="Wipe Data",
             style="Dark.TButton",
             command=wipe_data
         ).pack(side="bottom", fill="x", pady=(10, 0))
+    
+    def start_instances_monitoring(self):
+        """Start background monitoring of active Roblox instances"""
+        if self.instances_monitor_thread and self.instances_monitor_thread.is_alive():
+            return
+        
+        self.instances_monitor_stop.clear()
+        self.instances_monitor_thread = threading.Thread(target=self._instances_monitor_worker, daemon=True)
+        self.instances_monitor_thread.start()
+        print("[INFO] Active Instances background monitoring started")
+    
+    def stop_instances_monitoring(self):
+        """Stop background monitoring of active Roblox instances"""
+        if self.instances_monitor_thread:
+            self.instances_monitor_stop.set()
+            self.instances_monitor_thread = None
+            self.instances_data.clear()
+            self.instances_pids.clear()
+            print("[INFO] Active Instances background monitoring stopped")
+    
+    def _instances_monitor_worker(self):
+        """Background thread that continuously monitors Roblox instances"""
+        import psutil
+        
+        while not self.instances_monitor_stop.is_set():
+            try:
+                new_pids = set()
+                processes = []
+                
+                for proc in psutil.process_iter(['pid', 'name', 'create_time', 'memory_info']):
+                    try:
+                        if proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                            pid = proc.info['pid']
+                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
+                                new_pids.add(pid)
+                                processes.append(proc)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                
+                if new_pids != self.instances_pids:
+                    print(f"[INFO] Active Instances: PID change detected. Old: {self.instances_pids}, New: {new_pids}")
+                    self.instances_pids = new_pids.copy()
+                    
+                    new_data = []
+                    used_logs = set()
+                    
+                    for proc in processes:
+                        pid = proc.info['pid']
+                        
+                        try:
+                            memory_mb = proc.info['memory_info'].rss / 1024 / 1024
+                            create_time = proc.info['create_time']
+                        except:
+                            memory_mb = 0
+                            create_time = 0
+                        
+                        user_id, _ = self._get_user_id_from_pid(pid, used_logs)
+                        username = None
+                        avatar_url = None
+                        
+                        if user_id:
+                            if user_id in self.instances_cache["user_id_to_username"]:
+                                username = self.instances_cache["user_id_to_username"][user_id]
+                            else:
+                                for account in self.manager.accounts:
+                                    stored_uid = self.manager.accounts[account].get("user_id")
+                                    if stored_uid == user_id or stored_uid == str(user_id):
+                                        username = account
+                                        self.instances_cache["user_id_to_username"][user_id] = username
+                                        break
+                                
+                                if not username:
+                                    username = RobloxAPI.get_username_from_user_id(user_id)
+                                    if username:
+                                        self.instances_cache["user_id_to_username"][user_id] = username
+                                        for account in self.manager.accounts:
+                                            if account == username:
+                                                self.manager.accounts[account]["user_id"] = str(user_id)
+                                                self.manager.save_accounts()
+                                                break
+                            
+                            if user_id in self.instances_cache["user_id_to_avatar"]:
+                                avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
+                            else:
+                                avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
+                                if avatar_url:
+                                    self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
+                        
+                        new_data.append({
+                            "pid": pid, "user_id": user_id, "username": username,
+                            "avatar_url": avatar_url, "create_time": create_time, "memory_mb": memory_mb
+                        })
+                    
+                    self.instances_data = new_data
+                else:
+                    for entry in self.instances_data:
+                        try:
+                            proc = psutil.Process(entry["pid"])
+                            entry["memory_mb"] = proc.memory_info().rss / 1024 / 1024
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                
+            except Exception as e:
+                print(f"[ERROR] Active Instances monitor error: {e}")
+            
+            self.instances_monitor_stop.wait(2)
+    
+    def open_active_instances_window(self):
+        """Open window showing all active Roblox instances with pre-cached data"""
+        instances_window = tk.Toplevel(self.root)
+        self.apply_window_icon(instances_window)
+        instances_window.title("Active Roblox Instances")
+        instances_window.geometry("650x600")
+        instances_window.configure(bg=self.BG_DARK)
+        instances_window.resizable(True, True)
+        instances_window.minsize(600, 500)
+        
+        if self.settings.get("enable_topmost", False):
+            instances_window.attributes("-topmost", True)
+        
+        instances_window.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (instances_window.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (instances_window.winfo_height() // 2)
+        instances_window.geometry(f"+{x}+{y}")
+        
+        main_frame = ttk.Frame(instances_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        header_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        header_frame.pack(fill="x", pady=(0, 10))
+        
+        title_label = ttk.Label(
+            header_frame,
+            text="Active Roblox Instances",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 12, "bold")
+        )
+        title_label.pack(side="left")
+        
+        monitoring_enabled = tk.BooleanVar(value=self.settings.get("active_instances_monitoring", False))
+        
+        monitor_checkbox = ttk.Checkbutton(
+            header_frame,
+            text="Enable Active Instances",
+            variable=monitoring_enabled,
+            style="Dark.TCheckbutton"
+        )
+        monitor_checkbox.pack(side="right")
+        
+        canvas_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        canvas_frame.pack(fill="both", expand=True)
+        
+        canvas = tk.Canvas(canvas_frame, bg=self.BG_DARK, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, style="Dark.TFrame")
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        status_label = ttk.Label(
+            main_frame,
+            text="Loading instances...",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        )
+        status_label.pack(pady=(10, 0))
+        
+        window_active = [True]
+        refresh_timer = [None]
+        last_rendered_pids = [set()]
+        
+        def on_window_close():
+            window_active[0] = False
+            if refresh_timer[0]:
+                instances_window.after_cancel(refresh_timer[0])
+            instances_window.destroy()
+        
+        instances_window.protocol("WM_DELETE_WINDOW", on_window_close)
+        
+        def render_instances():
+            """Render the pre-cached instance data to the UI"""
+            from PIL import Image, ImageTk
+            from io import BytesIO
+            
+            if not window_active[0]:
+                return
+            
+            if not monitoring_enabled.get():
+                return
+            
+            data = list(self.instances_data)
+            current_pids_set = {d["pid"] for d in data}
+            
+            if current_pids_set != last_rendered_pids[0]:
+                print(f"[INFO] Active Instances window: PIDs changed, rebuilding UI")
+                last_rendered_pids[0] = current_pids_set
+                
+                for widget in scrollable_frame.winfo_children():
+                    widget.destroy()
+                
+                if not data:
+                    status_label.config(text="No active Roblox instances found")
+                    ttk.Label(
+                        scrollable_frame,
+                        text="No active Roblox instances",
+                        style="Dark.TLabel",
+                        font=(self.FONT_FAMILY, 10)
+                    ).pack(pady=20)
+                else:
+                    status_label.config(text=f"Found {len(data)} instance(s) - Last updated: {datetime.now().strftime('%H:%M:%S')}")
+                    
+                    for entry in data:
+                        pid = entry["pid"]
+                        user_id = entry["user_id"]
+                        username = entry["username"]
+                        avatar_url = entry["avatar_url"]
+                        create_time = entry["create_time"]
+                        memory_mb = entry["memory_mb"]
+                        
+                        instance_frame = tk.Frame(
+                            scrollable_frame, bg=self.BG_MID, relief="solid", borderwidth=1
+                        )
+                        instance_frame.pack(fill="x", pady=5, padx=5)
+                        
+                        inner_frame = tk.Frame(instance_frame, bg=self.BG_MID)
+                        inner_frame.pack(fill="x", padx=10, pady=10)
+                        
+                        try:
+                            ct = datetime.fromtimestamp(create_time)
+                            uptime = datetime.now() - ct
+                            uptime_str = f"{int(uptime.total_seconds() // 3600)}h {int((uptime.total_seconds() % 3600) // 60)}m"
+                        except:
+                            uptime_str = "Unknown"
+                        
+                        if username:
+                            avatar_label = tk.Label(inner_frame, bg=self.BG_MID)
+                            avatar_label.pack(side="left", padx=(0, 15))
+                            
+                            if user_id and user_id in self.instances_cache["user_id_to_photo"]:
+                                photo = self.instances_cache["user_id_to_photo"][user_id]
+                                avatar_label.config(image=photo)
+                                avatar_label.image = photo
+                            else:
+                                avatar_label.config(text="...", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
+                                
+                                def download_avatar(uid, url, label, win):
+                                    try:
+                                        if url:
+                                            response = requests.get(url, timeout=5)
+                                            if response.status_code == 200:
+                                                img_data = BytesIO(response.content)
+                                                img = Image.open(img_data)
+                                                img = img.resize((70, 70), Image.Resampling.LANCZOS)
+                                                photo = ImageTk.PhotoImage(img)
+                                                self.instances_cache["user_id_to_photo"][uid] = photo
+                                                def update_label():
+                                                    try:
+                                                        if window_active[0] and label.winfo_exists():
+                                                            label.config(image=photo)
+                                                            label.image = photo
+                                                    except:
+                                                        pass
+                                                win.after(0, update_label)
+                                                return
+                                        def update_fallback():
+                                            try:
+                                                if window_active[0] and label.winfo_exists():
+                                                    label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
+                                            except:
+                                                pass
+                                        win.after(0, update_fallback)
+                                    except Exception as e:
+                                        print(f"[ERROR] Failed to load avatar for user {uid}: {e}")
+                                        def update_error():
+                                            try:
+                                                if window_active[0] and label.winfo_exists():
+                                                    label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
+                                            except:
+                                                pass
+                                        win.after(0, update_error)
+                                
+                                if user_id and avatar_url:
+                                    threading.Thread(target=download_avatar, args=(user_id, avatar_url, avatar_label, instances_window), daemon=True).start()
+                                else:
+                                    avatar_label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
+                            
+                            info_frame = tk.Frame(inner_frame, bg=self.BG_MID)
+                            info_frame.pack(side="left", fill="both", expand=True)
+                            
+                            tk.Label(info_frame, text=username, bg=self.BG_MID, fg=self.FG_TEXT,
+                                     font=(self.FONT_FAMILY, 12, "bold"), anchor="w").pack(anchor="w")
+                            
+                            details1_frame = tk.Frame(info_frame, bg=self.BG_MID)
+                            details1_frame.pack(anchor="w", pady=(2, 0))
+                            tk.Label(details1_frame, text=f"PID: {pid}", bg=self.BG_MID, fg=self.FG_TEXT,
+                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left", padx=(0, 15))
+                            tk.Label(details1_frame, text=f"User ID: {user_id}", bg=self.BG_MID, fg=self.FG_TEXT,
+                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left")
+                            
+                            details2_frame = tk.Frame(info_frame, bg=self.BG_MID)
+                            details2_frame.pack(anchor="w", pady=(2, 0))
+                            tk.Label(details2_frame, text=f"Uptime: {uptime_str}", bg=self.BG_MID, fg="#90EE90",
+                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left", padx=(0, 15))
+                            tk.Label(details2_frame, text=f"Memory: {memory_mb:.0f} MB", bg=self.BG_MID, fg="#87CEEB",
+                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left")
+                        elif user_id:
+                            tk.Label(inner_frame, text=f"PID: {pid} - Failed to get username (Uptime: {uptime_str})",
+                                     bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10)).pack()
+                        else:
+                            tk.Label(inner_frame, text=f"PID: {pid} - Failed to get user ID (Uptime: {uptime_str}, Memory: {memory_mb:.0f} MB)",
+                                     bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10)).pack()
+            else:
+                if data:
+                    status_label.config(text=f"Found {len(data)} instance(s) - Last updated: {datetime.now().strftime('%H:%M:%S')}")
+            
+            if window_active[0] and monitoring_enabled.get():
+                refresh_timer[0] = instances_window.after(2000, render_instances)
+        
+        def toggle_monitoring():
+            enabled = monitoring_enabled.get()
+            self.settings["active_instances_monitoring"] = enabled
+            self.save_settings()
+            print(f"[INFO] Active Instances {'enabled' if enabled else 'disabled'}")
+            if enabled:
+                self.start_instances_monitoring()
+                refresh_btn.config(state="normal")
+                render_instances()
+            else:
+                self.stop_instances_monitoring()
+                refresh_btn.config(state="disabled")
+                if refresh_timer[0]:
+                    instances_window.after_cancel(refresh_timer[0])
+                    refresh_timer[0] = None
+                for widget in scrollable_frame.winfo_children():
+                    widget.destroy()
+                status_label.config(text="Active Instances disabled")
+                ttk.Label(
+                    scrollable_frame,
+                    text="Enable the checkbox to start monitoring",
+                    style="Dark.TLabel",
+                    font=(self.FONT_FAMILY, 10)
+                ).pack(pady=20)
+        
+        monitor_checkbox.config(command=toggle_monitoring)
+        
+        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
+        button_frame.pack(fill="x", pady=(10, 0))
+        
+        refresh_btn = ttk.Button(
+            button_frame,
+            text="Refresh Now",
+            style="Dark.TButton",
+            command=render_instances,
+            state="normal" if monitoring_enabled.get() else "disabled"
+        )
+        refresh_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=on_window_close
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        if monitoring_enabled.get():
+            render_instances()
+        else:
+            status_label.config(text="Active Instances disabled")
+            ttk.Label(
+                scrollable_frame,
+                text="Enable the checkbox to start monitoring",
+                style="Dark.TLabel",
+                font=(self.FONT_FAMILY, 10)
+            ).pack(pady=20)
     
     def open_browser_engine_window(self):
         """Open Browser Engine selection window"""
@@ -5470,8 +5874,10 @@ del /f /q "%~f0"
                 current_pids = set()
                 for proc in psutil.process_iter(['pid', 'name']):
                     try:
-                        if proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            current_pids.add(proc.info['pid'])
+                        if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                            pid = proc.info['pid']
+                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
+                                current_pids.add(pid)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
                 
@@ -5826,11 +6232,13 @@ del /f /q "%~f0"
     def _get_roblox_pids(self):
         """Get all currently running RobloxPlayerBeta.exe PIDs using psutil."""
         try:
-            return {
-                p.info["pid"]
-                for p in psutil.process_iter(["pid", "name"])
-                if p.info["name"] and p.info["name"].lower() == "robloxplayerbeta.exe"
-            }
+            pids = set()
+            for p in psutil.process_iter(["pid", "name"]):
+                if p.info["name"] and p.info["name"].lower() == "robloxplayerbeta.exe":
+                    pid = p.info["pid"]
+                    if self._is_valid_roblox_game_client(pid, "robloxplayerbeta.exe"):
+                        pids.add(pid)
+            return pids
         except Exception as e:
             print(f"[Auto-Rejoin] Error getting Roblox PIDs: {e}")
             return set()
@@ -5845,6 +6253,40 @@ del /f /q "%~f0"
         except Exception as e:
             print(f"[Auto-Rejoin] Error checking PID {pid}: {e}")
             return False
+    
+    def _is_valid_roblox_game_client(self, pid, process_name_lower=None):
+        """Check if PID is a valid Roblox game client (process name + window title check)"""
+        try:
+            if process_name_lower is None:
+                try:
+                    process = psutil.Process(pid)
+                    process_name_lower = process.name().lower()
+                except:
+                    return False
+            
+            if process_name_lower != "robloxplayerbeta.exe":
+                return False
+            
+            has_roblox_window = [False]
+            
+            def enum_callback(hwnd, _):
+                try:
+                    import win32process
+                    _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if window_pid == pid:
+                        window_title = win32gui.GetWindowText(hwnd)
+                        if window_title and "roblox" in window_title.lower():
+                            has_roblox_window[0] = True
+                            return False
+                except:
+                    pass
+                return True
+            
+            win32gui.EnumWindows(enum_callback, None)
+            return has_roblox_window[0]
+            
+        except Exception as e:
+            return process_name_lower == "robloxplayerbeta.exe" if process_name_lower else False
     
     def _match_pids_to_accounts(self, accounts):
         """Match all running Roblox PIDs to accounts"""
@@ -6033,7 +6475,9 @@ del /f /q "%~f0"
             for proc in psutil.process_iter(['pid', 'name']):
                 try:
                     if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                        roblox_pids.add(proc.info['pid'])
+                        pid = proc.info['pid']
+                        if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
+                            roblox_pids.add(pid)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             
@@ -6145,7 +6589,9 @@ del /f /q "%~f0"
             for proc in psutil.process_iter(['pid', 'name']):
                 try:
                     if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                        roblox_pids.add(proc.info['pid'])
+                        pid = proc.info['pid']
+                        if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
+                            roblox_pids.add(pid)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             
@@ -6378,9 +6824,9 @@ del /f /q "%~f0"
         def auto_apply_setting():
             """Auto Apply settings whenever roblox is launched."""
             # ok so basically what this DO:
-            # before roblox is running, it applies this setting immediately
-            # why? because when you experienes error code 429, the roblox setting get reseted
-            # so, with this, it will apply the setting again automatically
+            # when tool launch, and every time checkbox "auto apply" is toggled
+            # it overwrite roblox settings
+            # and then lock the file to read-only
             print("placeholder")
         
         main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
