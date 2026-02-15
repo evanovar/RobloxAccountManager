@@ -95,6 +95,7 @@ class AccountManagerUI:
         self.instances_monitor_stop = threading.Event()
         self.instances_data = []
         self.instances_pids = set()
+        self.instances_failed_pids = {} 
         self.instances_cache = {
             "user_id_to_username": {},
             "user_id_to_avatar": {},
@@ -4669,6 +4670,7 @@ del /f /q "%~f0"
     def _instances_monitor_worker(self):
         """Background thread that continuously monitors Roblox instances"""
         import psutil
+        import time
         
         while not self.instances_monitor_stop.is_set():
             try:
@@ -4684,6 +4686,15 @@ del /f /q "%~f0"
                                 processes.append(proc)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
+                
+                current_time = time.time()
+                failed_pids_to_retry = []
+                for pid, (fail_time, create_time, memory_mb) in list(self.instances_failed_pids.items()):
+                    if current_time - fail_time >= 5:
+                        if pid in new_pids:
+                            failed_pids_to_retry.append((pid, create_time, memory_mb))
+                        else:
+                            del self.instances_failed_pids[pid]
                 
                 if new_pids != self.instances_pids:
                     print(f"[INFO] Active Instances: PID change detected. Old: {self.instances_pids}, New: {new_pids}")
@@ -4738,8 +4749,61 @@ del /f /q "%~f0"
                             "pid": pid, "user_id": user_id, "username": username,
                             "avatar_url": avatar_url, "create_time": create_time, "memory_mb": memory_mb
                         })
+                        
+                        if not user_id:
+                            self.instances_failed_pids[pid] = (current_time, create_time, memory_mb)
+                        elif pid in self.instances_failed_pids:
+                            del self.instances_failed_pids[pid]
                     
                     self.instances_data = new_data
+                elif failed_pids_to_retry:
+                    print(f"[INFO] Active Instances: Retrying {len(failed_pids_to_retry)} failed PID(s)")
+                    used_logs = set()
+                    for pid, create_time, memory_mb in failed_pids_to_retry:
+                        user_id, _ = self._get_user_id_from_pid(pid, used_logs)
+                        
+                        if user_id:
+                            print(f"[INFO] Active Instances: Successfully got user ID for PID {pid} on retry")
+                            username = None
+                            avatar_url = None
+                            
+                            if user_id in self.instances_cache["user_id_to_username"]:
+                                username = self.instances_cache["user_id_to_username"][user_id]
+                            else:
+                                for account in self.manager.accounts:
+                                    stored_uid = self.manager.accounts[account].get("user_id")
+                                    if stored_uid == user_id or stored_uid == str(user_id):
+                                        username = account
+                                        self.instances_cache["user_id_to_username"][user_id] = username
+                                        break
+                                
+                                if not username:
+                                    username = RobloxAPI.get_username_from_user_id(user_id)
+                                    if username:
+                                        self.instances_cache["user_id_to_username"][user_id] = username
+                                        for account in self.manager.accounts:
+                                            if account == username:
+                                                self.manager.accounts[account]["user_id"] = str(user_id)
+                                                self.manager.save_accounts()
+                                                break
+                            
+                            if user_id in self.instances_cache["user_id_to_avatar"]:
+                                avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
+                            else:
+                                avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
+                                if avatar_url:
+                                    self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
+                            
+                            for entry in self.instances_data:
+                                if entry["pid"] == pid:
+                                    entry["user_id"] = user_id
+                                    entry["username"] = username
+                                    entry["avatar_url"] = avatar_url
+                                    break
+                            
+                            del self.instances_failed_pids[pid]
+                        else:
+                            self.instances_failed_pids[pid] = (current_time, create_time, memory_mb)
                 else:
                     for entry in self.instances_data:
                         try:
@@ -4824,6 +4888,7 @@ del /f /q "%~f0"
         window_active = [True]
         refresh_timer = [None]
         last_rendered_pids = [set()]
+        instance_widgets = {}
         
         def on_window_close():
             window_active[0] = False
@@ -4850,6 +4915,7 @@ del /f /q "%~f0"
             if current_pids_set != last_rendered_pids[0]:
                 print(f"[INFO] Active Instances window: PIDs changed, rebuilding UI")
                 last_rendered_pids[0] = current_pids_set
+                instance_widgets.clear()
                 
                 for widget in scrollable_frame.winfo_children():
                     widget.destroy()
@@ -4955,10 +5021,14 @@ del /f /q "%~f0"
                             
                             details2_frame = tk.Frame(info_frame, bg=self.BG_MID)
                             details2_frame.pack(anchor="w", pady=(2, 0))
-                            tk.Label(details2_frame, text=f"Uptime: {uptime_str}", bg=self.BG_MID, fg="#90EE90",
-                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left", padx=(0, 15))
-                            tk.Label(details2_frame, text=f"Memory: {memory_mb:.0f} MB", bg=self.BG_MID, fg="#87CEEB",
-                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left")
+                            uptime_label = tk.Label(details2_frame, text=f"Uptime: {uptime_str}", bg=self.BG_MID, fg="#90EE90",
+                                     font=(self.FONT_FAMILY, 9), anchor="w")
+                            uptime_label.pack(side="left", padx=(0, 15))
+                            memory_label = tk.Label(details2_frame, text=f"Memory: {memory_mb:.0f} MB", bg=self.BG_MID, fg="#87CEEB",
+                                     font=(self.FONT_FAMILY, 9), anchor="w")
+                            memory_label.pack(side="left")
+                            
+                            instance_widgets[pid] = {'uptime_label': uptime_label, 'memory_label': memory_label, 'create_time': create_time}
                         elif user_id:
                             tk.Label(inner_frame, text=f"PID: {pid} - Failed to get username (Uptime: {uptime_str})",
                                      bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10)).pack()
@@ -4968,6 +5038,28 @@ del /f /q "%~f0"
             else:
                 if data:
                     status_label.config(text=f"Found {len(data)} instance(s) - Last updated: {datetime.now().strftime('%H:%M:%S')}")
+                    
+                    for entry in data:
+                        pid = entry["pid"]
+                        if pid in instance_widgets:
+                            widgets = instance_widgets[pid]
+                            
+                            try:
+                                create_time = widgets['create_time']
+                                ct = datetime.fromtimestamp(create_time)
+                                uptime = datetime.now() - ct
+                                uptime_str = f"{int(uptime.total_seconds() // 3600)}h {int((uptime.total_seconds() % 3600) // 60)}m"
+                                if widgets['uptime_label'].winfo_exists():
+                                    widgets['uptime_label'].config(text=f"Uptime: {uptime_str}")
+                            except:
+                                pass
+                            
+                            try:
+                                memory_mb = entry.get("memory_mb", 0)
+                                if widgets['memory_label'].winfo_exists():
+                                    widgets['memory_label'].config(text=f"Memory: {memory_mb:.0f} MB")
+                            except:
+                                pass
             
             if window_active[0] and monitoring_enabled.get():
                 refresh_timer[0] = instances_window.after(2000, render_instances)
@@ -4978,8 +5070,14 @@ del /f /q "%~f0"
             self.save_settings()
             print(f"[INFO] Active Instances {'enabled' if enabled else 'disabled'}")
             if enabled:
+                last_rendered_pids[0] = set()
+                instance_widgets.clear()
+                for widget in scrollable_frame.winfo_children():
+                    widget.destroy()
+                
                 self.start_instances_monitoring()
                 refresh_btn.config(state="normal")
+                status_label.config(text="Starting monitoring...")
                 render_instances()
             else:
                 self.stop_instances_monitoring()
