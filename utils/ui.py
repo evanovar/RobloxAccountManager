@@ -28,6 +28,7 @@ import platform
 import traceback
 import psutil
 import random
+import stat
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
@@ -96,6 +97,7 @@ class AccountManagerUI:
         self.instances_data = []
         self.instances_pids = set()
         self.instances_failed_pids = {} 
+        self.instances_data_updated = False
         self.instances_cache = {
             "user_id_to_username": {},
             "user_id_to_avatar": {},
@@ -320,6 +322,9 @@ class AccountManagerUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         threading.Thread(target=self.check_for_updates, daemon=True).start()
+        
+        if self.settings.get("lock_roblox_settings", False):
+            self.root.after(1000, self.apply_and_lock_roblox_settings)
     
     def on_closing(self):
         """Handle application closing - restore installers and exit"""
@@ -4407,9 +4412,6 @@ del /f /q "%~f0"
                 self.save_settings()
                 apply_theme()
                 
-                for widget in themes_frame.winfo_children():
-                    widget.destroy()
-                
                 settings_window.destroy()
                 self.open_settings()
         
@@ -4802,6 +4804,7 @@ del /f /q "%~f0"
                                     break
                             
                             del self.instances_failed_pids[pid]
+                            self.instances_data_updated = True
                         else:
                             self.instances_failed_pids[pid] = (current_time, create_time, memory_mb)
                 else:
@@ -4822,10 +4825,9 @@ del /f /q "%~f0"
         instances_window = tk.Toplevel(self.root)
         self.apply_window_icon(instances_window)
         instances_window.title("Active Roblox Instances")
-        instances_window.geometry("650x600")
+        instances_window.geometry("400x400")
         instances_window.configure(bg=self.BG_DARK)
-        instances_window.resizable(True, True)
-        instances_window.minsize(600, 500)
+        instances_window.resizable(False, False)
         
         if self.settings.get("enable_topmost", False):
             instances_window.attributes("-topmost", True)
@@ -4912,8 +4914,13 @@ del /f /q "%~f0"
             data = list(self.instances_data)
             current_pids_set = {d["pid"] for d in data}
             
-            if current_pids_set != last_rendered_pids[0]:
-                print(f"[INFO] Active Instances window: PIDs changed, rebuilding UI")
+            data_was_updated = self.instances_data_updated
+            if data_was_updated:
+                self.instances_data_updated = False
+            
+            if current_pids_set != last_rendered_pids[0] or data_was_updated:
+                reason = "PIDs changed" if current_pids_set != last_rendered_pids[0] else "data updated"
+                print(f"[INFO] Active Instances window: {reason}, rebuilding UI")
                 last_rendered_pids[0] = current_pids_set
                 instance_widgets.clear()
                 
@@ -6771,6 +6778,40 @@ del /f /q "%~f0"
             print(f"[Anti-AFK] Failed: {e}")
             traceback.print_exc()
     
+    def apply_and_lock_roblox_settings(self):
+        """Apply local Roblox settings and lock file"""
+        try:
+            import xml.etree.ElementTree as ET
+            
+            local_settings_path = os.path.join(self.data_folder, "roblox_settings.xml")
+            roblox_settings_path = os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "Roblox",
+                "GlobalBasicSettings_13.xml"
+            )
+            
+            if not os.path.exists(local_settings_path):
+                if os.path.exists(roblox_settings_path):
+                    shutil.copy2(roblox_settings_path, local_settings_path)
+                    print(f"[INFO] Created local Roblox settings file")
+                else:
+                    print(f"[WARNING] Roblox settings file not found, skipping auto-apply")
+                    return
+            
+            try:
+                os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
+            except:
+                pass
+            
+            shutil.copy2(local_settings_path, roblox_settings_path)
+            print(f"[INFO] Applied local settings to Roblox")
+            
+            os.chmod(roblox_settings_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+            print(f"[INFO] Locked Roblox settings to read-only")
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to apply and lock Roblox settings: {e}")
+    
     def open_roblox_settings_window(self):
         """Open Roblox Settings window to view/edit GlobalBasicSettings_13.xml"""
         import xml.etree.ElementTree as ET
@@ -6794,19 +6835,33 @@ del /f /q "%~f0"
             "GlobalBasicSettings_13.xml"
         )
         
+        local_settings_path = os.path.join(self.data_folder, "roblox_settings.xml")
+        
         settings_data = {}
         xml_tree = None
         
+        def ensure_local_settings_file():
+            """Create local settings file if it doesn't exist by copying from Roblox"""
+            if not os.path.exists(local_settings_path):
+                if os.path.exists(roblox_settings_path):
+                    try:
+                        shutil.copy2(roblox_settings_path, local_settings_path)
+                        print(f"[INFO] Created local Roblox settings file: {local_settings_path}")
+                    except Exception as e:
+                        print(f"[ERROR] Failed to create local settings file: {e}")
+        
         def parse_settings():
-            """Parse the XML settings file"""
+            """Parse the local XML settings file"""
             nonlocal settings_data, xml_tree
             settings_data.clear()
             
-            if not os.path.exists(roblox_settings_path):
+            ensure_local_settings_file()
+            
+            if not os.path.exists(local_settings_path):
                 return False
             
             try:
-                xml_tree = ET.parse(roblox_settings_path)
+                xml_tree = ET.parse(local_settings_path)
                 root = xml_tree.getroot()
                 
                 properties = root.find(".//Properties")
@@ -6895,40 +6950,101 @@ del /f /q "%~f0"
                     element.text = new_value
                 
                 settings_data[selected_name]["value"] = new_value
+                save_settings_to_local()
                 refresh_list(search_var.get())
-                messagebox.showinfo("Set", f"Value for '{selected_name}' set locally.")
+                messagebox.showinfo("Set", f"Value for '{selected_name}' set and saved to local file.")
         
         def refresh_settings():
-            """Reload settings from XML file"""
+            """Reload settings from local XML file"""
             if parse_settings():
                 refresh_list(search_var.get())
-                messagebox.showinfo("Refreshed", "Settings reloaded from file.")
+                messagebox.showinfo("Refreshed", "Settings reloaded from local file.")
             else:
-                messagebox.showerror("Error", f"Could not load settings from:\n{roblox_settings_path}")
+                messagebox.showerror("Error", f"Could not load settings from:\n{local_settings_path}")
         
-        def save_settings():
-            """Save settings to XML file"""
+        def save_settings_to_local():
+            """Save settings to local XML file"""
             nonlocal xml_tree
             if xml_tree is None:
                 messagebox.showerror("Error", "No settings loaded to save.")
-                return
+                return False
             
             try:
-                xml_tree.write(roblox_settings_path, encoding="utf-8", xml_declaration=True)
-                messagebox.showinfo("Saved", "Settings saved to file successfully!")
+                xml_tree.write(local_settings_path, encoding="utf-8", xml_declaration=True)
+                print(f"[INFO] Settings saved to local file: {local_settings_path}")
+                return True
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save settings: {e}")
+                return False
         
-        def auto_apply_setting():
-            """Auto Apply settings whenever roblox is launched."""
-            # ok so basically what this DO:
-            # when tool launch, and every time checkbox "auto apply" is toggled
-            # it overwrite roblox settings
-            # and then lock the file to read-only
-            print("placeholder")
+        def apply_settings_to_roblox():
+            """Apply local settings to Roblox's GlobalBasicSettings_13.xml"""
+            if not os.path.exists(local_settings_path):
+                messagebox.showerror("Error", "No local settings file found.")
+                return False
+            
+            try:
+                try:
+                    os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
+                except:
+                    pass
+                
+                shutil.copy2(local_settings_path, roblox_settings_path)
+                print(f"[INFO] Applied settings to Roblox: {roblox_settings_path}")
+                return True
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply settings: {e}")
+                return False
+        
+        def lock_roblox_settings():
+            """Lock Roblox settings file to read-only"""
+            if not os.path.exists(roblox_settings_path):
+                print(f"[WARNING] Roblox settings file not found: {roblox_settings_path}")
+                return False
+            
+            try:
+                os.chmod(roblox_settings_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+                print(f"[INFO] Locked Roblox settings to read-only")
+                return True
+            except Exception as e:
+                print(f"[ERROR] Failed to lock settings: {e}")
+                return False
+        
+        def unlock_roblox_settings():
+            """Unlock Roblox settings file"""
+            if not os.path.exists(roblox_settings_path):
+                print(f"[WARNING] Roblox settings file not found: {roblox_settings_path}")
+                return False
+            
+            try:
+                os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
+                print(f"[INFO] Unlocked Roblox settings (writable)")
+                return True
+            except Exception as e:
+                print(f"[ERROR] Failed to unlock settings: {e}")
+                return False
+        
+        def toggle_lock_settings():
+            """Handle Lock Settings checkbox toggle"""
+            enabled = lock_settings_var.get()
+            self.settings["lock_roblox_settings"] = enabled
+            self.save_settings()
+            
+            if enabled:
+                if save_settings_to_local():
+                    if apply_settings_to_roblox():
+                        if lock_roblox_settings():
+                            messagebox.showinfo("Locked", "Settings applied and locked to read-only!")
+                        else:
+                            messagebox.showwarning("Warning", "Settings applied but failed to lock.")
+            else:
+                if unlock_roblox_settings():
+                    messagebox.showinfo("Unlocked", "Roblox settings file is now writable!")
         
         main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        lock_settings_var = tk.BooleanVar(value=self.settings.get("lock_roblox_settings", False))
         
         search_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         search_frame.pack(fill="x", pady=(0, 10))
@@ -6995,7 +7111,15 @@ del /f /q "%~f0"
         
         ttk.Button(edit_frame, text="Set", style="Dark.TButton", command=set_value).pack(fill="x", pady=(0, 5))
         ttk.Button(edit_frame, text="Refresh", style="Dark.TButton", command=refresh_settings).pack(fill="x", pady=(0, 5))
-        ttk.Button(edit_frame, text="Save", style="Dark.TButton", command=save_settings).pack(fill="x", pady=(0, 5))
+        ttk.Button(edit_frame, text="Apply to Roblox", style="Dark.TButton", command=lambda: apply_settings_to_roblox() and messagebox.showinfo("Applied", "Settings applied to Roblox!")).pack(fill="x", pady=(0, 5))
+        
+        ttk.Checkbutton(
+            edit_frame,
+            text="Lock settings (auto-apply)",
+            variable=lock_settings_var,
+            command=toggle_lock_settings,
+            style="Dark.TCheckbutton"
+        ).pack(anchor="w", pady=(10, 0))
 
         if parse_settings():
             refresh_list()
