@@ -10,7 +10,8 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 
 **Created by evanovar** · **Get Help:** [Discord Server](https://discord.gg/TYnJXyEhgY)<br>
 
-⭐ If you like this project, please consider starring the repository! ⭐
+⭐ If you like this project, please consider starring the repository! ⭐<br>
+Or support the creator by donating via [Robux](https://www.roblox.com/games/718090786/donation#store) ♥️
 
 <img width="447" height="542" alt="image" src="https://github.com/user-attachments/assets/d005e780-96ef-4130-97f7-d192b1629a01" />
 <img width="297" height="411" alt="image" src="https://github.com/user-attachments/assets/95ba25f5-035b-4618-a56b-9920dd7953a4" />
@@ -19,7 +20,6 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 
 - [Installation](#-installation)
 - [Requirements](#-requirements)
-- [Encryption & Security](#-encryption--security)
 - [Disclaimer](#-disclaimer)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -79,23 +79,6 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
-
-## 🔐 Encryption Methods
-
-**1. Hardware Encryption (Not Portable)**
-- ✅ Automatic encryption using your computer's unique hardware ID
-- ✅ No password needed, completely automatic
-- ⚠️ **Data ONLY works on THIS computer**
-  
-**2. Password Encryption (Portable, Recommended)**
-- ✅ Encrypt with a password you create
-- ✅ **Works on any computer** with the password
-- ⚠️ **MUST remember your password** - there is NO recovery method!
-
-**3. No Encryption (Not Recommended)**
-- ✅ Store accounts without any encryption
-- ✅ Easy to transfer and backup
-- ⚠️ **NOT SECURE** - Anyone with access to files can see your data
 
 ## ⚠️ Disclaimer
 
