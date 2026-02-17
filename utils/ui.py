@@ -4645,6 +4645,13 @@ del /f /q "%~f0"
         
         ttk.Button(
             tool_frame,
+            text="Roblox Version",
+            style="Dark.TButton",
+            command=self.open_roblox_version_window
+        ).pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            tool_frame,
             text="Wipe Data",
             style="Dark.TButton",
             command=wipe_data
@@ -5460,6 +5467,347 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=browser_window.destroy
         ).pack(fill="x", pady=(10, 0))
+    
+    def open_roblox_version_window(self):
+        """Open Roblox Version downloader window"""
+        version_window = tk.Toplevel(self.root)
+        self.apply_window_icon(version_window)
+        version_window.title("Roblox Version Downloader")
+        version_window.geometry("500x550")
+        version_window.configure(bg=self.BG_DARK)
+        version_window.resizable(False, False)
+        version_window.transient(self.root)
+        
+        if self.settings.get("enable_topmost", False):
+            version_window.attributes("-topmost", True)
+        
+        version_window.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (version_window.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (version_window.winfo_height() // 2)
+        version_window.geometry(f"+{x}+{y}")
+        
+        container = ttk.Frame(version_window, style="Dark.TFrame")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        header_frame = ttk.Frame(container, style="Dark.TFrame")
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(
+            header_frame,
+            text="Roblox Version Downloader",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w")
+        
+        ttk.Label(
+            header_frame,
+            text="Download and install specific Roblox versions",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(2, 0))
+        
+        separator = ttk.Frame(container, style="Dark.TFrame", height=1)
+        separator.pack(fill="x", pady=(0, 15))
+        separator.configure(relief="solid", borderwidth=1)
+        
+        input_frame = ttk.Frame(container, style="Dark.TFrame")
+        input_frame.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(
+            input_frame,
+            text="Version Hash:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        version_entry_frame = ttk.Frame(input_frame, style="Dark.TFrame")
+        version_entry_frame.pack(fill="x", pady=(0, 10))
+        
+        version_var = tk.StringVar()
+        version_entry = ttk.Entry(version_entry_frame, textvariable=version_var, style="Dark.TEntry")
+        version_entry.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=4)
+        
+        ttk.Label(
+            input_frame,
+            text="Install Path:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        path_frame = ttk.Frame(input_frame, style="Dark.TFrame")
+        path_frame.pack(fill="x", pady=(0, 10))
+        
+        default_path = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "Versions")
+        path_var = tk.StringVar(value=default_path)
+        path_entry = ttk.Entry(path_frame, textvariable=path_var, style="Dark.TEntry")
+        path_entry.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=4)
+        
+        def browse_path():
+            """Browse for install directory"""
+            from tkinter import filedialog
+            versions_path = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "Versions")
+            directory = filedialog.askdirectory(title="Select Install Directory", initialdir=versions_path if os.path.exists(versions_path) else None)
+            if directory:
+                path_var.set(directory)
+        
+        ttk.Button(
+            path_frame,
+            text="Browse",
+            style="Dark.TButton",
+            command=browse_path
+        ).pack(side="left")
+        
+        progress_outer = tk.Frame(container, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
+        
+        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
+        progress_inner.pack(fill="x", padx=1, pady=1)
+        progress_inner.pack_propagate(False)
+        
+        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
+        progress_fill.place(x=0, y=0, relheight=1)
+        
+        progress_label = tk.Label(
+            progress_inner,
+            text="0%",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 9, "bold")
+        )
+        progress_label.place(relx=0.5, rely=0.5, anchor="center")
+        
+        log_frame = ttk.Frame(container, style="Dark.TFrame")
+        log_frame.pack(fill="both", expand=True, pady=(10, 0))
+        
+        ttk.Label(
+            log_frame,
+            text="Download Log:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        
+        log_text = tk.Text(
+            log_frame,
+            height=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 9),
+            relief="solid",
+            borderwidth=1,
+            wrap="word",
+            state="disabled"
+        )
+        log_text.pack(fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(log_text, command=log_text.yview, style="Dark.Vertical.TScrollbar")
+        scrollbar.pack(side="right", fill="y")
+        log_text.config(yscrollcommand=scrollbar.set)
+        
+        def update_progress(percent):
+            """Update the custom progress bar"""
+            try:
+                progress_inner.update_idletasks()
+                total_width = progress_inner.winfo_width()
+                fill_width = int((percent / 100) * total_width)
+                progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
+                
+                label_x = total_width // 2
+                if fill_width >= label_x:
+                    progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
+                else:
+                    progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
+                
+                progress_label.config(text=f"{int(percent)}%")
+                version_window.update()
+            except:
+                pass
+        
+        def log_message(msg):
+            """Log message to text widget"""
+            try:
+                log_text.config(state="normal")
+                log_text.insert(tk.END, msg + "\n")
+                log_text.see(tk.END)
+                log_text.config(state="disabled")
+            except:
+                pass
+        
+        def get_current_version():
+            """Fetch current LIVE version"""
+            fetch_btn.config(state="disabled", text="Fetching...")
+            version_window.update()
+            
+            def do_fetch():
+                try:
+                    version = self.manager.get_roblox_version("LIVE")
+                    if version:
+                        def update_ui():
+                            version_var.set(version)
+                            log_message(f"✓ Fetched current version: {version}")
+                            fetch_btn.config(state="normal", text="Get Latest")
+                        version_window.after(0, update_ui)
+                    else:
+                        def show_error():
+                            log_message("✗ Failed to fetch current version")
+                            fetch_btn.config(state="normal", text="Get Latest")
+                        version_window.after(0, show_error)
+                except Exception as e:
+                    def show_error():
+                        log_message(f"✗ Error: {str(e)[:50]}")
+                        fetch_btn.config(state="normal", text="Get Latest")
+                    version_window.after(0, show_error)
+            
+            thread = threading.Thread(target=do_fetch, daemon=True)
+            thread.start()
+        
+        fetch_btn = ttk.Button(
+            version_entry_frame,
+            text="Get Latest",
+            style="Dark.TButton",
+            command=get_current_version
+        )
+        fetch_btn.pack(side="left")
+        
+        download_btn = None
+        
+        def download_version():
+            """Download and install Roblox version"""
+            version = version_var.get().strip()
+            if not version:
+                messagebox.showwarning("Missing Version", "Please enter a version hash or click 'Get Latest'")
+                return
+            
+            base_path = path_var.get().strip()
+            if not base_path:
+                messagebox.showwarning("Missing Path", "Please select an install directory")
+                return
+            
+            if not version.startswith("version-"):
+                version_hash = f"version-{version}"
+            else:
+                version_hash = version
+            
+            install_path = os.path.join(base_path, version_hash)
+            
+            download_btn.config(state="disabled", text="Downloading...")
+            fetch_btn.config(state="disabled")
+            log_text.config(state="normal")
+            log_text.delete("1.0", tk.END)
+            log_text.config(state="disabled")
+            progress_outer.pack(fill="x", pady=(10, 0))
+            progress_outer.pack_configure(before=log_frame)
+            update_progress(0)
+            version_window.update()
+            
+            def do_download():
+                try:
+                    package_count = [0]
+                    total_packages = [1]
+                    last_logged_percent = [-1]
+                    
+                    def progress_callback(msg):
+                        if msg.startswith("DOWNLOAD_PROGRESS:"):
+                            try:
+                                parts = msg.split(":")
+                                package_name = parts[1]
+                                percent = float(parts[2])
+                                size_mb = float(parts[3])
+                                total_mb = float(parts[4])
+                                display_msg = f"Downloading {package_name}: {percent:.0f}% ({size_mb:.1f} MB / {total_mb:.1f} MB)"
+                                
+                                if int(percent) % 10 == 0 and int(percent) != last_logged_percent[0]:
+                                    last_logged_percent[0] = int(percent)
+                                    version_window.after(0, lambda m=display_msg: log_message(m))
+                                
+                                version_window.after(0, lambda p=percent: update_progress(p))
+                            except:
+                                pass
+                        elif msg.startswith("EXTRACT_START:"):
+                            try:
+                                package_name = msg.split(":")[1]
+                                display_msg = f"Extracting {package_name}..."
+                                version_window.after(0, lambda m=display_msg: log_message(m))
+                                version_window.after(0, lambda: update_progress(0))
+                                last_logged_percent[0] = -1
+                            except:
+                                pass
+                        elif msg.startswith("EXTRACT_PROGRESS:"):
+                            try:
+                                parts = msg.split(":")
+                                package_name = parts[1]
+                                percent = float(parts[2])
+                                
+                                if int(percent) % 25 == 0 and int(percent) != last_logged_percent[0]:
+                                    last_logged_percent[0] = int(percent)
+                                    display_msg = f"Extracting {package_name}: {percent:.0f}%"
+                                    version_window.after(0, lambda m=display_msg: log_message(m))
+                                
+                                version_window.after(0, lambda p=percent: update_progress(p))
+                            except:
+                                pass
+                        elif msg.startswith("EXTRACT_COMPLETE:"):
+                            try:
+                                package_name = msg.split(":")[1]
+                                display_msg = f"✓ Completed {package_name}"
+                                version_window.after(0, lambda m=display_msg: log_message(m))
+                                version_window.after(0, lambda: update_progress(100))
+                                last_logged_percent[0] = -1
+                            except:
+                                pass
+                        else:
+                            version_window.after(0, lambda m=msg: log_message(m))
+                    
+                    success, result = self.manager.download_roblox_version(
+                        version,
+                        install_path,
+                        "LIVE",
+                        progress_callback
+                    )
+                    
+                    def update_ui():
+                        if success:
+                            log_message(f"✓ Installation complete!")
+                            download_btn.config(state="normal", text="Download")
+                            messagebox.showinfo("Success", f"Roblox version installed successfully!\n\nPath: {result}")
+                        else:
+                            log_message(f"✗ {result}")
+                            download_btn.config(state="normal", text="Download")
+                            messagebox.showerror("Download Failed", result)
+                        
+                        fetch_btn.config(state="normal")
+                        progress_outer.pack_forget()
+                    
+                    version_window.after(0, update_ui)
+                    
+                except Exception as e:
+                    def show_error():
+                        error_msg = str(e)
+                        log_message(f"✗ Error: {error_msg}")
+                        download_btn.config(state="normal", text="Download")
+                        fetch_btn.config(state="normal")
+                        progress_outer.pack_forget()
+                        messagebox.showerror("Error", f"Download failed:\n{error_msg}")
+                    version_window.after(0, show_error)
+            
+            thread = threading.Thread(target=do_download, daemon=True)
+            thread.start()
+        
+        button_frame = ttk.Frame(container, style="Dark.TFrame")
+        button_frame.pack(fill="x", pady=(15, 0))
+        
+        download_btn = ttk.Button(
+            button_frame,
+            text="Download",
+            style="Dark.TButton",
+            command=download_version
+        )
+        download_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        ttk.Button(
+            button_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=version_window.destroy
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
         
     def write(self, text):
         """Redirect stdout/stderr writes to console"""

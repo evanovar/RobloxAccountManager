@@ -723,6 +723,190 @@ class RobloxAccountManager:
         entered_hash = hashlib.sha256(password.encode()).hexdigest()
         return entered_hash == stored_hash
     
+    def get_roblox_version(self, channel="LIVE"):
+        """Get current Roblox version from ClientSettings API"""
+        import requests
+        url = f"https://clientsettings.roblox.com/v2/client-version/WindowsPlayer/channel/{channel}"
+        
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                version = data.get("clientVersionUpload", "")
+                if version:
+                    return version
+        except Exception as e:
+            print(f"[ERROR] Failed to get Roblox version: {e}")
+        
+        return None
+    
+    def download_roblox_version(self, version, install_path, channel="LIVE", progress_callback=None):
+        """Download and install a specific Roblox version"""
+        import requests
+        import zipfile
+        import io
+        from pathlib import Path
+        
+        HOST_PATH = "https://setup-aws.rbxcdn.com"
+        BLOB_DIR = "/"
+        
+        EXTRACT_ROOTS = {
+            "RobloxApp.zip": "",
+            "redist.zip": "",
+            "shaders.zip": "shaders/",
+            "ssl.zip": "ssl/",
+            "WebView2.zip": "",
+            "WebView2RuntimeInstaller.zip": "WebView2RuntimeInstaller/",
+            "content-avatar.zip": "content/avatar/",
+            "content-configs.zip": "content/configs/",
+            "content-fonts.zip": "content/fonts/",
+            "content-sky.zip": "content/sky/",
+            "content-sounds.zip": "content/sounds/",
+            "content-textures2.zip": "content/textures/",
+            "content-models.zip": "content/models/",
+            "content-platform-fonts.zip": "PlatformContent/pc/fonts/",
+            "content-platform-dictionaries.zip": "PlatformContent/pc/shared_compression_dictionaries/",
+            "content-terrain.zip": "PlatformContent/pc/terrain/",
+            "content-textures3.zip": "PlatformContent/pc/textures/",
+            "extracontent-luapackages.zip": "ExtraContent/LuaPackages/",
+            "extracontent-translations.zip": "ExtraContent/translations/",
+            "extracontent-models.zip": "ExtraContent/models/",
+            "extracontent-textures.zip": "ExtraContent/textures/",
+            "extracontent-places.zip": "ExtraContent/places/"
+        }
+        
+        APP_SETTINGS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Settings>
+\t<ContentFolder>content</ContentFolder>
+\t<BaseUrl>http://www.roblox.com</BaseUrl>
+</Settings>
+"""
+        
+        def log_progress(message):
+            if progress_callback:
+                progress_callback(message)
+            print(message)
+        
+        try:
+            if not version.startswith("version-"):
+                version = f"version-{version}"
+            
+            if channel == "LIVE":
+                channel_path = HOST_PATH
+            else:
+                channel_path = f"{HOST_PATH}/channel/{channel}"
+            
+            version_path = f"{channel_path}{BLOB_DIR}{version}-"
+            manifest_url = f"{version_path}rbxPkgManifest.txt"
+            
+            log_progress(f"Fetching manifest...")
+            response = requests.get(manifest_url, timeout=30)
+            
+            if response.status_code != 200:
+                channel_path = f"{HOST_PATH}/channel/common"
+                version_path = f"{channel_path}{BLOB_DIR}{version}-"
+                manifest_url = f"{version_path}rbxPkgManifest.txt"
+                response = requests.get(manifest_url, timeout=30)
+            
+            if response.status_code != 200:
+                return False, "Failed to fetch manifest"
+            
+            manifest_text = response.text
+            lines = [line.strip() for line in manifest_text.split('\n')]
+            
+            if not lines or lines[0] != "v0":
+                return False, "Invalid manifest format"
+            
+            if "RobloxApp.zip" not in lines:
+                return False, "Not a WindowsPlayer manifest"
+            
+            packages = [line for line in lines if line.endswith('.zip')]
+            log_progress(f"Found {len(packages)} packages to download")
+            
+            install_path = Path(install_path)
+            install_path.mkdir(parents=True, exist_ok=True)
+            
+            (install_path / "AppSettings.xml").write_text(APP_SETTINGS_XML)
+            
+            total = len(packages)
+            for idx, package_name in enumerate(packages, 1):
+                log_progress(f"[{idx}/{total}] Starting {package_name}...")
+                
+                package_url = f"{version_path}{package_name}"
+                
+                try:
+                    response = requests.get(package_url, stream=True, timeout=60)
+                    
+                    if response.status_code != 200:
+                        log_progress(f"Warning: Failed to download {package_name}, skipping...")
+                        continue
+                    
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    chunks = []
+                    last_reported_percent = -1
+                    
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            chunks.append(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                percent = (downloaded / total_size) * 100
+                                if int(percent) > last_reported_percent or downloaded >= total_size:
+                                    last_reported_percent = int(percent)
+                                    # size_mb = downloaded / (1024 * 1024)
+                                    # total_mb = total_size / (1024 * 1024)
+                                    # log_progress(f"DOWNLOAD_PROGRESS:{package_name}:{percent:.1f}:{size_mb:.2f}:{total_mb:.2f}")
+                    
+                    package_data = b''.join(chunks)
+                    
+                except Exception as e:
+                    log_progress(f"Error downloading {package_name}: {e}")
+                    continue
+                
+                if package_name not in EXTRACT_ROOTS:
+                    log_progress(f"Warning: {package_name} not in extract roots, skipping!")
+                    continue
+                
+                extract_root = EXTRACT_ROOTS[package_name]
+                
+                log_progress(f"EXTRACT_START:{package_name}")
+                
+                try:
+                    with zipfile.ZipFile(io.BytesIO(package_data)) as zf:
+                        members = [m for m in zf.namelist() if not (m.endswith('/') or m.endswith('\\'))]
+                        total_files = len(members)
+                        
+                        for file_idx, member in enumerate(members, 1):
+                            fixed_path = member.replace('\\', '/')
+                            extract_path = install_path / extract_root / fixed_path
+                            extract_path.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            with zf.open(member) as source, open(extract_path, 'wb') as target:
+                                target.write(source.read())
+                            
+                            if file_idx % 10 == 0 or file_idx == total_files:
+                                percent = (file_idx / total_files) * 100
+                                log_progress(f"EXTRACT_PROGRESS:{package_name}:{percent:.1f}")
+                        
+                        log_progress(f"EXTRACT_COMPLETE:{package_name}")
+                except Exception as e:
+                    log_progress(f"Error extracting {package_name}: {e}")
+                    continue
+            
+            exe_path = install_path / "RobloxPlayerBeta.exe"
+            if exe_path.exists():
+                log_progress("Installation complete!")
+                return True, str(install_path)
+            else:
+                log_progress("Warning: RobloxPlayerBeta.exe not found!")
+                return False, "Installation incomplete, RobloxPlayerBeta.exe not found"
+        
+        except Exception as e:
+            error_msg = f"Installation failed: {str(e)}"
+            log_progress(error_msg)
+            return False, error_msg
+    
     def wipe_all_data(self):
         """Wipe all saved accounts, encryption config, and settings by deleting entire AccountManagerData folder"""
         
