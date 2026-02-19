@@ -35,10 +35,12 @@ from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 
 class AccountManagerUI:
-    def __init__(self, root, manager, icon_path=None):
+    def __init__(self, root, manager, icon_path=None, discord_logo_path=None):
         self.root = root
         self.manager = manager
         self.icon_path = icon_path
+        self.discord_logo_path = discord_logo_path
+        self.discord_logo_img = None
         self.APP_VERSION = "2.4.4"
         self._game_name_after_id = None
         self._save_settings_timer = None
@@ -291,7 +293,35 @@ class AccountManagerUI:
         
         ttk.Button(right_frame, text="Delete Selected", style="Dark.TButton", command=self.delete_game_from_list).pack(fill="x", pady=(5, 0))
 
-        ttk.Label(right_frame, text="Quick Actions", style="Dark.TLabel").pack(anchor="w", pady=(10, 5))
+        quick_actions_row = ttk.Frame(right_frame, style="Dark.TFrame")
+        quick_actions_row.pack(fill="x", pady=(10, 5))
+        ttk.Label(quick_actions_row, text="Quick Actions", style="Dark.TLabel").pack(side="left")
+
+        _discord_img = None
+        if self.discord_logo_path and os.path.exists(self.discord_logo_path):
+            try:
+                _discord_img = tk.PhotoImage(file=self.discord_logo_path)
+                _w, _h = _discord_img.width(), _discord_img.height()
+                _factor = max(1, max(_w, _h) // 20)
+                if _factor > 1:
+                    _discord_img = _discord_img.subsample(_factor, _factor)
+                self.discord_logo_img = _discord_img
+            except Exception:
+                _discord_img = None
+
+        if _discord_img:
+            tk.Button(
+                quick_actions_row,
+                image=_discord_img,
+                bg="#5865F2",
+                activebackground="#4752C4",
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                padx=2,
+                pady=1,
+                command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
+            ).pack(side="right")
 
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
@@ -4664,18 +4694,11 @@ del /f /q "%~f0"
             font=("Segoe UI", 9)
         ).pack(anchor="center", pady=(5, 15))
         
-        def copy_discord():
-            discord_server = "https://discord.gg/SZaZU8zwZA"
-            self.root.clipboard_clear()
-            self.root.clipboard_append(discord_server)
-            self.root.update()
-            messagebox.showinfo("Copied!", f"Discord server '{discord_server}' copied to clipboard!")
-        
         ttk.Button(
             about_frame,
-            text="Copy Discord Server",
+            text="Discord Server",
             style="Dark.TButton",
-            command=copy_discord
+            command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
         ).pack(fill="x", pady=(0, 10))
         
         def open_github():

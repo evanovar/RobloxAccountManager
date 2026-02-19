@@ -44,6 +44,30 @@ def setup_icon(data_folder):
         return None
 
 
+def setup_discord_logo(data_folder):
+    logo_path = os.path.join(data_folder, "discordlogo.png")
+
+    if os.path.exists(logo_path):
+        return logo_path
+
+    try:
+        print("[INFO] Downloading Discord logo...")
+        logo_url = "https://github.com/evanovar/RobloxAccountManager/raw/main/discordlogo.png"
+        response = requests.get(logo_url, timeout=5)
+
+        if response.status_code == 200:
+            with open(logo_path, 'wb') as f:
+                f.write(response.content)
+            print("[SUCCESS] Discord logo downloaded successfully.")
+            return logo_path
+        else:
+            print(f"[ERROR] Failed to download Discord logo: HTTP {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"[ERROR] Error downloading Discord logo: {e}")
+        return None
+
+
 def apply_icon_to_window(window, icon_path):
     if icon_path and os.path.exists(icon_path):
         try:
@@ -54,21 +78,30 @@ def apply_icon_to_window(window, icon_path):
 
 def apply_icon_async(root, data_folder):
     icon_path = os.path.join(data_folder, "icon.ico")
+    discord_logo_path = os.path.join(data_folder, "discordlogo.png")
     
     if os.path.exists(icon_path):
         apply_icon_to_window(root, icon_path)
-        return icon_path
     
-    def download_icon():
-        try:
-            setup_icon(data_folder)
-        except:
-            pass
-    
-    thread = threading.Thread(target=download_icon, daemon=True)
-    thread.start()
-    
-    return None
+    needs_icon = not os.path.exists(icon_path)
+    needs_discord = not os.path.exists(discord_logo_path)
+
+    if needs_icon or needs_discord:
+        def download_assets():
+            if needs_icon:
+                try:
+                    setup_icon(data_folder)
+                except:
+                    pass
+            if needs_discord:
+                try:
+                    setup_discord_logo(data_folder)
+                except:
+                    pass
+        threading.Thread(target=download_assets, daemon=True).start()
+
+    return icon_path if os.path.exists(icon_path) else None, \
+           discord_logo_path if os.path.exists(discord_logo_path) else None
 
 
 def main():
@@ -104,8 +137,8 @@ def main():
     root = tk.Tk()
     root.withdraw()
     
-    icon_path = apply_icon_async(root, data_folder)
-    app = AccountManagerUI(root, manager, icon_path=icon_path)
+    icon_path, discord_logo_path = apply_icon_async(root, data_folder)
+    app = AccountManagerUI(root, manager, icon_path=icon_path, discord_logo_path=discord_logo_path)
     
     root.deiconify()
     root.mainloop()
