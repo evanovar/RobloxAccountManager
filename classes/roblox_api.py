@@ -595,60 +595,16 @@ class RobloxAPI:
     
     @staticmethod
     def validate_account(username, cookie):
-        """Validate if an account's cookie is still valid and show detailed token info"""
+        """Validate if an account's cookie is still valid"""
         try:
             headers = {
                 'Cookie': f'.ROBLOSECURITY={cookie}'
             }
-            
             response = requests.get(
                 'https://users.roblox.com/v1/users/authenticated',
                 headers=headers,
                 timeout=3
             )
-            
-            is_valid = response.status_code == 200
-            
-            print(f"[INFO] Valid: {'Yes' if is_valid else 'No'}")
-            
-            if cookie:
-                if len(cookie) > 60:
-                    token_preview = f"{cookie[:50]}...{cookie[-10:]}"
-                else:
-                    token_preview = cookie
-                print(f"[INFO] Token: {token_preview}")
-                print(f"[INFO] Token Length: {len(cookie)} characters")
-            else:
-                print("[INFO] Token: (No token found)")
-            
-            if is_valid and response.status_code == 200:
-                try:
-                    user_data = response.json()
-                    print(f"[INFO] User ID: {user_data.get('id', 'Unknown')}")
-                    print(f"[INFO] Display Name: {user_data.get('displayName', 'Unknown')}")
-                    print(f"[INFO] Username: {user_data.get('name', 'Unknown')}")
-                except:
-                    print("[ERROR] Additional info: Could not retrieve user details")
-            else:
-                print(f"[INFO] Status Code: {response.status_code}")
-                if response.status_code == 401:
-                    print("[ERROR] Reason: Token expired or invalid")
-                elif response.status_code == 403:
-                    print("[ERROR] Reason: Access forbidden")
-                else:
-                    print("[ERROR] Reason: Unknown error")
-            
-            return is_valid
-            
-        except Exception as e:
-            print(f"[INFO] Account: {username}")
-            print(f"[INFO] Valid: No")
-            if cookie:
-                if len(cookie) > 60:
-                    token_preview = f"{cookie[:50]}...{cookie[-10:]}"
-                else:
-                    token_preview = cookie
-                print(f"[INFO] Token: {token_preview}")
-            print(f"[INFO] Error: {str(e)}")
-            print(f"{'='*60}")
+            return response.status_code == 200
+        except Exception:
             return False

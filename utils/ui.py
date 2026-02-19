@@ -109,6 +109,14 @@ class AccountManagerUI:
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
         self.auto_rejoin_pids = {}
         self.auto_rejoin_launch_lock = threading.Lock()
+        
+        self.cookie_status = {}
+        for _u, _d in self.manager.accounts.items():
+            if isinstance(_d, dict):
+                self.cookie_status[_u] = _d.get('cookie_valid', None)
+        self.account_tooltip = None
+        self.account_tooltip_timer = None
+        self.account_tooltip_last_index = None
 
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
@@ -198,6 +206,8 @@ class AccountManagerUI:
         self.account_list.bind("<B1-Motion>", self.on_drag_motion)
         self.account_list.bind("<ButtonRelease-1>", self.on_drag_release)
         self.account_list.bind("<Button-3>", self.show_account_context_menu)
+        self.account_list.bind("<Motion>", self.on_account_list_hover)
+        self.account_list.bind("<Leave>", self.on_account_list_leave)
 
         right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         right_frame.pack(side="right", fill="y")
@@ -286,7 +296,7 @@ class AccountManagerUI:
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
 
-        ttk.Button(action_frame, text="Validate Account", style="Dark.TButton", command=self.validate_account).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text="Donate", style="Dark.TButton", command=lambda: webbrowser.open("https://www.roblox.com/games/718090786/donation#!/store")).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
@@ -322,6 +332,7 @@ class AccountManagerUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         threading.Thread(target=self.check_for_updates, daemon=True).start()
+        threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
         
         if self.settings.get("lock_roblox_settings", False):
             self.root.after(1000, self.apply_and_lock_roblox_settings)
@@ -1191,10 +1202,131 @@ del /f /q "%~f0"
         self.account_list.delete(0, tk.END)
         for username, data in self.manager.accounts.items():
             note = data.get('note', '') if isinstance(data, dict) else ''
-            display_text = f"{username}"
+            cookie_valid = self.cookie_status.get(username)
+            
+            if cookie_valid is False:
+                display_text = f"⚠ {username}"
+            else:
+                display_text = f"{username}"
+            
             if note:
                 display_text += f" • {note}"
+            index = self.account_list.size()
             self.account_list.insert(tk.END, display_text)
+            
+            if cookie_valid is False:
+                self.account_list.itemconfig(index, fg="#FFB347")
+
+    def on_account_list_hover(self, event):
+        """Show tooltip when hovering over an expired account row"""
+        index = self.account_list.nearest(event.y)
+        
+        if index < 0 or index >= self.account_list.size():
+            self.hide_account_tooltip()
+            return
+        
+        if index == self.account_tooltip_last_index:
+            return
+        
+        self.hide_account_tooltip()
+        self.account_tooltip_last_index = index
+        
+        display_text = self.account_list.get(index)
+        if not display_text.startswith('\u26a0 '):
+            return
+        
+        username = self.extract_username_from_display(display_text)
+        
+        def create_tooltip():
+            if self.account_tooltip:
+                return
+            
+            x_pos = event.x_root + 15
+            y_pos = event.y_root + 15
+            
+            self.account_tooltip = tk.Toplevel(self.root)
+            self.account_tooltip.wm_overrideredirect(True)
+            self.account_tooltip.wm_geometry(f"+{x_pos}+{y_pos}")
+            
+            label = tk.Label(
+                self.account_tooltip,
+                text=f"Cookie expired for '{username}'.\nPlease remove this account and add it again.",
+                bg=self.BG_DARK,
+                fg=self.FG_TEXT,
+                font=(self.FONT_FAMILY, 9),
+                padx=8,
+                pady=4,
+                relief="solid",
+                borderwidth=1
+            )
+            label.pack()
+            
+            if self.settings.get("enable_topmost", False):
+                self.account_tooltip.attributes("-topmost", True)
+        
+        self.account_tooltip_timer = self.root.after(500, create_tooltip)
+    
+    def on_account_list_leave(self, event):
+        """Hide tooltip when leaving the account list"""
+        self.hide_account_tooltip()
+    
+    def hide_account_tooltip(self):
+        """Hide the account list tooltip"""
+        if self.account_tooltip_timer:
+            self.root.after_cancel(self.account_tooltip_timer)
+            self.account_tooltip_timer = None
+        
+        if self.account_tooltip:
+            self.account_tooltip.destroy()
+            self.account_tooltip = None
+        
+        self.account_tooltip_last_index = None
+    
+    def extract_username_from_display(self, display_text):
+        """Extract username from display text (handles indicators like ⚠)"""
+        username_part = display_text.split(' • ')[0]
+        
+        username_part = username_part.strip()
+        if username_part.startswith('⚠ '):
+            username_part = username_part[2:]
+        
+        return username_part.strip()
+    
+    def _save_cookie_status(self, username, is_valid):
+        """Update cookie status in memory and persist to accounts file"""
+        self.cookie_status[username] = is_valid
+        if username in self.manager.accounts and isinstance(self.manager.accounts[username], dict):
+            self.manager.accounts[username]['cookie_valid'] = is_valid
+
+    def _silent_check_cookies(self):
+        """Trigger a background silent cookie check. Safe to call from any thread."""
+        if getattr(self, '_cookie_check_running', False):
+            return
+        threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
+
+    def _silent_check_cookies_worker(self):
+        """Check all accounts not already known invalid."""
+        if getattr(self, '_cookie_check_running', False):
+            return
+        self._cookie_check_running = True
+        try:
+            accounts = [u for u in self.manager.accounts
+                        if self.cookie_status.get(u) is not False]
+            if not accounts:
+                return
+            changed = False
+            for username in accounts:
+                try:
+                    is_valid = self.manager.validate_account(username)
+                    self._save_cookie_status(username, is_valid)
+                    changed = True
+                except Exception as e:
+                    print(f"[ERROR] Cookie check failed for {username}: {e}")
+            if changed:
+                self.manager.save_accounts()
+                self.root.after(0, self.refresh_accounts)
+        finally:
+            self._cookie_check_running = False
     
     def on_drag_start(self, event):
         """Initiate drag - store position and wait for hold"""
@@ -1324,7 +1456,7 @@ del /f /q "%~f0"
             return None
         
         display_text = self.account_list.get(selection[0])
-        username = display_text.split(' • ')[0]
+        username = self.extract_username_from_display(display_text)
         return username
     
     def get_selected_usernames(self):
@@ -1337,7 +1469,7 @@ del /f /q "%~f0"
         usernames = []
         for index in selections:
             display_text = self.account_list.get(index)
-            username = display_text.split(' • ')[0]
+            username = self.extract_username_from_display(display_text)
             usernames.append(username)
         return usernames
 
@@ -1918,7 +2050,7 @@ del /f /q "%~f0"
         self.account_list.activate(index)
         
         display_text = self.account_list.get(index)
-        username = display_text.split(' • ')[0]
+        username = self.extract_username_from_display(display_text)
         account = self.manager.accounts.get(username)
         
         if not account:
@@ -2025,6 +2157,58 @@ del /f /q "%~f0"
             )
         password_btn.pack(fill="x", padx=2, pady=1)
         
+        separator = tk.Frame(self.account_context_menu, height=1, bg="#666666")
+        separator.pack(fill="x", padx=2, pady=2)
+        
+        def check_single_cookie():
+            self.hide_account_context_menu()
+            print(f"[INFO] Checking cookie for {username}...")
+            
+            def check_thread():
+                try:
+                    is_valid = self.manager.validate_account(username)
+                    self._save_cookie_status(username, is_valid)
+                    self.manager.save_accounts()
+                    self.root.after(0, lambda: self.refresh_accounts())
+                    
+                    if is_valid:
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Cookie Valid",
+                            f"Cookie for '{username}' is valid!"
+                        ))
+                    else:
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Cookie Expired",
+                            f"⚠ Cookie for '{username}' is expired or invalid!"
+                        ))
+                except Exception as e:
+                    print(f"[ERROR] Failed to check cookie: {e}")
+                    self._save_cookie_status(username, None)
+                    self.manager.save_accounts()
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Check Failed",
+                        f"Failed to check cookie for '{username}':\\n{str(e)}"
+                    ))
+            
+            thread = threading.Thread(target=check_thread, daemon=True)
+            thread.start()
+        
+        check_cookie_btn = tk.Button(
+            self.account_context_menu,
+            text="Check Cookie",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=check_single_cookie
+        )
+        check_cookie_btn.pack(fill="x", padx=2, pady=1)
+        
         self.account_context_menu.geometry(f"+{event.x_root}+{event.y_root}")
         self.account_context_menu.update_idletasks()
         
@@ -2066,12 +2250,17 @@ del /f /q "%~f0"
         def worker(selected_usernames):
             launcher_pref = self.settings.get("roblox_launcher", "default")
             success_count = 0
+            failed_launch = False
             for uname in selected_usernames:
                 try:
                     if self.manager.launch_roblox(uname, "", "", launcher_pref):
                         success_count += 1
+                    else:
+                        failed_launch = True
                 except Exception as e:
                     print(f"[ERROR] Failed to launch Roblox home for {uname}: {e}")
+            if failed_launch:
+                self._silent_check_cookies()
             
             def on_done():
                 if success_count > 0:
@@ -2142,12 +2331,17 @@ del /f /q "%~f0"
         def worker(selected_usernames, pid, psid):
             launcher_pref = self.settings.get("roblox_launcher", "default")
             success_count = 0
+            failed_launch = False
             for uname in selected_usernames:
                 try:
                     if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
                         success_count += 1
+                    else:
+                        failed_launch = True
                 except Exception as e:
                     print(f"[ERROR] Failed to launch game for {uname}: {e}")
+            if failed_launch:
+                self._silent_check_cookies()
 
             def on_done():
                 if success_count > 0:
@@ -5767,7 +5961,6 @@ del /f /q "%~f0"
                         if success:
                             log_message(f"✓ Installation complete!")
                             download_btn.config(state="normal", text="Download")
-                            messagebox.showinfo("Success", f"Roblox version installed successfully!\n\nPath: {result}")
                         else:
                             log_message(f"✗ {result}")
                             download_btn.config(state="normal", text="Download")

@@ -84,6 +84,8 @@ class RobloxAccountManager:
             if isinstance(account_data, dict):
                 if 'note' not in account_data:
                     account_data['note'] = ''
+                if 'cookie_valid' not in account_data:
+                    account_data['cookie_valid'] = None
     
     def save_accounts(self):
         """Save accounts to JSON file"""
@@ -595,7 +597,6 @@ class RobloxAccountManager:
         """Validate if an account's cookie is still valid"""
         cookie = self.get_account_cookie(username)
         if not cookie:
-            print(f"[ERROR] Account '{username}' not found")
             return False
         
         return RobloxAPI.validate_account(username, cookie)
@@ -781,11 +782,12 @@ class RobloxAccountManager:
 \t<BaseUrl>http://www.roblox.com</BaseUrl>
 </Settings>
 """
-        
         def log_progress(message):
+            _silent_prefixes = ("DOWNLOAD_PROGRESS:", "EXTRACT_PROGRESS:", "EXTRACT_START:", "EXTRACT_COMPLETE:")
             if progress_callback:
                 progress_callback(message)
-            print(message)
+            if not message.startswith(_silent_prefixes):
+                print(message)
         
         try:
             if not version.startswith("version-"):
@@ -854,9 +856,9 @@ class RobloxAccountManager:
                                 percent = (downloaded / total_size) * 100
                                 if int(percent) > last_reported_percent or downloaded >= total_size:
                                     last_reported_percent = int(percent)
-                                    # size_mb = downloaded / (1024 * 1024)
-                                    # total_mb = total_size / (1024 * 1024)
-                                    # log_progress(f"DOWNLOAD_PROGRESS:{package_name}:{percent:.1f}:{size_mb:.2f}:{total_mb:.2f}")
+                                    size_mb = downloaded / (1024 * 1024)
+                                    total_mb = total_size / (1024 * 1024)
+                                    log_progress(f"DOWNLOAD_PROGRESS:{package_name}:{percent:.1f}:{size_mb:.2f}:{total_mb:.2f}")
                     
                     package_data = b''.join(chunks)
                     
