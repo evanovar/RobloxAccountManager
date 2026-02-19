@@ -28,7 +28,7 @@ def setup_icon(data_folder):
     
     try:
         print("[INFO] Downloading application icon...")
-        icon_url = "https://github.com/evanovar/RobloxAccountManager/raw/main/icon.ico"
+        icon_url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/icon.ico"
         response = requests.get(icon_url, timeout=5)
         
         if response.status_code == 200:
@@ -52,7 +52,7 @@ def setup_discord_logo(data_folder):
 
     try:
         print("[INFO] Downloading Discord logo...")
-        logo_url = "https://github.com/evanovar/RobloxAccountManager/raw/main/discordlogo.png"
+        logo_url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/discordlogo.png"
         response = requests.get(logo_url, timeout=5)
 
         if response.status_code == 200:
@@ -101,7 +101,7 @@ def apply_icon_async(root, data_folder):
         threading.Thread(target=download_assets, daemon=True).start()
 
     return icon_path if os.path.exists(icon_path) else None, \
-           discord_logo_path if os.path.exists(discord_logo_path) else None
+           discord_logo_path
 
 
 def main():

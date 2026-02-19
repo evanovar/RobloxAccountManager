@@ -296,6 +296,8 @@ class AccountManagerUI:
         quick_actions_row = ttk.Frame(right_frame, style="Dark.TFrame")
         quick_actions_row.pack(fill="x", pady=(10, 5))
         ttk.Label(quick_actions_row, text="Quick Actions", style="Dark.TLabel").pack(side="left")
+        self.quick_actions_row = quick_actions_row
+        self.discord_btn = None
 
         _discord_img = None
         if self.discord_logo_path and os.path.exists(self.discord_logo_path):
@@ -310,18 +312,20 @@ class AccountManagerUI:
                 _discord_img = None
 
         if _discord_img:
-            tk.Button(
+            self.discord_btn = tk.Button(
                 quick_actions_row,
                 image=_discord_img,
-                bg="#5865F2",
-                activebackground="#4752C4",
+                bg=self.BG_DARK,
+                activebackground=self.BG_DARK,
                 relief="flat",
                 bd=0,
                 cursor="hand2",
-                padx=2,
-                pady=1,
+                padx=0,
+                pady=0,
+                highlightthickness=0,
                 command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
-            ).pack(side="right")
+            )
+            self.discord_btn.pack(side="right")
 
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
@@ -363,6 +367,7 @@ class AccountManagerUI:
         
         threading.Thread(target=self.check_for_updates, daemon=True).start()
         threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
+        threading.Thread(target=self._watch_discord_logo, daemon=True).start()
         
         if self.settings.get("lock_roblox_settings", False):
             self.root.after(1000, self.apply_and_lock_roblox_settings)
@@ -1327,6 +1332,52 @@ del /f /q "%~f0"
         self.cookie_status[username] = is_valid
         if username in self.manager.accounts and isinstance(self.manager.accounts[username], dict):
             self.manager.accounts[username]['cookie_valid'] = is_valid
+
+    def _watch_discord_logo(self):
+        """Background thread: wait for discordlogo.png to appear, then apply it to the UI."""
+        import time
+        if self.discord_btn is not None:
+            return
+        path = self.discord_logo_path
+        if not path:
+            return
+        for _ in range(60):
+            if os.path.exists(path):
+                self.root.after(0, self._apply_discord_logo_to_ui)
+                return
+            time.sleep(0.5)
+
+    def _apply_discord_logo_to_ui(self):
+        """Load (or reload) the discord logo and create/update the button."""
+        path = self.discord_logo_path
+        if not path or not os.path.exists(path):
+            return
+        try:
+            img = tk.PhotoImage(file=path)
+            w, h = img.width(), img.height()
+            factor = max(1, max(w, h) // 20)
+            if factor > 1:
+                img = img.subsample(factor, factor)
+            self.discord_logo_img = img
+        except Exception:
+            return
+        if self.discord_btn is not None:
+            self.discord_btn.config(image=img, bg=self.BG_DARK, activebackground=self.BG_DARK)
+        else:
+            self.discord_btn = tk.Button(
+                self.quick_actions_row,
+                image=img,
+                bg=self.BG_DARK,
+                activebackground=self.BG_DARK,
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                padx=0,
+                pady=0,
+                highlightthickness=0,
+                command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
+            )
+            self.discord_btn.pack(side="right")
 
     def _silent_check_cookies(self):
         """Trigger a background silent cookie check. Safe to call from any thread."""
@@ -4569,6 +4620,10 @@ del /f /q "%~f0"
                 self.star_btn.config(bg=self.BG_DARK)
             if hasattr(self, 'auto_rejoin_btn') and self.auto_rejoin_btn:
                 self.auto_rejoin_btn.config(bg=self.BG_DARK)
+            if hasattr(self, 'discord_btn') and self.discord_btn:
+                self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
+            if hasattr(self, 'discord_btn') and self.discord_btn:
+                self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
             
             style = ttk.Style()
             style.configure("Dark.TFrame", background=self.BG_DARK)
