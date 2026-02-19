@@ -3638,16 +3638,31 @@ del /f /q "%~f0"
                     is_admin = False
                 
                 if not is_admin:
-                    print("[WARNING] Not running as admin! Switching to default method.")
-                    messagebox.showwarning(
+                    print("[WARNING] Not running as admin! Prompting user.")
+                    want_admin = messagebox.askyesno(
                         "Admin Required",
-                        "handle64 mode requires administrator privileges to close handles.\n\n"
+                        "handle64 mode requires administrator privileges.\n\n"
                         "The app is NOT running as admin.\n\n"
-                        "Switching to Default method instead."
+                        "Do you want to relaunch as administrator?\n\n"
+                        "Click Yes to restart as admin, or No to fall back to the Default method."
                     )
-                    self.settings["multi_roblox_method"] = "default"
-                    self.save_settings()
-                    use_handle64 = False
+                    if want_admin:
+                        print("[INFO] Relaunching as administrator...")
+                        try:
+                            params = " ".join(f'"{a}"' for a in sys.argv[1:])
+                            ctypes.windll.shell32.ShellExecuteW(
+                                None, "runas", sys.executable, params, None, 1
+                            )
+                        except Exception as e:
+                            print(f"[ERROR] Failed to relaunch as admin: {e}")
+                            messagebox.showerror("Error", f"Failed to relaunch as administrator:\n{e}")
+                        self.root.after(500, self.root.destroy)
+                        return False
+                    else:
+                        print("[INFO] User declined admin, switching to Default method.")
+                        self.settings["multi_roblox_method"] = "default"
+                        self.save_settings()
+                        use_handle64 = False
                 
                 if use_handle64:
                     handle64_path = self._find_handle64_exe()
