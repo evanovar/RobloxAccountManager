@@ -2479,7 +2479,7 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
-            if success_count > 0 and self.settings.get("auto_tile_windows", True):
+            if success_count > 1 and self.settings.get("auto_tile_windows", True):
                 threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
@@ -2565,7 +2565,7 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
-            if success_count > 0 and self.settings.get("auto_tile_windows", True):
+            if success_count > 1 and self.settings.get("auto_tile_windows", True):
                 threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
@@ -7011,6 +7011,8 @@ del /f /q "%~f0"
         print("[INFO] Global hourly webhook screenshot started")
 
     def _stop_global_screenshot_loop(self):
+        if self._webhook_screenshot_thread is None:
+            return
         self._webhook_screenshot_thread = None
         print("[INFO] Global hourly webhook screenshot stopped")
 
