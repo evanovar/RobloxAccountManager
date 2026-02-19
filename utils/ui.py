@@ -29,6 +29,8 @@ import traceback
 import psutil
 import random
 import stat
+import math
+import win32process
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
@@ -111,6 +113,7 @@ class AccountManagerUI:
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
         self.auto_rejoin_pids = {}
         self.auto_rejoin_launch_lock = threading.Lock()
+        self._webhook_screenshot_thread = None
         
         self.cookie_status = {}
         for _u, _d in self.manager.accounts.items():
@@ -137,6 +140,8 @@ class AccountManagerUI:
         style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE - 1))
         style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
         style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
+        style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+        style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
 
         main_frame = ttk.Frame(self.root, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -415,7 +420,10 @@ class AccountManagerUI:
                     "anti_afk_key": "w",
                     "disable_launch_popup": False,
                     "auto_rejoin_configs": {},
-                    "multi_roblox_method": "default"
+                    "multi_roblox_method": "default",
+                    "last_joined_user": "",
+                    "auto_tile_windows": True,
+                    "rejoin_webhook": {}
                 }
         except:
             self.settings = {
@@ -433,7 +441,10 @@ class AccountManagerUI:
                 "anti_afk_key": "w",
                 "auto_rejoin_configs": {},
                 "disable_launch_popup": False,
-                "multi_roblox_method": "default"
+                "multi_roblox_method": "default",
+                "last_joined_user": "",
+                "auto_tile_windows": True,
+                "rejoin_webhook": {}
             }
         
         if self.settings.get("enable_topmost", False):
@@ -1252,6 +1263,15 @@ del /f /q "%~f0"
             if cookie_valid is False:
                 self.account_list.itemconfig(index, fg="#FFB347")
 
+        last_joined = self.settings.get("last_joined_user", "")
+        if last_joined:
+            accounts_keys = list(self.manager.accounts.keys())
+            if last_joined in accounts_keys:
+                idx = accounts_keys.index(last_joined)
+                self.account_list.selection_clear(0, tk.END)
+                self.account_list.selection_set(idx)
+                self.account_list.see(idx)
+
     def on_account_list_hover(self, event):
         """Show tooltip when hovering over an expired account row"""
         index = self.account_list.nearest(event.y)
@@ -1327,6 +1347,123 @@ del /f /q "%~f0"
         
         return username_part.strip()
     
+    def _send_webhook(self, url, content):
+        def _post():
+            try:
+                requests.post(url, json={"content": content}, timeout=5)
+            except Exception as e:
+                print(f"[ERROR] Failed to send webhook: {e}")
+        threading.Thread(target=_post, daemon=True).start()
+
+    def _send_webhook_embed(self, url, title, description, color, ping_user_id=None):
+        def _post():
+            try:
+                payload = {
+                    "content": f"<@{ping_user_id}>" if ping_user_id else "",
+                    "embeds": [{
+                        "title": title,
+                        "description": description,
+                        "color": color,
+                        "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    }],
+                    "attachments": []
+                }
+                requests.post(url, json=payload, timeout=5)
+            except Exception as e:
+                print(f"[ERROR] Failed to send webhook embed: {e}")
+        threading.Thread(target=_post, daemon=True).start()
+
+    def _send_webhook_screenshot(self, url, caption=""):
+        def _post():
+            tmp_path = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                tmp_path = tmp.name
+                tmp.close()
+
+                ps = (
+                    "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+                    "$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+                    "$b=New-Object System.Drawing.Bitmap($s.Width,$s.Height); "
+                    "$g=[System.Drawing.Graphics]::FromImage($b); "
+                    "$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size); "
+                    f"$b.Save('{tmp_path}',[System.Drawing.Imaging.ImageFormat]::Png); "
+                    "$g.Dispose();$b.Dispose()"
+                )
+                subprocess.run(
+                    ["powershell", "-NonInteractive", "-Command", ps],
+                    capture_output=True, timeout=15,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                with open(tmp_path, 'rb') as f:
+                    requests.post(url, data={"content": caption},
+                                  files={"file": ("screenshot.png", f, "image/png")}, timeout=10)
+            except Exception as e:
+                print(f"[ERROR] Webhook screenshot send failed: {e}")
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+        threading.Thread(target=_post, daemon=True).start()
+
+    def _get_roblox_hwnds_from_pids(self, pids):
+        hwnds = []
+        def _cb(hwnd, _):
+            try:
+                if win32gui.IsWindowVisible(hwnd):
+                    _, wpid = win32process.GetWindowThreadProcessId(hwnd)
+                    if wpid in pids:
+                        title = win32gui.GetWindowText(hwnd)
+                        if title and "roblox" in title.lower():
+                            hwnds.append(hwnd)
+            except Exception:
+                pass
+            return True
+        win32gui.EnumWindows(_cb, None)
+        return hwnds
+
+    def _tile_roblox_windows(self):
+        pids = self._get_roblox_pids()
+        if not pids:
+            return
+        hwnds = self._get_roblox_hwnds_from_pids(pids)
+        n = len(hwnds)
+        if n == 0:
+            return
+        try:
+            screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+            screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+            cols = math.ceil(math.sqrt(n))
+            rows = math.ceil(n / cols)
+            win_w = screen_w // cols
+            win_h = screen_h // rows
+            for i, hwnd in enumerate(hwnds):
+                col = i % cols
+                row = i // cols
+                x = col * win_w
+                y = row * win_h
+                try:
+                    win32gui.ShowWindow(hwnd, 9)
+                    win32gui.MoveWindow(hwnd, x, y, win_w, win_h, True)
+                except Exception as e:
+                    print(f"[ERROR] Could not move window {hwnd}: {e}")
+            print(f"[INFO] Tiled {n} Roblox window(s) in a {cols}×{rows} grid.")
+        except Exception as e:
+            print(f"[ERROR] Error tiling windows: {e}")
+
+    def _tile_roblox_windows_after_launch(self):
+        prev_count = len(self._get_roblox_pids())
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            time.sleep(3)
+            curr_count = len(self._get_roblox_pids())
+            if curr_count > prev_count:
+                time.sleep(6)
+                break
+        self._tile_roblox_windows()
+
     def _save_cookie_status(self, username, is_valid):
         """Update cookie status in memory and persist to accounts file"""
         self.cookie_status[username] = is_valid
@@ -1335,7 +1472,6 @@ del /f /q "%~f0"
 
     def _watch_discord_logo(self):
         """Background thread: wait for discordlogo.png to appear, then apply it to the UI."""
-        import time
         if self.discord_btn is not None:
             return
         path = self.discord_logo_path
@@ -2343,8 +2479,13 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
+            if success_count > 0 and self.settings.get("auto_tile_windows", True):
+                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+
             def on_done():
                 if success_count > 0:
+                    self.settings["last_joined_user"] = selected_usernames[-1]
+                    self.save_settings()
                     if not self.settings.get("disable_launch_popup", False):
                         if len(selected_usernames) == 1:
                             messagebox.showinfo("Success", "Roblox is launching to home! Check your desktop.")
@@ -2424,8 +2565,13 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
+            if success_count > 0 and self.settings.get("auto_tile_windows", True):
+                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+
             def on_done():
                 if success_count > 0:
+                    self.settings["last_joined_user"] = selected_usernames[-1]
+                    self.save_settings()
                     gname = RobloxAPI.get_game_name(pid)
                     if gname:
                         self.add_game_to_list(pid, gname, psid)
@@ -2471,12 +2617,105 @@ del /f /q "%~f0"
         main_frame = ttk.Frame(auto_rejoin_window, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=15, pady=15)
         
+        header_row = ttk.Frame(main_frame, style="Dark.TFrame")
+        header_row.pack(fill="x", pady=(0, 10))
         ttk.Label(
-            main_frame,
+            header_row,
             text="Auto-Rejoin Accounts",
             style="Dark.TLabel",
             font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(side="left")
+
+        def open_rejoin_webhook_settings():
+            """Open the webhook settings window for auto-rejoin notifications."""
+            wh_win = tk.Toplevel(auto_rejoin_window)
+            self.apply_window_icon(wh_win)
+            wh_win.title("Webhook Settings")
+            wh_win.configure(bg=self.BG_DARK)
+            wh_win.resizable(False, False)
+            auto_rejoin_window.update_idletasks()
+            wx = auto_rejoin_window.winfo_x() + 50
+            wy = auto_rejoin_window.winfo_y() + 50
+            wh_win.geometry(f"420x200+{wx}+{wy}")
+            if self.settings.get("enable_topmost", False):
+                wh_win.attributes("-topmost", True)
+            wh_win.transient(auto_rejoin_window)
+            wh_win.focus_force()
+
+            cfg = self.settings.get('rejoin_webhook', {})
+
+            frm = ttk.Frame(wh_win, style="Dark.TFrame")
+            frm.pack(fill="both", expand=True, padx=20, pady=20)
+
+            ttk.Label(frm, text="Webhook Settings", style="Dark.TLabel",
+                      font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
+
+            ttk.Label(frm, text="Discord Webhook URL:", style="Dark.TLabel").pack(anchor="w")
+            url_var = tk.StringVar(value=cfg.get('url', ''))
+            url_entry = ttk.Entry(frm, textvariable=url_var, style="Dark.TEntry")
+            url_entry.pack(fill="x", pady=(0, 10))
+
+            ping_var = tk.BooleanVar(value=cfg.get('enable_ping', False))
+            ping_row = ttk.Frame(frm, style="Dark.TFrame")
+            ping_row.pack(fill="x", pady=(2, 0))
+            ping_id_var = tk.StringVar(value=cfg.get('ping_user_id', ''))
+            ping_id_entry = ttk.Entry(ping_row, textvariable=ping_id_var, width=20, style="Dark.TEntry")
+
+            def _on_ping_toggle():
+                ping_id_entry.config(state="normal" if ping_var.get() else "disabled")
+
+            ttk.Checkbutton(
+                ping_row,
+                text="Ping user ID on alerts:",
+                variable=ping_var,
+                command=_on_ping_toggle,
+                style="Dark.TCheckbutton"
+            ).pack(side="left")
+            ping_id_entry.pack(side="left", padx=(8, 0))
+            ping_id_entry.config(state="normal" if ping_var.get() else "disabled")
+
+            def save_webhook_settings():
+                self.settings['rejoin_webhook'] = {
+                    'url': url_var.get().strip(),
+                    'enable_ping': ping_var.get(),
+                    'ping_user_id': ping_id_var.get().strip()
+                }
+                self.save_settings()
+                wh_win.destroy()
+
+            def test_webhook():
+                url = url_var.get().strip()
+                if not url:
+                    messagebox.showwarning("Missing URL", "Enter a webhook URL first.", parent=wh_win)
+                    return
+                _ping = ping_id_var.get().strip() if ping_var.get() and ping_id_var.get().strip() else None
+                self._send_webhook_embed(
+                    url,
+                    "Webhook Test",
+                    "Auto-Rejoin webhook is working correctly!",
+                    5438822,
+                    ping_user_id=_ping
+                )
+
+            btn_row = ttk.Frame(frm, style="Dark.TFrame")
+            btn_row.pack(fill="x", pady=(16, 0))
+            ttk.Button(btn_row, text="Test", style="Dark.TButton", command=test_webhook).pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ttk.Button(btn_row, text="Save", style="Dark.TButton", command=save_webhook_settings).pack(side="left", fill="x", expand=True, padx=4)
+            ttk.Button(btn_row, text="Cancel", style="Dark.TButton", command=wh_win.destroy).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        _discord_img_ref = getattr(self, 'discord_logo_img', None)
+        if _discord_img_ref:
+            wh_btn = tk.Button(
+                header_row, image=_discord_img_ref,
+                bg=self.BG_DARK, activebackground=self.BG_DARK,
+                relief="flat", bd=0, cursor="hand2",
+                padx=0, pady=0, highlightthickness=0,
+                command=open_rejoin_webhook_settings
+            )
+            wh_btn.pack(side="right")
+        else:
+            ttk.Button(header_row, text="Webhook", style="Dark.TButton",
+                       command=open_rejoin_webhook_settings).pack(side="right")
         
         list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         list_frame.pack(fill="both", expand=True, pady=(0, 10))
@@ -2783,9 +3022,21 @@ del /f /q "%~f0"
             account = accounts_list[selection[0]]
             
             self._match_pids_to_accounts([account])
-            
+
+            wh_cfg = self.settings.get('rejoin_webhook', {})
+            wh_url = wh_cfg.get('url', '').strip()
+            if wh_url:
+                _ping = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
+                self._send_webhook_embed(
+                    wh_url,
+                    "Auto Rejoin Started",
+                    f"Monitoring 1 account:\n- **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`",
+                    5438822,
+                    ping_user_id=_ping or None
+                )
+
             self.start_auto_rejoin_for_account(account)
-            
+
             auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
         
@@ -2805,12 +3056,28 @@ del /f /q "%~f0"
         def start_all():
             """Start auto-rejoin for all accounts"""
             accounts = list(self.auto_rejoin_configs.keys())
-            
+
             self._match_pids_to_accounts(accounts)
-            
+
+            wh_cfg = self.settings.get('rejoin_webhook', {})
+            wh_url = wh_cfg.get('url', '').strip()
+            if wh_url and accounts:
+                lines = "\n".join(
+                    f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
+                    for acc in accounts
+                )
+                _ping = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
+                self._send_webhook_embed(
+                    wh_url,
+                    "Auto Rejoin Started",
+                    f"Monitoring {len(accounts)} account(s):\n{lines}",
+                    5438822,
+                    ping_user_id=_ping or None
+                )
+
             for account in accounts:
                 self.start_auto_rejoin_for_account(account)
-            
+
             auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for all {len(accounts)} account(s)!")
         
@@ -3507,7 +3774,7 @@ del /f /q "%~f0"
         method_window = tk.Toplevel(self.root)
         self.apply_window_icon(method_window)
         method_window.title("Multi Roblox Method Settings")
-        method_window.geometry("400x320")
+        method_window.geometry("400x330")
         method_window.configure(bg=self.BG_DARK)
         method_window.resizable(False, False)
         method_window.transient(self.root)
@@ -6643,7 +6910,6 @@ del /f /q "%~f0"
                             return False
                 return True
             
-            import win32process
             win32gui.EnumWindows(enum_windows_callback, pid)
         except Exception as e:
             print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
@@ -6692,6 +6958,8 @@ del /f /q "%~f0"
         self.auto_rejoin_threads[account] = thread
         thread.start()
         print(f"[Auto-Rejoin] Started thread {thread.name} for {account}")
+        if len(self.auto_rejoin_threads) == 1:
+            self._start_global_screenshot_loop()
     
     def stop_auto_rejoin_for_account(self, account):
         """Stop the auto-rejoin background thread for a specific account"""
@@ -6706,13 +6974,42 @@ del /f /q "%~f0"
         
         if account in self.auto_rejoin_stop_events:
             del self.auto_rejoin_stop_events[account]
-        
+
+        if not self.auto_rejoin_threads:
+            self._stop_global_screenshot_loop()
+
         print(f"[Auto-Rejoin] Stopped for {account}")
     
     def stop_all_auto_rejoin(self):
         """Stop all auto-rejoin threads"""
         for account in list(self.auto_rejoin_threads.keys()):
             self.stop_auto_rejoin_for_account(account)
+        self._stop_global_screenshot_loop()
+
+    def _start_global_screenshot_loop(self):
+        if self._webhook_screenshot_thread and self._webhook_screenshot_thread.is_alive():
+            return
+        self._webhook_screenshot_thread = threading.Thread(
+            target=self._global_screenshot_worker, daemon=True, name="WebhookScreenshot"
+        )
+        self._webhook_screenshot_thread.start()
+        print("[INFO] Global hourly webhook screenshot started")
+
+    def _stop_global_screenshot_loop(self):
+        self._webhook_screenshot_thread = None
+        print("[INFO] Global hourly webhook screenshot stopped")
+
+    def _global_screenshot_worker(self):
+        time.sleep(3600)
+        while self._webhook_screenshot_thread is threading.current_thread():
+            wh_cfg = self.settings.get('rejoin_webhook', {})
+            wh_url = wh_cfg.get('url', '').strip()
+            if wh_url and self.auto_rejoin_threads:
+                active = ", ".join(
+                    acc for acc, t in self.auto_rejoin_threads.items() if t.is_alive()
+                )
+                self._send_webhook_screenshot(wh_url, f"Hourly screenshot — active accounts: {active}")
+            time.sleep(3600)
     
     def is_roblox_running(self):
         """Check if any Roblox window exists"""
@@ -6724,33 +7021,34 @@ del /f /q "%~f0"
             return False
     
     def is_player_in_game(self, user_id, cookie, expected_place_id):
-        """Check if player is still in the same game using Presence API"""
+        """Check if player is still in the same game using Presence API.
+        Returns (in_game, place_id, game_id, error_msg) — error_msg is None on success."""
         try:
             presence = RobloxAPI.get_player_presence(user_id, cookie)
-            
+
             if presence:
                 in_game = presence.get('in_game', False)
                 place_id = presence.get('place_id')
-                
+
                 print(f"[Auto-Rejoin] Presence check - in_game: {in_game}, place_id: {place_id}, expected: {expected_place_id}")
-                
+
                 if in_game:
                     try:
                         if int(place_id) == int(expected_place_id):
                             print(f"[Auto-Rejoin] Player is in correct game")
-                            return True, place_id, presence.get('game_id')
+                            return True, place_id, presence.get('game_id'), None
                     except (ValueError, TypeError):
                         pass
-                
+
                 print(f"[Auto-Rejoin] Player NOT in game or wrong place_id")
+                return False, None, None, None
             else:
                 print(f"[Auto-Rejoin] Presence API returned None")
-            
-            return False, None, None
+                return False, None, None, "Presence API returned None — cookie may be invalid"
         except Exception as e:
             print(f"[Auto-Rejoin] Error checking player status: {e}")
             traceback.print_exc()
-            return False, None, None
+            return False, None, None, f"Presence check exception: {e}"
     
     def _check_roblox_process_exists(self, account):
         """Check if the tracked Roblox process for this account still exists"""
@@ -6814,10 +7112,9 @@ del /f /q "%~f0"
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
 
-        
         consecutive_failed_checks = 0
         max_consecutive_fails = 2
-        
+
         if account in self.auto_rejoin_pids:
             print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
         else:
@@ -6825,6 +7122,15 @@ del /f /q "%~f0"
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
             if not success:
                 retry_count += 1
+                wh_cfg_il = self.settings.get('rejoin_webhook', {})
+                wh_url_il = wh_cfg_il.get('url', '').strip()
+                if wh_url_il:
+                    _ping_il = wh_cfg_il.get('ping_user_id', '') if wh_cfg_il.get('enable_ping') else None
+                    self._send_webhook_embed(
+                        wh_url_il, "Launch Failed",
+                        f"**{account}** failed to launch place `{place_id}` (attempt {retry_count}/{max_retries}).",
+                        15287107, ping_user_id=_ping_il or None
+                    )
                 if retry_count >= max_retries:
                     print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached on initial launch. Stopping.")
                     return
@@ -6832,12 +7138,24 @@ del /f /q "%~f0"
         
         while not stop_event.is_set():
             try:
+                wh_cfg = self.settings.get('rejoin_webhook', {})
+                wh_url = wh_cfg.get('url', '').strip()
+
                 check_presence = config.get('check_presence', True)
                 disconnect_detected = False
                 game_id = ''
                 
                 if check_presence:
-                    in_game, current_place_id, game_id = self.is_player_in_game(user_id, cookie, place_id)
+                    in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id)
+                    if pres_err:
+                        if wh_url:
+                            _ping_pe = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
+                            self._send_webhook_embed(
+                                wh_url, "Presence Check Error",
+                                f"**{account}**\n{pres_err}",
+                                16776960,
+                                ping_user_id=_ping_pe or None
+                            )
                     disconnect_detected = not in_game
                     
                     if disconnect_detected:
@@ -6888,6 +7206,16 @@ del /f /q "%~f0"
                     retry_count += 1
                     consecutive_failed_checks = 0
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
+
+                    _ping_id = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
+                    if wh_url:
+                        self._send_webhook_embed(
+                            wh_url,
+                            "Account Disconnected",
+                            f"**{account}** disconnected from place `{place_id}`.\nRejoin attempt **{retry_count}/{max_retries}**.",
+                            15287107,
+                            ping_user_id=_ping_id or None
+                        )
                     
                     if account in self.auto_rejoin_pids:
                         old_pid = self.auto_rejoin_pids[account]
@@ -6905,11 +7233,31 @@ del /f /q "%~f0"
                     
                     if success:
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
+                        if wh_url:
+                            self._send_webhook_embed(
+                                wh_url,
+                                "Rejoin Successful",
+                                f"**{account}** has rejoined place `{place_id}`.",
+                                5438822,
+                                ping_user_id=_ping_id or None
+                            )
                         retry_count = 0
                         time.sleep(10)
                     else:
+                        if wh_url:
+                            self._send_webhook_embed(
+                                wh_url, "Rejoin Failed",
+                                f"**{account}** failed to relaunch for place `{place_id}` (attempt {retry_count}/{max_retries}).",
+                                15287107, ping_user_id=_ping_id or None
+                            )
                         if retry_count >= max_retries:
                             print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
+                            if wh_url:
+                                self._send_webhook_embed(
+                                    wh_url, "Auto Rejoin Stopped",
+                                    f"**{account}** reached max retries ({max_retries}). Auto-rejoin stopped.",
+                                    15287107, ping_user_id=_ping_id or None
+                                )
                             break
                         time.sleep(check_interval)
                 else:
@@ -6919,6 +7267,15 @@ del /f /q "%~f0"
                     
             except Exception as e:
                 print(f"[Auto-Rejoin] [{account}] Error: {e}")
+                wh_cfg_ex = self.settings.get('rejoin_webhook', {})
+                wh_url_ex = wh_cfg_ex.get('url', '').strip()
+                if wh_url_ex:
+                    _ping_ex = wh_cfg_ex.get('ping_user_id', '') if wh_cfg_ex.get('enable_ping') else None
+                    self._send_webhook_embed(
+                        wh_url_ex, "Error",
+                        f"**{account}**\n`{e}`",
+                        15287107, ping_user_id=_ping_ex or None
+                    )
                 time.sleep(check_interval)
     
     def _launch_and_track_pid(self, account, place_id, private_server, job_id):
@@ -6995,7 +7352,6 @@ del /f /q "%~f0"
             
             def enum_callback(hwnd, _):
                 try:
-                    import win32process
                     _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
                     if window_pid == pid:
                         window_title = win32gui.GetWindowText(hwnd)
