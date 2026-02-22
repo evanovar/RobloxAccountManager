@@ -4,6 +4,8 @@ Handles authentication, info, and game launching
 """
 
 import os
+import re
+import json
 import time
 import random
 import requests
@@ -141,7 +143,113 @@ class RobloxAPI:
                 "Example format: 12345678901234567890123456789012"
             )
             return None
-    
+
+    @staticmethod
+    def resolve_share_url(url_or_code, cookie=None):
+        if not url_or_code:
+            return None, None
+        try:
+            vip_match = re.search(
+                r'roblox\.com/games/(\d+)/[^?#]*\?[^#]*privateServerLinkCode=([A-Za-z0-9]+)',
+                url_or_code
+            )
+            if vip_match:
+                return vip_match.group(1), vip_match.group(2)
+
+            share_match = re.search(
+                r'roblox\.com/share[^?#]*[?&]code=([A-Za-z0-9]+)',
+                url_or_code
+            )
+            if not share_match:
+                return None, None
+
+            code = share_match.group(1)
+            print(f"[INFO] Resolving share link code: {code[:8]}...")
+
+            api_headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }
+            if cookie:
+                api_headers['Cookie'] = f'.ROBLOSECURITY={cookie}'
+
+            csrf_token = None
+            try:
+                csrf_resp = requests.post(
+                    'https://auth.roblox.com/v2/logout',
+                    headers={'Cookie': f'.ROBLOSECURITY={cookie}'} if cookie else {},
+                    timeout=5
+                )
+                csrf_token = csrf_resp.headers.get('x-csrf-token')
+            except Exception:
+                pass
+            if csrf_token:
+                api_headers['X-CSRF-TOKEN'] = csrf_token
+
+            for payload in [
+                {"linkId": code, "linkType": "Server"},
+                {"code": code, "type": "Server"},
+            ]:
+                try:
+                    api_resp = requests.post(
+                        "https://apis.roblox.com/sharelinks/v1/resolve-link",
+                        json=payload, headers=api_headers, timeout=10
+                    )
+                    if api_resp.status_code == 200:
+                        raw = api_resp.text
+                        pid_m = re.search(r'"placeId"\s*:\s*(\d+)', raw)
+                        lc_m = re.search(
+                            r'"(?:linkCode|privateServerLinkCode|accessCode|linkcode)"\s*:\s*"([A-Za-z0-9_\-]+)"',
+                            raw
+                        )
+                        if pid_m and lc_m:
+                            print(f"[INFO] Resolved share link: placeId={pid_m.group(1)}")
+                            return pid_m.group(1), lc_m.group(1)
+                    elif api_resp.status_code == 403 and 'x-csrf-token' in api_resp.headers:
+                        api_headers['X-CSRF-TOKEN'] = api_resp.headers['x-csrf-token']
+                        retry = requests.post(
+                            "https://apis.roblox.com/sharelinks/v1/resolve-link",
+                            json=payload, headers=api_headers, timeout=10
+                        )
+                        if retry.status_code == 200:
+                            raw = retry.text
+                            pid_m = re.search(r'"placeId"\s*:\s*(\d+)', raw)
+                            lc_m = re.search(
+                                r'"(?:linkCode|privateServerLinkCode|accessCode|linkcode)"\s*:\s*"([A-Za-z0-9_\-]+)"',
+                                raw
+                            )
+                            if pid_m and lc_m:
+                                print(f"[INFO] Resolved share link: placeId={pid_m.group(1)}")
+                                return pid_m.group(1), lc_m.group(1)
+                except Exception as e:
+                    print(f"[ERROR] resolve-link request failed: {e}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to resolve share URL: {e}")
+        return None, None
+
+    @staticmethod
+    def get_private_server_access_code(cookie, place_id, link_code):
+        try:
+            headers = {
+                'Cookie': f'.ROBLOSECURITY={cookie}',
+                'Referer': 'https://www.roblox.com/games/4924922222/Brookhaven-RP',
+                'User-Agent': 'Mozilla/5.0'
+            }
+            url = f"https://www.roblox.com/games/{place_id}?privateServerLinkCode={link_code}"
+            response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+            match = re.search(
+                r'Roblox\.GameLauncher\.joinPrivateGame\(\d+\s*,\s*\'([\w\-]+)\'',
+                response.text
+            )
+            if match:
+                return match.group(1)
+            print(f"[ERROR] joinPrivateGame not found in page (HTTP {response.status_code}). "
+                  f"Check that the account has 'Everyone' private server invite privacy.")
+        except Exception as e:
+            print(f"[ERROR] Failed to get private server access code: {e}")
+        return None
+
     @staticmethod
     def get_username_from_api(roblosecurity_cookie):
         """Get username using Roblox API"""
@@ -432,59 +540,94 @@ class RobloxAPI:
         if not auth_ticket:
             print("[ERROR] Failed to get authentication ticket")
             return False
-        
+
         print("[SUCCESS] Got authentication ticket!")
-        
-        private_server_code = RobloxAPI.extract_private_server_code(private_server_id)
-        
-        if private_server_id and private_server_code is None:
-            print("[ERROR] Invalid private server code. Launch aborted.")
-            return False
-        
+
         browser_tracker_id = random.randint(55393295400, 55393295500)
         launch_time = int(time.time() * 1000)
-        
-        if not game_id or game_id == "":
+
+        if not game_id and not private_server_id:
             url = (
                 "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
                 "+launchtime:" + str(launch_time) +
                 "+browsertrackerid:" + str(browser_tracker_id) +
                 "+robloxLocale:en_us+gameLocale:en_us"
             )
-            print(f"Launching Roblox Home...")
-            print(f"Account: {username}")
-            print(f"Launcher: {launcher_preference}")
-            
+            print(f"[INFO] Launching Roblox Home for {username}")
             return RobloxAPI._execute_launch(url, launcher_preference)
+
+        link_code = None
+        access_code = None
+
+        if private_server_id:
+            ps = private_server_id.strip()
+            if ps.isdigit():
+                link_code = ps
+            else:
+                resolved_pid, resolved_lc = RobloxAPI.resolve_share_url(ps, cookie=cookie)
+                if resolved_lc:
+                    if not game_id:
+                        game_id = resolved_pid
+                    link_code = resolved_lc
+                    print(f"[INFO] Private server link code extracted")
+                else:
+                    print("[ERROR] Invalid private server input. Expected a numeric code, VIP URL, or share link.")
+                    messagebox.showerror(
+                        "Invalid Private Server",
+                        "Could not parse the private server input.\n\n"
+                        "Accepted formats:\n"
+                        "• Numeric link code (e.g. 12345678...)\n"
+                        "• VIP URL (.../games/{id}/...?privateServerLinkCode=...)\n"
+                        "• Share URL (roblox.com/share?code=...&type=Server)"
+                    )
+                    return False
+
+        if not game_id:
+            print("[ERROR] No Place ID provided.")
+            return False
+
+        if link_code:
+            print(f"[INFO] Resolving private server access code for {username}...")
+            access_code = RobloxAPI.get_private_server_access_code(cookie, game_id, link_code)
+            if access_code is None:
+                print("[ERROR] Failed to get private server access code. Launch aborted.")
+                return False
+            print(f"[INFO] Access code resolved successfully")
+
+        if access_code and link_code:
+            launcher_url = (
+                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestPrivateGame"
+                f"&placeId={game_id}&accessCode={access_code}&linkCode={link_code}"
+            )
+        elif job_id:
+            launcher_url = (
+                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob"
+                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
+                f"&gameId={job_id}&isPlayTogetherGame=false"
+            )
+        else:
+            launcher_url = (
+                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame"
+                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
+                f"&isPlayTogetherGame=false"
+            )
 
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
             "+launchtime:" + str(launch_time) +
-            "+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob" +
-            "&browserTrackerId=" + str(browser_tracker_id) +
-            "&placeId=" + str(game_id) +
-            "&isPlayTogetherGame=false"
-        )
-
-        if private_server_code:
-            url += "&linkCode=" + private_server_code
-        elif job_id:
-            url += "&gameId=" + str(job_id)
-
-        url += (
+            "+placelauncherurl:" + launcher_url +
             "+browsertrackerid:" + str(browser_tracker_id) +
-            "+robloxLocale:en_us+gameLocale:en_us"
+            "+robloxLocale:en_us+gameLocale:en_us+channel:+LaunchExp:InApp"
         )
 
-        print(f"[INFO] Launching Roblox...")
-        print(f"[INFO] Account: {username}")
-        print(f"[INFO] Game ID: {game_id}")
-        if private_server_code:
-            print(f"[INFO] Private Server: {private_server_code}")
+        print(f"[INFO] Launching Roblox for {username}...")
+        print(f"[INFO] Place ID: {game_id}")
+        if access_code:
+            print(f"[INFO] Private server (link code: {link_code})")
         elif job_id:
             print(f"[INFO] Job ID: {job_id}")
         print(f"[INFO] Launcher: {launcher_preference}")
-        
+
         return RobloxAPI._execute_launch(url, launcher_preference)
     
     @staticmethod

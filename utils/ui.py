@@ -1079,14 +1079,22 @@ del /f /q "%~f0"
         """Check both Place ID and Private Server fields to update game name on startup"""
         place_id = self.place_entry.get().strip()
         private_server = self.private_server_entry.get().strip()
-        
+
         if place_id:
             self.update_game_name()
         elif private_server:
             vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
             if vip_match:
-                vip_place_id = vip_match.group(1)
-                self.update_game_name_from_id(vip_place_id)
+                self.update_game_name_from_id(vip_match.group(1))
+            else:
+                share_match = re.search(r'roblox\.com/share\?[^#]*code=([A-Za-z0-9]+)', private_server)
+                if share_match:
+                    def _resolve_startup(ps=private_server):
+                        ck = next((d.get('cookie') for d in self.manager.accounts.values() if isinstance(d, dict) and d.get('cookie')), None)
+                        resolved_pid, _ = RobloxAPI.resolve_share_url(ps, cookie=ck)
+                        if resolved_pid:
+                            self.root.after(0, lambda: self.update_game_name_from_id(resolved_pid))
+                    threading.Thread(target=_resolve_startup, daemon=True).start()
 
     def on_place_id_change(self, event=None):
         place_id = self.place_entry.get().strip()
@@ -1097,15 +1105,23 @@ del /f /q "%~f0"
     def on_private_server_change(self, event=None):        
         private_server = self.private_server_entry.get().strip()
         place_id_input = self.place_entry.get().strip()
-        
+
         self.settings["last_private_server"] = private_server
         self.save_settings()
-        
+
         if not place_id_input and private_server:
             vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
             if vip_match:
-                vip_place_id = vip_match.group(1)
-                self.update_game_name_from_id(vip_place_id)
+                self.update_game_name_from_id(vip_match.group(1))
+            else:
+                share_match = re.search(r'roblox\.com/share\?[^#]*code=([A-Za-z0-9]+)', private_server)
+                if share_match:
+                    def _resolve_and_update(ps=private_server):
+                        ck = next((d.get('cookie') for d in self.manager.accounts.values() if isinstance(d, dict) and d.get('cookie')), None)
+                        resolved_pid, _ = RobloxAPI.resolve_share_url(ps, cookie=ck)
+                        if resolved_pid:
+                            self.root.after(0, lambda: self.update_game_name_from_id(resolved_pid))
+                    threading.Thread(target=_resolve_and_update, daemon=True).start()
     
     def update_game_name_from_id(self, place_id):
         """Update game name label from a specific place ID (without reading from text box)"""
@@ -2513,31 +2529,20 @@ del /f /q "%~f0"
 
         game_id_input = self.place_entry.get().strip()
         private_server_input = self.private_server_entry.get().strip()
-        
-        vip_link_place_id = None
-        vip_link_private_code = None
-        
-        if private_server_input:
-            vip_match = re.search(r'roblox\.com/games/(\d+)/[^?]+\?privateServerLinkCode=([A-Za-z0-9]+)', private_server_input)
-            if vip_match:
-                vip_link_place_id = vip_match.group(1)
-                vip_link_private_code = vip_match.group(2)
-        
-        if vip_link_place_id:
-            if game_id_input:
-                game_id = game_id_input
-            else:
-                game_id = vip_link_place_id
-            private_server = vip_link_private_code
-        else:
-            if not game_id_input:
-                messagebox.showwarning("Missing Info", "Please enter a Place ID or paste a VIP server link in the Private Server field.")
-                return
+
+        if game_id_input:
             if not game_id_input.isdigit():
                 messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                 return
             game_id = game_id_input
-            private_server = private_server_input
+        elif private_server_input:
+            vip_pid = re.search(r'roblox\.com/games/(\d+)', private_server_input)
+            game_id = vip_pid.group(1) if vip_pid else ""
+        else:
+            messagebox.showwarning("Missing Info", "Please enter a Place ID or paste a VIP server / share link in the Private Server field.")
+            return
+
+        private_server = private_server_input 
 
         if self.settings.get("confirm_before_launch", False):
             game_name = RobloxAPI.get_game_name(game_id)
