@@ -6380,22 +6380,35 @@ del /f /q "%~f0"
         if self.original_stdout:
             self.original_stdout.flush()
     
+    _MAX_CONSOLE_LINES = 2000
+
     def log_to_console(self, message):
         """Log message to console output buffer"""
         self.console_output.append(message)
+        # Cap the in-memory list so it never grows beyond MAX_CONSOLE_LINES
+        if len(self.console_output) > self._MAX_CONSOLE_LINES:
+            del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
         
         if self.console_text_widget:
             try:
                 self.console_text_widget.config(state="normal")
+                # Record where the new content starts before inserting
+                insert_start = self.console_text_widget.index(f"{tk.END}-1c linestart")
                 self.console_text_widget.insert(tk.END, message)
-                self._apply_console_tags()
+                # Trim the widget to MAX_CONSOLE_LINES so Tcl/Tk memory stays bounded
+                line_count = int(self.console_text_widget.index(tk.END).split(".")[0]) - 1
+                if line_count > self._MAX_CONSOLE_LINES:
+                    excess = line_count - self._MAX_CONSOLE_LINES
+                    self.console_text_widget.delete("1.0", f"{excess + 1}.0")
+                    insert_start = "1.0"  # tags need full re-scan after deletion
+                self._apply_console_tags(search_from=insert_start)
                 self.console_text_widget.see(tk.END)
                 self.console_text_widget.config(state="disabled")
             except:
                 pass
     
-    def _apply_console_tags(self):
-        """Apply color tags to console keywords"""
+    def _apply_console_tags(self, search_from: str = "1.0"):
+        """Apply color tags to console keywords."""
         if not self.console_text_widget:
             return
         
@@ -6407,7 +6420,7 @@ del /f /q "%~f0"
         }
         
         for keyword, tag in keywords.items():
-            search_start = "1.0"
+            search_start = search_from
             while True:
                 pos = self.console_text_widget.search(keyword, search_start, tk.END, nocase=False)
                 if not pos:

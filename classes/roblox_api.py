@@ -127,24 +127,6 @@ class RobloxAPI:
             print(f"[ERROR] Error restoring installers: {e}")
     
     @staticmethod
-    def extract_private_server_code(private_server_input):
-        """Extract private server code from URL or return the code directly"""
-        if not private_server_input:
-            return ""
-        
-        if private_server_input.isdigit():
-            return private_server_input
-        else:
-            print("[ERROR] Wrong Format, Private Server ID must contain only numbers")
-            messagebox.showerror(
-                "Wrong Format",
-                "Private Server ID must contain only numbers.\n\n"
-                f"Invalid input: {private_server_input}\n\n"
-                "Example format: 12345678901234567890123456789012"
-            )
-            return None
-
-    @staticmethod
     def resolve_share_url(url_or_code, cookie=None):
         if not url_or_code:
             return None, None
@@ -227,28 +209,6 @@ class RobloxAPI:
         except Exception as e:
             print(f"[ERROR] Failed to resolve share URL: {e}")
         return None, None
-
-    @staticmethod
-    def get_private_server_access_code(cookie, place_id, link_code):
-        try:
-            headers = {
-                'Cookie': f'.ROBLOSECURITY={cookie}',
-                'Referer': 'https://www.roblox.com/games/4924922222/Brookhaven-RP',
-                'User-Agent': 'Mozilla/5.0'
-            }
-            url = f"https://www.roblox.com/games/{place_id}?privateServerLinkCode={link_code}"
-            response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
-            match = re.search(
-                r'Roblox\.GameLauncher\.joinPrivateGame\(\d+\s*,\s*\'([\w\-]+)\'',
-                response.text
-            )
-            if match:
-                return match.group(1)
-            print(f"[ERROR] joinPrivateGame not found in page (HTTP {response.status_code}). "
-                  f"Check that the account has 'Everyone' private server invite privacy.")
-        except Exception as e:
-            print(f"[ERROR] Failed to get private server access code: {e}")
-        return None
 
     @staticmethod
     def get_username_from_api(roblosecurity_cookie):
@@ -557,7 +517,6 @@ class RobloxAPI:
             return RobloxAPI._execute_launch(url, launcher_preference)
 
         link_code = None
-        access_code = None
 
         if private_server_id:
             ps = private_server_id.strip()
@@ -587,17 +546,10 @@ class RobloxAPI:
             return False
 
         if link_code:
-            print(f"[INFO] Resolving private server access code for {username}...")
-            access_code = RobloxAPI.get_private_server_access_code(cookie, game_id, link_code)
-            if access_code is None:
-                print("[ERROR] Failed to get private server access code. Launch aborted.")
-                return False
-            print(f"[INFO] Access code resolved successfully")
-
-        if access_code and link_code:
             launcher_url = (
-                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestPrivateGame"
-                f"&placeId={game_id}&accessCode={access_code}&linkCode={link_code}"
+                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob"
+                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
+                f"&isPlayTogetherGame=false&linkCode={link_code}"
             )
         elif job_id:
             launcher_url = (
@@ -622,7 +574,7 @@ class RobloxAPI:
 
         print(f"[INFO] Launching Roblox for {username}...")
         print(f"[INFO] Place ID: {game_id}")
-        if access_code:
+        if link_code:
             print(f"[INFO] Private server (link code: {link_code})")
         elif job_id:
             print(f"[INFO] Job ID: {job_id}")
