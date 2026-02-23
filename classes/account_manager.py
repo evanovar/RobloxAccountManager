@@ -295,6 +295,7 @@ class RobloxAccountManager:
         start_time = time.time()
         last_debug_time = 0
         check_count = 0
+        last_url = ""
         
         while time.time() - start_time < timeout:
             try:
@@ -302,6 +303,16 @@ class RobloxAccountManager:
                 
                 try:
                     current_url = driver.current_url.lower()
+
+                    if current_url != last_url:
+                        last_url = current_url
+                        alive = driver.execute_script("return !!(window.browserDetect);")
+                        if not alive:
+                            try:
+                                driver.execute_script(detector_script)
+                            except:
+                                pass
+
                     if any(p in current_url for p in ['/home', '/games', '/catalog', '/avatar', '/discover', '/friends', '/profile', '/groups', '/develop', '/create']) and '/login' not in current_url and '/createaccount' not in current_url:
                         print(f"[SUCCESS] LOGIN DETECTED via URL check! (check #{check_count})")
                         try:
