@@ -545,31 +545,23 @@ class RobloxAPI:
             print("[ERROR] No Place ID provided.")
             return False
 
-        if link_code:
-            launcher_url = (
-                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob"
-                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
-                f"&isPlayTogetherGame=false&linkCode={link_code}"
-            )
-        elif job_id:
-            launcher_url = (
-                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob"
-                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
-                f"&gameId={job_id}&isPlayTogetherGame=false"
-            )
-        else:
-            launcher_url = (
-                f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame"
-                f"&browserTrackerId={browser_tracker_id}&placeId={game_id}"
-                f"&isPlayTogetherGame=false"
-            )
-
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
             "+launchtime:" + str(launch_time) +
-            "+placelauncherurl:" + launcher_url +
+            "+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob" +
+            "&browserTrackerId=" + str(browser_tracker_id) +
+            "&placeId=" + str(game_id) +
+            "&isPlayTogetherGame=false"
+        )
+
+        if link_code:
+            url += "&linkCode=" + link_code
+        elif job_id:
+            url += "&gameId=" + str(job_id)
+
+        url += (
             "+browsertrackerid:" + str(browser_tracker_id) +
-            "+robloxLocale:en_us+gameLocale:en_us+channel:+LaunchExp:InApp"
+            "+robloxLocale:en_us+gameLocale:en_us"
         )
 
         print(f"[INFO] Launching Roblox for {username}...")
