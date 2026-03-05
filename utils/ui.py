@@ -1669,7 +1669,7 @@ del /f /q "%~f0"
                     _, wpid = win32process.GetWindowThreadProcessId(hwnd)
                     if wpid in pids:
                         title = win32gui.GetWindowText(hwnd)
-                        if title:  # PIDs already verified as Roblox — any visible window qualifies
+                        if title:
                             hwnds.append(hwnd)
             except Exception:
                 pass
@@ -2618,9 +2618,16 @@ del /f /q "%~f0"
         self.account_context_menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
         
         def copy_to_clipboard(text):
-            self.root.clipboard_clear()
-            self.root.clipboard_append(str(text))
-            self.root.update()
+            try:
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(str(text), win32clipboard.CF_UNICODETEXT)
+                win32clipboard.CloseClipboard()
+            except Exception:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(str(text))
+                self.root.update()
             self.hide_account_context_menu()
         
         def hide_menu():
@@ -6859,8 +6866,16 @@ del /f /q "%~f0"
             self.console_text_widget.config(state="disabled") 
         
         def copy_all():
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.console_text_widget.get(1.0, tk.END))
+            text = self.console_text_widget.get(1.0, tk.END)
+            try:
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+                win32clipboard.CloseClipboard()
+            except Exception:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
             messagebox.showinfo("Copied", "Console output copied to clipboard!")
         
         ttk.Button(
