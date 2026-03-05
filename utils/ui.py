@@ -31,6 +31,11 @@ import random
 import stat
 import math
 import win32process
+import tkinter.font as tkfont
+import xml.etree.ElementTree as ET
+from PIL import Image, ImageTk
+from io import BytesIO
+from tkinter import filedialog
 from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
@@ -123,6 +128,7 @@ class AccountManagerUI:
         self.account_tooltip_timer = None
         self.account_tooltip_last_index = None
 
+        self._list_row_map = []
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -192,6 +198,7 @@ class AccountManagerUI:
             font=("Segoe UI", 10),
             width=20,
             selectmode=selectmode,
+            activestyle="none",
         )
         self.account_list.pack(side="left", fill="both", expand=True)
 
@@ -1259,34 +1266,264 @@ del /f /q "%~f0"
             self.refresh_game_list()
             messagebox.showinfo("Success", "Game removed from list!")
 
+    def _get_groups(self):
+        return self.settings.get("groups", {})
+
+    def _save_groups(self, groups):
+        self.settings["groups"] = groups
+        self.settings["group_collapsed"] = list(self._collapsed_groups)
+        self.save_settings()
+
+    def _get_username_group(self, username):
+        for gname, members in self._get_groups().items():
+            if username in members:
+                return gname
+        return None
+
+    def _add_account_to_group(self, username, group_name):
+        groups = self._get_groups()
+        if group_name not in groups:
+            groups[group_name] = []
+        for gn in list(groups):
+            if gn != group_name and username in groups[gn]:
+                groups[gn].remove(username)
+        if username not in groups[group_name]:
+            groups[group_name].append(username)
+        self._save_groups(groups)
+        self.refresh_accounts()
+
+    def _remove_account_from_group(self, username):
+        groups = self._get_groups()
+        for gn in list(groups):
+            if username in groups[gn]:
+                groups[gn].remove(username)
+        self._save_groups(groups)
+        self.refresh_accounts()
+
+    def _handle_group_header_click(self, index):
+        if index < 0 or index >= len(self._list_row_map):
+            return
+        kind, name = self._list_row_map[index]
+        if kind != "group_header":
+            return
+        if name in self._collapsed_groups:
+            self._collapsed_groups.discard(name)
+        else:
+            self._collapsed_groups.add(name)
+        self._save_groups(self._get_groups())
+        self.refresh_accounts()
+
+    def _build_group_header_text(self, group_name, member_count, collapsed):
+        arrow = "v" if collapsed else "^"
+        prefix = f" {group_name} ({member_count}) "
+
+        try:
+            lb_font = tkfont.Font(font=self.account_list.cget("font"))
+            list_width = self.account_list.winfo_width()
+            if list_width <= 1:
+                list_width = 220
+            usable = list_width - 4
+            prefix_px = lb_font.measure(prefix)
+            suffix_reserved = max(lb_font.measure(" v "), lb_font.measure(" ^ "))
+            dash_px = lb_font.measure("\u2500")
+            remaining = usable - prefix_px - suffix_reserved
+            if remaining > 0 and dash_px > 0:
+                n_dashes = remaining // dash_px
+            else:
+                n_dashes = 3
+        except Exception:
+            n_dashes = 10
+
+        dash_char = "\u2500"
+        dashes = dash_char * max(3, n_dashes)
+        return f"{prefix}{dashes} {arrow} "
+
+    def _show_group_context_menu(self, event, group_name):
+        """Right-click menu on a group header."""
+        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
+            try: self.account_context_menu.destroy()
+            except: pass
+
+        menu = tk.Toplevel(self.root)
+        menu.overrideredirect(True)
+        menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
+        self.account_context_menu = menu
+
+        def _btn(text, cmd):
+            b = tk.Button(menu, text=text, anchor="w", relief="flat",
+                          bg=self.BG_MID, fg=self.FG_TEXT,
+                          activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
+                          font=("Segoe UI", 9), bd=0, highlightthickness=0,
+                          command=lambda: [self.hide_account_context_menu(), cmd()])
+            b.pack(fill="x", padx=2, pady=1)
+
+        _btn("Rename Group", lambda: self._rename_group_dialog(group_name))
+        _btn("Delete Group", lambda: self._delete_group(group_name))
+
+        menu.geometry(f"+{event.x_root}+{event.y_root}")
+        menu.update_idletasks()
+        if self.settings.get("enable_topmost", False):
+            menu.attributes("-topmost", True)
+        menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
+        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
+
+    def _create_group_dialog(self):
+        """Dialog to create a new group."""
+        dlg = tk.Toplevel(self.root)
+        self.apply_window_icon(dlg)
+        dlg.title("Create Group")
+        dlg.geometry("300x120")
+        dlg.configure(bg=self.BG_DARK)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        if self.settings.get("enable_topmost", False):
+            dlg.attributes("-topmost", True)
+
+        ttk.Label(dlg, text="Group Name:", style="Dark.TLabel").pack(padx=10, pady=(10, 2), anchor="w")
+        entry = ttk.Entry(dlg, style="Dark.TEntry")
+        entry.pack(fill="x", padx=10)
+        entry.focus_set()
+
+        def do_create(e=None):
+            name = entry.get().strip()
+            if not name:
+                return
+            groups = self._get_groups()
+            if name in groups:
+                messagebox.showwarning("Exists", f"Group '{name}' already exists.", parent=dlg)
+                return
+            groups[name] = []
+            self._save_groups(groups)
+            dlg.destroy()
+            self.refresh_accounts()
+
+        entry.bind("<Return>", do_create)
+        ttk.Button(dlg, text="Create", style="Dark.TButton", command=do_create).pack(pady=10)
+
+    def _rename_group_dialog(self, old_name):
+        """Dialog to rename a group."""
+        dlg = tk.Toplevel(self.root)
+        self.apply_window_icon(dlg)
+        dlg.title("Rename Group")
+        dlg.geometry("300x120")
+        dlg.configure(bg=self.BG_DARK)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        if self.settings.get("enable_topmost", False):
+            dlg.attributes("-topmost", True)
+
+        ttk.Label(dlg, text="New Name:", style="Dark.TLabel").pack(padx=10, pady=(10, 2), anchor="w")
+        entry = ttk.Entry(dlg, style="Dark.TEntry")
+        entry.pack(fill="x", padx=10)
+        entry.insert(0, old_name)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def do_rename(e=None):
+            new_name = entry.get().strip()
+            if not new_name or new_name == old_name:
+                dlg.destroy()
+                return
+            groups = self._get_groups()
+            if new_name in groups:
+                messagebox.showwarning("Exists", f"Group '{new_name}' already exists.", parent=dlg)
+                return
+            members = groups.pop(old_name, [])
+            groups[new_name] = members
+            if old_name in self._collapsed_groups:
+                self._collapsed_groups.discard(old_name)
+                self._collapsed_groups.add(new_name)
+            self._save_groups(groups)
+            dlg.destroy()
+            self.refresh_accounts()
+
+        entry.bind("<Return>", do_rename)
+        ttk.Button(dlg, text="Rename", style="Dark.TButton", command=do_rename).pack(pady=10)
+
+    def _delete_group(self, group_name):
+        """Delete a group"""
+        if not messagebox.askyesno("Delete Group", f"Delete group '{group_name}'?\nAccounts will be ungrouped."):
+            return
+        groups = self._get_groups()
+        groups.pop(group_name, None)
+        self._collapsed_groups.discard(group_name)
+        self._save_groups(groups)
+        self.refresh_accounts()
+
     def refresh_accounts(self):
         """Refresh the account list"""
+        needs_rerender = self.account_list.winfo_width() <= 1
+        
         self.account_list.delete(0, tk.END)
+        self._list_row_map = []
+        groups = self._get_groups()
+
+        grouped_usernames = set()
+        for members in groups.values():
+            grouped_usernames.update(members)
+
         for username, data in self.manager.accounts.items():
-            note = data.get('note', '') if isinstance(data, dict) else ''
-            cookie_valid = self.cookie_status.get(username)
-            
-            if cookie_valid is False:
-                display_text = f"⚠ {username}"
-            else:
-                display_text = f"{username}"
-            
-            if note:
-                display_text += f" • {note}"
-            index = self.account_list.size()
-            self.account_list.insert(tk.END, display_text)
-            
-            if cookie_valid is False:
-                self.account_list.itemconfig(index, fg="#FFB347")
+            if username in grouped_usernames:
+                continue
+            self._insert_account_row(username, data)
+
+        for gname, members in groups.items():
+            collapsed = gname in self._collapsed_groups
+            visible_members = [u for u in members if u in self.manager.accounts]
+            header_text = self._build_group_header_text(gname, len(visible_members), collapsed)
+            idx = self.account_list.size()
+            self.account_list.insert(tk.END, header_text)
+            self._list_row_map.append(("group_header", gname))
+            self.account_list.itemconfig(
+                idx,
+                fg=self.FG_ACCENT,
+                bg=self.BG_MID,
+                selectbackground=self.BG_MID,
+                selectforeground=self.FG_ACCENT,
+            )
+            if not collapsed:
+                for uname in visible_members:
+                    self._insert_account_row(uname, self.manager.accounts[uname])
 
         last_joined = self.settings.get("last_joined_user", "")
         if last_joined:
-            accounts_keys = list(self.manager.accounts.keys())
-            if last_joined in accounts_keys:
-                idx = accounts_keys.index(last_joined)
-                self.account_list.selection_clear(0, tk.END)
-                self.account_list.selection_set(idx)
-                self.account_list.see(idx)
+            for i, (kind, val) in enumerate(self._list_row_map):
+                if kind == "account" and val == last_joined:
+                    self.account_list.selection_clear(0, tk.END)
+                    self.account_list.selection_set(i)
+                    self.account_list.see(i)
+                    break
+
+        if needs_rerender:
+            self.root.after(50, self.refresh_accounts)
+
+    def _insert_account_row(self, username, data):
+        """Insert a single account row into the Listbox and _list_row_map."""
+        note = data.get('note', '') if isinstance(data, dict) else ''
+        cookie_valid = self.cookie_status.get(username)
+        if cookie_valid is False:
+            display_text = f"\u26a0 {username}"
+        else:
+            display_text = f"{username}"
+        if note:
+            display_text += f" \u2022 {note}"
+        idx = self.account_list.size()
+        self.account_list.insert(tk.END, display_text)
+        self._list_row_map.append(("account", username))
+        if cookie_valid is False:
+            self.account_list.itemconfig(idx, fg="#FFB347")
 
     def on_account_list_hover(self, event):
         """Show tooltip when hovering over an expired account row"""
@@ -1570,6 +1807,23 @@ del /f /q "%~f0"
             self.root.after_cancel(self.drag_data["hold_timer"])
         
         if index >= 0:
+            if index < len(self._list_row_map) and self._list_row_map[index][0] == "group_header":
+                widget.selection_clear(0, tk.END)
+                try:
+                    lb_font = tkfont.Font(font=widget.cget("font"))
+                    arrow_zone = max(lb_font.measure(" v "), lb_font.measure(" ^ ")) + 4
+                    list_width = widget.winfo_width()
+                    if event.x >= list_width - arrow_zone - 4:
+                        self._handle_group_header_click(index)
+                    else:
+                        group_name = self._list_row_map[index][1]
+                        for i, (kind, val) in enumerate(self._list_row_map):
+                            if kind == "account" and self._get_username_group(val) == group_name:
+                                widget.selection_set(i)
+                except Exception:
+                    self._handle_group_header_click(index)
+                return
+
             self.drag_data["index"] = index
             self.drag_data["item"] = widget.get(index)
             self.drag_data["start_x"] = event.x
@@ -1650,10 +1904,34 @@ del /f /q "%~f0"
             drag_index = self.drag_data["index"]
             
             if drop_index >= 0 and drag_index != drop_index:
+                if drop_index < len(self._list_row_map) and self._list_row_map[drop_index][0] == "group_header":
+                    group_name = self._list_row_map[drop_index][1]
+                    if drag_index < len(self._list_row_map) and self._list_row_map[drag_index][0] == "account":
+                        username = self._list_row_map[drag_index][1]
+                        self._add_account_to_group(username, group_name)
+                    return
+
                 ordered_usernames = list(self.manager.accounts.keys())
                 
-                username = ordered_usernames.pop(drag_index)
-                ordered_usernames.insert(drop_index, username)
+                if drag_index < len(self._list_row_map) and self._list_row_map[drag_index][0] == "account":
+                    drag_username = self._list_row_map[drag_index][1]
+                else:
+                    return
+                
+                if drag_username not in ordered_usernames:
+                    return
+                old_pos = ordered_usernames.index(drag_username)
+                ordered_usernames.pop(old_pos)
+                
+                if drop_index < len(self._list_row_map) and self._list_row_map[drop_index][0] == "account":
+                    drop_username = self._list_row_map[drop_index][1]
+                    if drop_username in ordered_usernames:
+                        new_pos = ordered_usernames.index(drop_username)
+                        ordered_usernames.insert(new_pos, drag_username)
+                    else:
+                        ordered_usernames.append(drag_username)
+                else:
+                    ordered_usernames.append(drag_username)
                 
                 new_accounts = {}
                 for uname in ordered_usernames:
@@ -1688,7 +1966,16 @@ del /f /q "%~f0"
             messagebox.showwarning("No Selection", "Please select an account first.")
             return None
         
-        display_text = self.account_list.get(selection[0])
+        idx = selection[0]
+        if idx < len(self._list_row_map) and self._list_row_map[idx][0] == "group_header":
+            group_name = self._list_row_map[idx][1]
+            for kind, val in self._list_row_map:
+                if kind == "account" and self._get_username_group(val) == group_name:
+                    return val
+            messagebox.showwarning("Empty Group", f"Group '{group_name}' has no accounts.")
+            return None
+        
+        display_text = self.account_list.get(idx)
         username = self.extract_username_from_display(display_text)
         return username
     
@@ -1700,10 +1987,23 @@ del /f /q "%~f0"
             return []
         
         usernames = []
+        seen = set()
         for index in selections:
-            display_text = self.account_list.get(index)
-            username = self.extract_username_from_display(display_text)
-            usernames.append(username)
+            if index >= len(self._list_row_map):
+                continue
+            kind, val = self._list_row_map[index]
+            if kind == "group_header":
+                group_name = val
+                for k2, v2 in self._list_row_map:
+                    if k2 == "account" and self._get_username_group(v2) == group_name and v2 not in seen:
+                        usernames.append(v2)
+                        seen.add(v2)
+            else:
+                if val not in seen:
+                    display_text = self.account_list.get(index)
+                    username = self.extract_username_from_display(display_text)
+                    usernames.append(username)
+                    seen.add(username)
         return usernames
 
     def add_account(self):
@@ -2275,15 +2575,27 @@ del /f /q "%~f0"
     def show_account_context_menu(self, event):
         """Show context menu on right-click"""
         index = self.account_list.nearest(event.y)
-        if index < 0:
+
+        if index >= 0:
+            bbox = self.account_list.bbox(index)
+            if bbox is None or event.y > bbox[1] + bbox[3]:
+                index = -1
+
+        if index < 0 or index >= len(self._list_row_map):
+            self._show_empty_context_menu(event)
             return
-        
+
+        kind, val = self._list_row_map[index]
+
+        if kind == "group_header":
+            self._show_group_context_menu(event, val)
+            return
+
         self.account_list.selection_clear(0, tk.END)
         self.account_list.selection_set(index)
         self.account_list.activate(index)
         
-        display_text = self.account_list.get(index)
-        username = self.extract_username_from_display(display_text)
+        username = val
         account = self.manager.accounts.get(username)
         
         if not account:
@@ -2442,6 +2754,34 @@ del /f /q "%~f0"
         )
         check_cookie_btn.pack(fill="x", padx=2, pady=1)
         
+        group_sep = tk.Frame(self.account_context_menu, height=1, bg="#666666")
+        group_sep.pack(fill="x", padx=2, pady=2)
+
+        current_group = self._get_username_group(username)
+
+        if current_group:
+            remove_grp_btn = tk.Button(
+                self.account_context_menu,
+                text=f"Remove from \"{current_group}\"",
+                anchor="w", relief="flat",
+                bg=self.BG_MID, fg=self.FG_TEXT,
+                activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
+                font=("Segoe UI", 9), bd=0, highlightthickness=0,
+                command=lambda: [self.hide_account_context_menu(), self._remove_account_from_group(username)]
+            )
+            remove_grp_btn.pack(fill="x", padx=2, pady=1)
+
+        create_grp_btn = tk.Button(
+            self.account_context_menu,
+            text="Create Group",
+            anchor="w", relief="flat",
+            bg=self.BG_MID, fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9), bd=0, highlightthickness=0,
+            command=lambda: [self.hide_account_context_menu(), self._create_group_dialog()]
+        )
+        create_grp_btn.pack(fill="x", padx=2, pady=1)
+
         self.account_context_menu.geometry(f"+{event.x_root}+{event.y_root}")
         self.account_context_menu.update_idletasks()
         
@@ -2460,6 +2800,29 @@ del /f /q "%~f0"
                 pass
             self.account_context_menu = None
 
+    def _show_empty_context_menu(self, event):
+        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
+            try: self.account_context_menu.destroy()
+            except: pass
+
+        menu = tk.Toplevel(self.root)
+        menu.overrideredirect(True)
+        menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
+        self.account_context_menu = menu
+
+        btn = tk.Button(menu, text="Create Group", anchor="w", relief="flat",
+                        bg=self.BG_MID, fg=self.FG_TEXT,
+                        activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
+                        font=("Segoe UI", 9), bd=0, highlightthickness=0,
+                        command=lambda: [self.hide_account_context_menu(), self._create_group_dialog()])
+        btn.pack(fill="x", padx=2, pady=1)
+
+        menu.geometry(f"+{event.x_root}+{event.y_root}")
+        menu.update_idletasks()
+        if self.settings.get("enable_topmost", False):
+            menu.attributes("-topmost", True)
+        menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
+        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
 
     def launch_home(self):
         """Launch Roblox application to home page with the selected account(s) logged in (non-blocking)"""
@@ -4290,7 +4653,6 @@ del /f /q "%~f0"
             
             if start_menu_var.get():
                 try:
-                    import subprocess
                     exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
                     if not getattr(sys, 'frozen', False):
                         exe_path = os.path.abspath(sys.argv[0])
@@ -5237,9 +5599,6 @@ del /f /q "%~f0"
     
     def _instances_monitor_worker(self):
         """Background thread that continuously monitors Roblox instances"""
-        import psutil
-        import time
-        
         while not self.instances_monitor_stop.is_set():
             try:
                 new_pids = set()
@@ -5468,9 +5827,6 @@ del /f /q "%~f0"
         
         def render_instances():
             """Render the pre-cached instance data to the UI"""
-            from PIL import Image, ImageTk
-            from io import BytesIO
-            
             if not window_active[0]:
                 return
             
@@ -6103,7 +6459,6 @@ del /f /q "%~f0"
         
         def browse_path():
             """Browse for install directory"""
-            from tkinter import filedialog
             versions_path = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "Versions")
             directory = filedialog.askdirectory(title="Select Install Directory", initialdir=versions_path if os.path.exists(versions_path) else None)
             if directory:
@@ -6385,22 +6740,19 @@ del /f /q "%~f0"
     def log_to_console(self, message):
         """Log message to console output buffer"""
         self.console_output.append(message)
-        # Cap the in-memory list so it never grows beyond MAX_CONSOLE_LINES
         if len(self.console_output) > self._MAX_CONSOLE_LINES:
             del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
         
         if self.console_text_widget:
             try:
                 self.console_text_widget.config(state="normal")
-                # Record where the new content starts before inserting
                 insert_start = self.console_text_widget.index(f"{tk.END}-1c linestart")
                 self.console_text_widget.insert(tk.END, message)
-                # Trim the widget to MAX_CONSOLE_LINES so Tcl/Tk memory stays bounded
                 line_count = int(self.console_text_widget.index(tk.END).split(".")[0]) - 1
                 if line_count > self._MAX_CONSOLE_LINES:
                     excess = line_count - self._MAX_CONSOLE_LINES
                     self.console_text_widget.delete("1.0", f"{excess + 1}.0")
-                    insert_start = "1.0"  # tags need full re-scan after deletion
+                    insert_start = "1.0"
                 self._apply_console_tags(search_from=insert_start)
                 self.console_text_widget.see(tk.END)
                 self.console_text_widget.config(state="disabled")
@@ -6891,8 +7243,6 @@ del /f /q "%~f0"
     
     def _rename_monitoring_worker(self):
         """Monitor for new Roblox PIDs and renames them"""
-        import psutil
-        
         while not self.rename_stop_event.is_set():
             try:
                 current_pids = set()
@@ -7791,8 +8141,6 @@ del /f /q "%~f0"
     def apply_and_lock_roblox_settings(self):
         """Apply local Roblox settings and lock file"""
         try:
-            import xml.etree.ElementTree as ET
-            
             local_settings_path = os.path.join(self.data_folder, "roblox_settings.xml")
             roblox_settings_path = os.path.join(
                 os.environ.get("LOCALAPPDATA", ""),
@@ -7824,8 +8172,6 @@ del /f /q "%~f0"
     
     def open_roblox_settings_window(self):
         """Open Roblox Settings window to view/edit GlobalBasicSettings_13.xml"""
-        import xml.etree.ElementTree as ET
-        
         settings_window = tk.Toplevel(self.root)
         self.apply_window_icon(settings_window)
         settings_window.title("Roblox Settings")

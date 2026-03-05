@@ -155,18 +155,10 @@ class RobloxAPI:
             if cookie:
                 api_headers['Cookie'] = f'.ROBLOSECURITY={cookie}'
 
-            csrf_token = None
-            try:
-                csrf_resp = requests.post(
-                    'https://auth.roblox.com/v2/logout',
-                    headers={'Cookie': f'.ROBLOSECURITY={cookie}'} if cookie else {},
-                    timeout=5
-                )
-                csrf_token = csrf_resp.headers.get('x-csrf-token')
-            except Exception:
-                pass
-            if csrf_token:
-                api_headers['X-CSRF-TOKEN'] = csrf_token
+            if cookie:
+                csrf_token = RobloxAPI.get_csrf_token(cookie)
+                if csrf_token:
+                    api_headers['X-CSRF-TOKEN'] = csrf_token
 
             for payload in [
                 {"linkId": code, "linkType": "Server"},
