@@ -615,6 +615,24 @@ class RobloxAPI:
                 print("[SUCCESS] Launched with Froststrap!")
                 return True
             
+            elif launcher_preference == "voidstrap":
+                local_appdata = os.getenv('LOCALAPPDATA')
+                if not local_appdata:
+                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
+                    return False
+                
+                voidstrap_path = Path(local_appdata) / 'Voidstrap' / 'Voidstrap.exe'
+                if not voidstrap_path.exists():
+                    messagebox.showerror(
+                        "Voidstrap Not Found",
+                        f"Voidstrap is not installed.\n\nExpected location:\n{voidstrap_path}\n\nPlease install Voidstrap or select a different launcher."
+                    )
+                    return False
+                
+                subprocess.Popen([str(voidstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("[SUCCESS] Launched with Voidstrap!")
+                return True
+            
             elif launcher_preference == "client":
                 RobloxAPI.quarantine_installers()
                 

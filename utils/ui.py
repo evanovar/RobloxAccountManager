@@ -4776,7 +4776,7 @@ del /f /q "%~f0"
         def open_launcher_selection():
             launcher_window = tk.Toplevel(settings_window)
             launcher_window.title("Roblox Launcher")
-            launcher_window.geometry("350x300")
+            launcher_window.geometry("350x320")
             launcher_window.configure(bg=self.BG_DARK)
             launcher_window.resizable(False, False)
             launcher_window.transient(settings_window)
@@ -4839,6 +4839,7 @@ del /f /q "%~f0"
                 ("Bloxstrap", "bloxstrap"),
                 ("Fishstrap", "fishstrap"),
                 ("Froststrap", "froststrap"),
+                ("Voidstrap", "voidstrap"),
                 ("Roblox Client", "client")
             ]
             
