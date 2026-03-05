@@ -129,6 +129,7 @@ class AccountManagerUI:
         self.account_tooltip_last_index = None
 
         self._list_row_map = []
+        self._collapsed_groups = set(self.settings.get("group_collapsed", []))
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
