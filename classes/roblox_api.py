@@ -35,23 +35,6 @@ class RobloxAPI:
             cls._last_request_time = time.time()
     
     @staticmethod
-    def detect_custom_launcher():
-        """Detect if Bloxstrap or Fishstrap is installed and return launcher path"""
-        local_appdata = os.getenv('LOCALAPPDATA')
-        if not local_appdata:
-            return None, None
-        
-        bloxstrap_path = Path(local_appdata) / 'Bloxstrap' / 'Bloxstrap.exe'
-        if bloxstrap_path.exists():
-            return str(bloxstrap_path), 'Bloxstrap'
-        
-        fishstrap_path = Path(local_appdata) / 'Fishstrap' / 'Fishstrap.exe'
-        if fishstrap_path.exists():
-            return str(fishstrap_path), 'Fishstrap'
-        
-        return None, None
-    
-    @staticmethod
     def quarantine_installers():
         """Move RobloxPlayerInstaller.exe files to quarantine to prevent installer popups"""
         local_appdata = os.getenv('LOCALAPPDATA')

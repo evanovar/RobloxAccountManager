@@ -12,6 +12,10 @@ import hashlib
 import shutil
 import traceback
 import threading
+import requests
+import zipfile
+import io
+from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -395,7 +399,6 @@ class RobloxAccountManager:
                 """)
                 
                 if account_json:
-                    import json
                     account_data = json.loads(account_json)
                     username = account_data.get("Name", "Unknown")
                     user_id = account_data.get("UserId", 0)
@@ -737,7 +740,6 @@ class RobloxAccountManager:
     
     def get_roblox_version(self, channel="LIVE"):
         """Get current Roblox version from ClientSettings API"""
-        import requests
         url = f"https://clientsettings.roblox.com/v2/client-version/WindowsPlayer/channel/{channel}"
         
         try:
@@ -754,10 +756,6 @@ class RobloxAccountManager:
     
     def download_roblox_version(self, version, install_path, channel="LIVE", progress_callback=None):
         """Download and install a specific Roblox version"""
-        import requests
-        import zipfile
-        import io
-        from pathlib import Path
         
         HOST_PATH = "https://setup-aws.rbxcdn.com"
         BLOB_DIR = "/"

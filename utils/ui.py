@@ -4771,16 +4771,6 @@ del /f /q "%~f0"
         roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
         roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
-        def get_launcher_display_name(launcher):
-            launcher_names = {
-                "default": "Default",
-                "bloxstrap": "Bloxstrap",
-                "fishstrap": "Fishstrap",
-                "froststrap": "Froststrap",
-                "client": "Roblox Client"
-            }
-            return launcher_names.get(launcher, "Default")
-        
         def open_launcher_selection():
             launcher_window = tk.Toplevel(settings_window)
             launcher_window.title("Roblox Launcher")
