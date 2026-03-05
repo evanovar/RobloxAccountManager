@@ -48,7 +48,7 @@ class AccountManagerUI:
         self.icon_path = icon_path
         self.discord_logo_path = discord_logo_path
         self.discord_logo_img = None
-        self.APP_VERSION = "2.4.5"
+        self.APP_VERSION = "2.4.6"
         self._game_name_after_id = None
         self._save_settings_timer = None
         
