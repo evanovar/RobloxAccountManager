@@ -1669,7 +1669,7 @@ del /f /q "%~f0"
                     _, wpid = win32process.GetWindowThreadProcessId(hwnd)
                     if wpid in pids:
                         title = win32gui.GetWindowText(hwnd)
-                        if title and "roblox" in title.lower():
+                        if title:  # PIDs already verified as Roblox — any visible window qualifies
                             hwnds.append(hwnd)
             except Exception:
                 pass
@@ -7710,8 +7710,18 @@ del /f /q "%~f0"
             print(f"[Auto-Rejoin] Error checking PID {pid}: {e}")
             return False
     
+    def _get_exe_description(self, pid):
+        try:
+            proc = psutil.Process(pid)
+            exe = proc.exe()
+            translations = win32api.GetFileVersionInfo(exe, r'\VarFileInfo\Translation')
+            lang, codepage = translations[0]
+            key = f'\\StringFileInfo\\{lang:04X}{codepage:04X}\\FileDescription'
+            return win32api.GetFileVersionInfo(exe, key) or ""
+        except Exception:
+            return ""
+
     def _is_valid_roblox_game_client(self, pid, process_name_lower=None):
-        """Check if PID is a valid Roblox game client (process name + window title check)"""
         try:
             if process_name_lower is None:
                 try:
@@ -7719,28 +7729,17 @@ del /f /q "%~f0"
                     process_name_lower = process.name().lower()
                 except:
                     return False
-            
+
             if process_name_lower != "robloxplayerbeta.exe":
                 return False
-            
-            has_roblox_window = [False]
-            
-            def enum_callback(hwnd, _):
-                try:
-                    _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                    if window_pid == pid:
-                        window_title = win32gui.GetWindowText(hwnd)
-                        if window_title and "roblox" in window_title.lower():
-                            has_roblox_window[0] = True
-                            return False
-                except:
-                    pass
-                return True
-            
-            win32gui.EnumWindows(enum_callback, None)
-            return has_roblox_window[0]
-            
-        except Exception as e:
+
+            desc = self._get_exe_description(pid)
+            if desc:
+                return "roblox" in desc.lower()
+
+            return True
+
+        except Exception:
             return process_name_lower == "robloxplayerbeta.exe" if process_name_lower else False
     
     def _match_pids_to_accounts(self, accounts):
