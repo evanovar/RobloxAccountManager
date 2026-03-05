@@ -2922,7 +2922,7 @@ del /f /q "%~f0"
             launcher_pref = self.settings.get("roblox_launcher", "default")
             success_count = 0
             failed_launch = False
-            for uname in selected_usernames:
+            for i, uname in enumerate(selected_usernames):
                 try:
                     if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
                         success_count += 1
@@ -2930,6 +2930,8 @@ del /f /q "%~f0"
                         failed_launch = True
                 except Exception as e:
                     print(f"[ERROR] Failed to launch game for {uname}: {e}")
+                if i < len(selected_usernames) - 1:
+                    time.sleep(2)
             if failed_launch:
                 self._silent_check_cookies()
 

@@ -414,17 +414,25 @@ class RobloxAPI:
                 return None
 
             headers["X-CSRF-TOKEN"] = csrf_token
-            response2 = requests.post(url, headers=headers, timeout=5)
-            if response2.status_code == 200:
-                auth_ticket = response2.headers.get("rbx-authentication-ticket")
-                if auth_ticket:
-                    return auth_ticket
-                else:
+
+            for attempt in range(4):
+                response2 = requests.post(url, headers=headers, timeout=5)
+                if response2.status_code == 200:
+                    auth_ticket = response2.headers.get("rbx-authentication-ticket")
+                    if auth_ticket:
+                        return auth_ticket
                     print("[ERROR] Authentication ticket header missing in response.")
                     return None
-            else:
-                print(f"[ERROR] Failed to get auth ticket, status: {response2.status_code}")
-                return None
+                elif response2.status_code == 429:
+                    wait = 2 ** attempt
+                    print(f"[WARNING] Auth ticket rate limited (429), retrying in {wait}s... (attempt {attempt + 1}/4)")
+                    time.sleep(wait)
+                else:
+                    print(f"[ERROR] Failed to get auth ticket, status: {response2.status_code}")
+                    return None
+
+            print("[ERROR] Auth ticket still rate limited after retries.")
+            return None
 
         except requests.exceptions.RequestException as e:
             print(f"[ERROR] Request failed: {e}")
