@@ -33,6 +33,7 @@ import math
 import win32process
 import tkinter.font as tkfont
 import xml.etree.ElementTree as ET
+import win32clipboard
 from PIL import Image, ImageTk
 from io import BytesIO
 from tkinter import filedialog
@@ -40,6 +41,7 @@ from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
+from classes.discord_manager import DiscordManager
 
 class AccountManagerUI:
     def __init__(self, root, manager, icon_path=None, discord_logo_path=None):
@@ -130,6 +132,17 @@ class AccountManagerUI:
 
         self._list_row_map = []
         self._collapsed_groups = set(self.settings.get("group_collapsed", []))
+
+        self.discord_manager = DiscordManager(self.settings)
+        if self.discord_manager.enabled and self.discord_manager.url:
+            self.discord_manager.send_embed(
+                "Connected to Discord!",
+                "Roblox Account Manager started and is now connected.",
+                self.discord_manager.COLOR_SUCCESS
+            )
+        if self.settings.get("discord_webhook", {}).get("screenshot_enabled", False):
+            threading.Thread(target=self._global_screenshot_worker, daemon=True,
+                             name="WebhookScreenshot").start()
 
         self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
         self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
@@ -491,7 +504,7 @@ class AccountManagerUI:
                     print(f"[WARNING] New version available: {latest_version}")
                     self.root.after(0, lambda: self.show_update_notification(latest_version))
                 else:
-                    print(f"[SUCCESS] You are on the latest version ({self.APP_VERSION})")
+                    pass
             else:
                 print(f"[ERROR] Failed to check for updates (Status: {response.status_code})")
                 
@@ -2620,7 +2633,6 @@ del /f /q "%~f0"
         
         def copy_to_clipboard(text):
             try:
-                import win32clipboard
                 win32clipboard.OpenClipboard()
                 win32clipboard.EmptyClipboard()
                 win32clipboard.SetClipboardText(str(text), win32clipboard.CF_UNICODETEXT)
@@ -3004,97 +3016,6 @@ del /f /q "%~f0"
             font=("Segoe UI", 12, "bold")
         ).pack(side="left")
 
-        def open_rejoin_webhook_settings():
-            """Open the webhook settings window for auto-rejoin notifications."""
-            wh_win = tk.Toplevel(auto_rejoin_window)
-            self.apply_window_icon(wh_win)
-            wh_win.title("Webhook Settings")
-            wh_win.configure(bg=self.BG_DARK)
-            wh_win.resizable(False, False)
-            auto_rejoin_window.update_idletasks()
-            wx = auto_rejoin_window.winfo_x() + 50
-            wy = auto_rejoin_window.winfo_y() + 50
-            wh_win.geometry(f"420x200+{wx}+{wy}")
-            if self.settings.get("enable_topmost", False):
-                wh_win.attributes("-topmost", True)
-            wh_win.transient(auto_rejoin_window)
-            wh_win.focus_force()
-
-            cfg = self.settings.get('rejoin_webhook', {})
-
-            frm = ttk.Frame(wh_win, style="Dark.TFrame")
-            frm.pack(fill="both", expand=True, padx=20, pady=20)
-
-            ttk.Label(frm, text="Webhook Settings", style="Dark.TLabel",
-                      font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
-
-            ttk.Label(frm, text="Discord Webhook URL:", style="Dark.TLabel").pack(anchor="w")
-            url_var = tk.StringVar(value=cfg.get('url', ''))
-            url_entry = ttk.Entry(frm, textvariable=url_var, style="Dark.TEntry")
-            url_entry.pack(fill="x", pady=(0, 10))
-
-            ping_var = tk.BooleanVar(value=cfg.get('enable_ping', False))
-            ping_row = ttk.Frame(frm, style="Dark.TFrame")
-            ping_row.pack(fill="x", pady=(2, 0))
-            ping_id_var = tk.StringVar(value=cfg.get('ping_user_id', ''))
-            ping_id_entry = ttk.Entry(ping_row, textvariable=ping_id_var, width=20, style="Dark.TEntry")
-
-            def _on_ping_toggle():
-                ping_id_entry.config(state="normal" if ping_var.get() else "disabled")
-
-            ttk.Checkbutton(
-                ping_row,
-                text="Ping user ID on alerts:",
-                variable=ping_var,
-                command=_on_ping_toggle,
-                style="Dark.TCheckbutton"
-            ).pack(side="left")
-            ping_id_entry.pack(side="left", padx=(8, 0))
-            ping_id_entry.config(state="normal" if ping_var.get() else "disabled")
-
-            def save_webhook_settings():
-                self.settings['rejoin_webhook'] = {
-                    'url': url_var.get().strip(),
-                    'enable_ping': ping_var.get(),
-                    'ping_user_id': ping_id_var.get().strip()
-                }
-                self.save_settings()
-                wh_win.destroy()
-
-            def test_webhook():
-                url = url_var.get().strip()
-                if not url:
-                    messagebox.showwarning("Missing URL", "Enter a webhook URL first.", parent=wh_win)
-                    return
-                _ping = ping_id_var.get().strip() if ping_var.get() and ping_id_var.get().strip() else None
-                self._send_webhook_embed(
-                    url,
-                    "Webhook Test",
-                    "Auto-Rejoin webhook is working correctly!",
-                    5438822,
-                    ping_user_id=_ping
-                )
-
-            btn_row = ttk.Frame(frm, style="Dark.TFrame")
-            btn_row.pack(fill="x", pady=(16, 0))
-            ttk.Button(btn_row, text="Test", style="Dark.TButton", command=test_webhook).pack(side="left", fill="x", expand=True, padx=(0, 4))
-            ttk.Button(btn_row, text="Save", style="Dark.TButton", command=save_webhook_settings).pack(side="left", fill="x", expand=True, padx=4)
-            ttk.Button(btn_row, text="Cancel", style="Dark.TButton", command=wh_win.destroy).pack(side="left", fill="x", expand=True, padx=(4, 0))
-
-        _discord_img_ref = getattr(self, 'discord_logo_img', None)
-        if _discord_img_ref:
-            wh_btn = tk.Button(
-                header_row, image=_discord_img_ref,
-                bg=self.BG_DARK, activebackground=self.BG_DARK,
-                relief="flat", bd=0, cursor="hand2",
-                padx=0, pady=0, highlightthickness=0,
-                command=open_rejoin_webhook_settings
-            )
-            wh_btn.pack(side="right")
-        else:
-            ttk.Button(header_row, text="Webhook", style="Dark.TButton",
-                       command=open_rejoin_webhook_settings).pack(side="right")
-        
         list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         list_frame.pack(fill="both", expand=True, pady=(0, 10))
         
@@ -3401,17 +3322,11 @@ del /f /q "%~f0"
             
             self._match_pids_to_accounts([account])
 
-            wh_cfg = self.settings.get('rejoin_webhook', {})
-            wh_url = wh_cfg.get('url', '').strip()
-            if wh_url:
-                _ping = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
-                self._send_webhook_embed(
-                    wh_url,
-                    "Auto Rejoin Started",
-                    f"Monitoring 1 account:\n- **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`",
-                    5438822,
-                    ping_user_id=_ping or None
-                )
+            self.discord_manager.send_embed(
+                "Auto Rejoin — Started",
+                f"Monitoring **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`.",
+                self.discord_manager.COLOR_SUCCESS
+            )
 
             self.start_auto_rejoin_for_account(account)
 
@@ -3437,20 +3352,15 @@ del /f /q "%~f0"
 
             self._match_pids_to_accounts(accounts)
 
-            wh_cfg = self.settings.get('rejoin_webhook', {})
-            wh_url = wh_cfg.get('url', '').strip()
-            if wh_url and accounts:
+            if accounts:
                 lines = "\n".join(
                     f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
                     for acc in accounts
                 )
-                _ping = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
-                self._send_webhook_embed(
-                    wh_url,
-                    "Auto Rejoin Started",
+                self.discord_manager.send_embed(
+                    "Auto Rejoin — Started",
                     f"Monitoring {len(accounts)} account(s):\n{lines}",
-                    5438822,
-                    ping_user_id=_ping or None
+                    self.discord_manager.COLOR_SUCCESS
                 )
 
             for account in accounts:
@@ -3941,13 +3851,13 @@ del /f /q "%~f0"
                         break
                     time.sleep(1)
                 if not handle_value:
-                    print(f"[FAILED] Handle not closed for PID:{pid}")
+                    print(f"[ERROR] Handle not closed for PID:{pid}")
                 if handle_found:
                     subprocess.run(f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, shell=True)
                     print(f"[SUCCESS] Closed handle event for PID:{pid}")
             except Exception:
-                print(f"[FAILED] Handle not closed for PID:{pid}")
+                print(f"[ERROR] Handle not closed for PID:{pid}")
 
     def _download_handle64_exe(self, local_path):
         """Download handle64.exe from Sysinternals and extract it"""
@@ -4493,7 +4403,7 @@ del /f /q "%~f0"
         
         self.root.update_idletasks()
         
-        settings_width = 300
+        settings_width = 315
         settings_height = 385
         
         saved_pos = self.settings.get('settings_window_position')
@@ -4525,6 +4435,9 @@ del /f /q "%~f0"
         tool_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(tool_tab, text="Tool")
         
+        discord_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(discord_tab, text="Discord")
+
         about_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(about_tab, text="About")
         
@@ -5361,6 +5274,321 @@ del /f /q "%~f0"
             command=reset_theme
         ).pack(side="left", fill="x", expand=True, padx=(3, 0))
         
+        dc_frame = ttk.Frame(discord_tab, style="Dark.TFrame")
+        dc_frame.pack(fill="both", expand=True, padx=20, pady=15)
+
+        dc_header_row = ttk.Frame(dc_frame, style="Dark.TFrame")
+        dc_header_row.pack(fill="x", pady=(0, 2))
+
+        ttk.Label(
+            dc_header_row, text="Discord Integration",
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(side="left")
+
+        ttk.Button(
+            dc_header_row, text="Use Bot",
+            style="Dark.TButton",
+            command=lambda: messagebox.showinfo(
+                "Coming Soon",
+                "Discord Bot support is not yet available.",
+                parent=settings_window
+            )
+        ).pack(side="right")
+
+        ttk.Label(
+            dc_frame, text="Send log events to a Discord channel via webhook.",
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(0, 10))
+
+        sep = ttk.Frame(dc_frame, style="Dark.TFrame", height=1)
+        sep.pack(fill="x", pady=(0, 12))
+        sep.configure(relief="solid", borderwidth=1)
+
+        dc_cfg = self.settings.setdefault("discord_webhook", {})
+
+        dc_log_all_var    = tk.BooleanVar(value=dc_cfg.get("log_everything",  False))
+        dc_log_err_var    = tk.BooleanVar(value=dc_cfg.get("log_errors",      True))
+        dc_log_ok_var     = tk.BooleanVar(value=dc_cfg.get("log_success",     True))
+        dc_log_warn_var   = tk.BooleanVar(value=dc_cfg.get("log_warnings",    True))
+        dc_log_info_var   = tk.BooleanVar(value=dc_cfg.get("log_info",        False))
+        dc_log_rejoin_var         = tk.BooleanVar(value=dc_cfg.get("log_auto_rejoin",         True))
+        dc_log_rejoin_console_var = tk.BooleanVar(value=dc_cfg.get("log_auto_rejoin_console", False))
+        dc_screenshot_interval_var = tk.StringVar(value=str(dc_cfg.get("screenshot_interval_minutes", 60)))
+        dc_screenshot_enabled_var  = tk.BooleanVar(value=dc_cfg.get("screenshot_enabled", False))
+
+        def _dc_save():
+            dc_cfg["enabled"]        = dc_enabled_var.get()
+            dc_cfg["url"]            = dc_url_var.get().strip()
+            dc_cfg["enable_ping"]    = dc_ping_var.get()
+            dc_cfg["ping_user_id"]   = dc_ping_id_var.get().strip()
+            dc_cfg["ping_on_error"]  = dc_ping_err_var.get()
+            dc_cfg["log_everything"] = dc_log_all_var.get()
+            dc_cfg["log_errors"]     = dc_log_err_var.get()
+            dc_cfg["log_success"]    = dc_log_ok_var.get()
+            dc_cfg["log_warnings"]   = dc_log_warn_var.get()
+            dc_cfg["log_info"]       = dc_log_info_var.get()
+            dc_cfg["log_auto_rejoin"]         = dc_log_rejoin_var.get()
+            dc_cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
+            try:
+                dc_cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
+            except (ValueError, TypeError):
+                dc_cfg["screenshot_interval_minutes"] = 60
+            dc_cfg["screenshot_enabled"] = dc_screenshot_enabled_var.get()
+            self.settings["discord_webhook"] = dc_cfg
+            self.save_settings()
+
+        def _dc_toggle_fields(*_, _send_connect=True):
+            now_enabled = dc_enabled_var.get()
+            state = "normal" if now_enabled else "disabled"
+            for w in _dc_dependent_widgets:
+                try:
+                    w.config(state=state)
+                except Exception:
+                    pass
+            was_enabled = dc_cfg.get("enabled", False)
+            _dc_save()
+            if _send_connect and now_enabled and not was_enabled and dc_url_var.get().strip():
+                self.discord_manager.send_embed(
+                    "Connected to Discord!",
+                    "Roblox Account Manager is now connected.",
+                    self.discord_manager.COLOR_SUCCESS
+                )
+            if now_enabled and self.settings.get("discord_webhook", {}).get("screenshot_enabled", False):
+                self._start_global_screenshot_loop()
+            elif not now_enabled:
+                self._stop_global_screenshot_loop()
+
+        dc_enabled_var = tk.BooleanVar(value=dc_cfg.get("enabled", False))
+        ttk.Checkbutton(
+            dc_frame, text="Enable Webhook", variable=dc_enabled_var,
+            style="Dark.TCheckbutton", command=_dc_toggle_fields
+        ).pack(anchor="w", pady=(0, 8))
+
+        url_row = ttk.Frame(dc_frame, style="Dark.TFrame")
+        url_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(url_row, text="Webhook URL:", style="Dark.TLabel",
+                  font=(self.FONT_FAMILY, 9)).pack(anchor="w", pady=(0, 2))
+        dc_url_var = tk.StringVar(value=dc_cfg.get("url", ""))
+        dc_url_entry = ttk.Entry(url_row, textvariable=dc_url_var, style="Dark.TEntry")
+        dc_url_entry.pack(fill="x", ipady=3)
+
+        ping_row1 = ttk.Frame(dc_frame, style="Dark.TFrame")
+        ping_row1.pack(fill="x", pady=(4, 0))
+        dc_ping_var    = tk.BooleanVar(value=dc_cfg.get("enable_ping", False))
+        dc_ping_id_var = tk.StringVar(value=dc_cfg.get("ping_user_id", ""))
+
+        dc_ping_id_entry = ttk.Entry(ping_row1, textvariable=dc_ping_id_var,
+                                     width=20, style="Dark.TEntry")
+
+        def _dc_ping_toggle(*_):
+            dc_ping_id_entry.config(state="normal" if dc_ping_var.get() else "disabled")
+            _dc_save()
+
+        ttk.Checkbutton(
+            ping_row1, text="Ping user on alerts:", variable=dc_ping_var,
+            style="Dark.TCheckbutton", command=_dc_ping_toggle
+        ).pack(side="left")
+        dc_ping_id_entry.pack(side="left", padx=(6, 0))
+        dc_ping_id_entry.config(state="normal" if dc_ping_var.get() else "disabled")
+
+        ping_row2 = ttk.Frame(dc_frame, style="Dark.TFrame")
+        ping_row2.pack(fill="x", pady=(2, 6))
+        dc_ping_err_var = tk.BooleanVar(value=dc_cfg.get("ping_on_error", True))
+        ttk.Checkbutton(
+            ping_row2, text="Ping only on [ERROR]", variable=dc_ping_err_var,
+            style="Dark.TCheckbutton", command=_dc_save
+        ).pack(anchor="w", padx=(2, 0))
+
+        ss_row = ttk.Frame(dc_frame, style="Dark.TFrame")
+        ss_row.pack(fill="x", pady=(2, 6))
+        dc_ss_entry = ttk.Entry(ss_row, textvariable=dc_screenshot_interval_var, width=5, style="Dark.TEntry")
+
+        def _dc_ss_toggle(*_):
+            dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
+            _dc_save()
+            if dc_screenshot_enabled_var.get():
+                self._start_global_screenshot_loop()
+            else:
+                self._stop_global_screenshot_loop()
+
+        ttk.Checkbutton(
+            ss_row, text="Screenshot every:", variable=dc_screenshot_enabled_var,
+            style="Dark.TCheckbutton", command=_dc_ss_toggle
+        ).pack(side="left")
+        dc_ss_entry.pack(side="left", padx=(6, 4))
+        dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
+        ttk.Label(ss_row, text="min", style="Dark.TLabel",
+                  font=(self.FONT_FAMILY, 9)).pack(side="left")
+        dc_ss_entry.bind("<FocusOut>", lambda e: _dc_save())
+        dc_ss_entry.bind("<Return>", lambda e: _dc_save())
+
+        btn_row = ttk.Frame(dc_frame, style="Dark.TFrame")
+        btn_row.pack(fill="x", pady=(12, 0))
+
+        def _open_log_filters():
+            _dc_save()
+            fw = tk.Toplevel(settings_window)
+            self.apply_window_icon(fw)
+            fw.title("Log Filters")
+            fw.configure(bg=self.BG_DARK)
+            fw.resizable(False, False)
+            fw.transient(settings_window)
+            fw.focus_force()
+            settings_window.update_idletasks()
+            fw.update_idletasks()
+            fx = settings_window.winfo_x() + (settings_window.winfo_width() - 260) // 2
+            fy = settings_window.winfo_y() + (settings_window.winfo_height() - 280) // 2
+            fw.geometry(f"260x300+{fx}+{fy}")
+            if self.settings.get("enable_topmost", False):
+                fw.attributes("-topmost", True)
+
+            ff = ttk.Frame(fw, style="Dark.TFrame")
+            ff.pack(fill="both", expand=True, padx=18, pady=15)
+
+            ttk.Label(ff, text="Log Filters", style="Dark.TLabel",
+                      font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 8))
+
+            def _chk(text, var):
+                cb = ttk.Checkbutton(
+                    ff, text=text, variable=var,
+                    style="Dark.TCheckbutton", command=_dc_save
+                )
+                cb.pack(anchor="w", pady=2)
+                return cb
+
+            def _toggle_log_all(*_):
+                st = "disabled" if dc_log_all_var.get() else "normal"
+                for w in _sub_checks:
+                    try:
+                        w.config(state=st)
+                    except Exception:
+                        pass
+                _dc_save()
+
+            ttk.Checkbutton(
+                ff, text="Log Everything (override all)", variable=dc_log_all_var,
+                style="Dark.TCheckbutton", command=_toggle_log_all
+            ).pack(anchor="w", pady=2)
+
+            sep_f = ttk.Frame(ff, style="Dark.TFrame", height=1)
+            sep_f.pack(fill="x", pady=(4, 6))
+            sep_f.configure(relief="solid", borderwidth=1)
+
+            _sub_checks = [
+                _chk("Log [ERROR]",                    dc_log_err_var),
+                _chk("Log [SUCCESS]",                  dc_log_ok_var),
+                _chk("Log [WARNING]",                  dc_log_warn_var),
+                _chk("Log [INFO]",                     dc_log_info_var),
+                _chk("Log Auto-Rejoin events",         dc_log_rejoin_var),
+                _chk("Log Auto-Rejoin console",        dc_log_rejoin_console_var),
+            ]
+            _toggle_log_all()
+
+            ttk.Button(ff, text="Close", style="Dark.TButton",
+                       command=fw.destroy).pack(fill="x", pady=(10, 0))
+
+        def _dc_test():
+            _dc_save()
+            test_url = dc_url_var.get().strip()
+            if not test_url:
+                messagebox.showwarning("Missing URL", "Enter a webhook URL first.", parent=settings_window)
+                return
+            _ping = dc_ping_id_var.get().strip() if dc_ping_var.get() else None
+            self.discord_manager.send_embed(
+                "Webhook Test",
+                "Discord integration is working correctly!",
+                DiscordManager.COLOR_SUCCESS,
+                ping_user_id=_ping
+            )
+
+        def _open_webhook_filters():
+            fw = tk.Toplevel(settings_window)
+            self.apply_window_icon(fw)
+            fw.title("Webhook Filters")
+            fw.configure(bg=self.BG_DARK)
+            fw.resizable(False, False)
+            fw.transient(settings_window)
+            fw.focus_force()
+            settings_window.update_idletasks()
+            fx = settings_window.winfo_x() + (settings_window.winfo_width() - 320) // 2
+            fy = settings_window.winfo_y() + (settings_window.winfo_height() - 380) // 2
+            fw.geometry(f"320x380+{fx}+{fy}")
+            if self.settings.get("enable_topmost", False):
+                fw.attributes("-topmost", True)
+
+            frm = ttk.Frame(fw, style="Dark.TFrame")
+            frm.pack(fill="both", expand=True, padx=16, pady=14)
+
+            ttk.Label(frm, text="Webhook Filters", style="Dark.TLabel",
+                      font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 2))
+            ttk.Label(frm, text="Messages containing these substrings won't be \nforwarded to Discord.\n[ERROR] messages are never filtered.",
+                      style="Dark.TLabel", font=(self.FONT_FAMILY, 8),
+                      justify="left").pack(anchor="w", pady=(0, 8))
+
+            list_frame = ttk.Frame(frm, style="Dark.TFrame")
+            list_frame.pack(fill="both", expand=True)
+
+            lb = tk.Listbox(list_frame, bg=self.BG_MID, fg=self.FG_TEXT,
+                            selectbackground=self.FG_ACCENT, highlightthickness=0,
+                            border=0, font=(self.FONT_FAMILY, 9))
+            lb.pack(side="left", fill="both", expand=True)
+            sb = ttk.Scrollbar(list_frame, command=lb.yview)
+            sb.pack(side="right", fill="y")
+            lb.config(yscrollcommand=sb.set)
+
+            filters = self.settings.setdefault("console_filters", [
+                "Got authentication ticket!",
+            ])
+            for f in filters:
+                lb.insert(tk.END, f)
+
+            add_row = ttk.Frame(frm, style="Dark.TFrame")
+            add_row.pack(fill="x", pady=(8, 4))
+            entry_var = tk.StringVar()
+            entry = ttk.Entry(add_row, textvariable=entry_var, style="Dark.TEntry")
+            entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+            def add_filter(e=None):
+                val = entry_var.get().strip()
+                if val and val not in filters:
+                    filters.append(val)
+                    lb.insert(tk.END, val)
+                    self.save_settings()
+                entry_var.set("")
+
+            def remove_filter():
+                sel = lb.curselection()
+                if not sel:
+                    return
+                idx = sel[0]
+                lb.delete(idx)
+                del filters[idx]
+                self.save_settings()
+
+            entry.bind("<Return>", add_filter)
+            ttk.Button(add_row, text="Add", style="Dark.TButton",
+                       command=add_filter).pack(side="left")
+
+            wf_btn_row = ttk.Frame(frm, style="Dark.TFrame")
+            wf_btn_row.pack(fill="x", pady=(4, 0))
+            ttk.Button(wf_btn_row, text="Remove Selected", style="Dark.TButton",
+                       command=remove_filter).pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ttk.Button(wf_btn_row, text="Close", style="Dark.TButton",
+                       command=fw.destroy).pack(side="left", fill="x", expand=True)
+
+        ttk.Button(btn_row, text="Log Filters", style="Dark.TButton",
+                   command=_open_log_filters).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(btn_row, text="Test Webhook", style="Dark.TButton",
+                   command=_dc_test).pack(side="left", fill="x", expand=True)
+
+        btn_row2 = ttk.Frame(dc_frame, style="Dark.TFrame")
+        btn_row2.pack(fill="x", pady=(4, 0))
+        ttk.Button(btn_row2, text="Webhook Filters", style="Dark.TButton",
+                   command=_open_webhook_filters).pack(fill="x")
+
+        _dc_dependent_widgets = [dc_url_entry, dc_ping_id_entry, dc_ss_entry]
+        _dc_toggle_fields(_send_connect=False)
+
         about_frame = ttk.Frame(about_tab, style="Dark.TFrame")
         about_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
@@ -6743,6 +6971,8 @@ del /f /q "%~f0"
         self.console_output.append(message)
         if len(self.console_output) > self._MAX_CONSOLE_LINES:
             del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
+
+        self.discord_manager.log_message(message)
         
         if self.console_text_widget:
             try:
@@ -6869,7 +7099,6 @@ del /f /q "%~f0"
         def copy_all():
             text = self.console_text_widget.get(1.0, tk.END)
             try:
-                import win32clipboard
                 win32clipboard.OpenClipboard()
                 win32clipboard.EmptyClipboard()
                 win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
@@ -6878,7 +7107,7 @@ del /f /q "%~f0"
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text)
             messagebox.showinfo("Copied", "Console output copied to clipboard!")
-        
+
         ttk.Button(
             button_frame,
             text="Clear",
@@ -7394,16 +7623,15 @@ del /f /q "%~f0"
         print("[INFO] Global hourly webhook screenshot stopped")
 
     def _global_screenshot_worker(self):
-        time.sleep(3600)
+        interval = max(1, self.settings.get("discord_webhook", {}).get("screenshot_interval_minutes", 60)) * 60
+        time.sleep(interval)
         while self._webhook_screenshot_thread is threading.current_thread():
-            wh_cfg = self.settings.get('rejoin_webhook', {})
-            wh_url = wh_cfg.get('url', '').strip()
-            if wh_url and self.auto_rejoin_threads:
-                active = ", ".join(
-                    acc for acc, t in self.auto_rejoin_threads.items() if t.is_alive()
-                )
-                self._send_webhook_screenshot(wh_url, f"Hourly screenshot — active accounts: {active}")
-            time.sleep(3600)
+            interval = max(1, self.settings.get("discord_webhook", {}).get("screenshot_interval_minutes", 60)) * 60
+            wh_url = self.discord_manager.url
+            ss_enabled = self.settings.get("discord_webhook", {}).get("screenshot_enabled", False)
+            if wh_url and self.discord_manager.enabled and ss_enabled:
+                self._send_webhook_screenshot(wh_url, "")
+            time.sleep(interval)
     
     def is_roblox_running(self):
         """Check if any Roblox window exists"""
@@ -7424,20 +7652,15 @@ del /f /q "%~f0"
                 in_game = presence.get('in_game', False)
                 place_id = presence.get('place_id')
 
-                print(f"[Auto-Rejoin] Presence check - in_game: {in_game}, place_id: {place_id}, expected: {expected_place_id}")
-
                 if in_game:
                     try:
                         if int(place_id) == int(expected_place_id):
-                            print(f"[Auto-Rejoin] Player is in correct game")
                             return True, place_id, presence.get('game_id'), None
                     except (ValueError, TypeError):
                         pass
 
-                print(f"[Auto-Rejoin] Player NOT in game or wrong place_id")
                 return False, None, None, None
             else:
-                print(f"[Auto-Rejoin] Presence API returned None")
                 return False, None, None, "Presence API returned None — cookie may be invalid"
         except Exception as e:
             print(f"[Auto-Rejoin] Error checking player status: {e}")
@@ -7505,6 +7728,11 @@ del /f /q "%~f0"
             print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
+        self.discord_manager.send_rejoin_embed(
+            "Auto Rejoin — Started",
+            f"**{account}** is now being monitored for place `{place_id}`.",
+            self.discord_manager.COLOR_INFO
+        )
 
         consecutive_failed_checks = 0
         max_consecutive_fails = 2
@@ -7516,15 +7744,11 @@ del /f /q "%~f0"
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
             if not success:
                 retry_count += 1
-                wh_cfg_il = self.settings.get('rejoin_webhook', {})
-                wh_url_il = wh_cfg_il.get('url', '').strip()
-                if wh_url_il:
-                    _ping_il = wh_cfg_il.get('ping_user_id', '') if wh_cfg_il.get('enable_ping') else None
-                    self._send_webhook_embed(
-                        wh_url_il, "Launch Failed",
-                        f"**{account}** failed to launch place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                        15287107, ping_user_id=_ping_il or None
-                    )
+                self.discord_manager.send_rejoin_embed(
+                    "Auto Rejoin — Launch Failed",
+                    f"**{account}** failed to launch place `{place_id}` (attempt {retry_count}/{max_retries}).",
+                    self.discord_manager.COLOR_ERROR
+                )
                 if retry_count >= max_retries:
                     print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached on initial launch. Stopping.")
                     return
@@ -7532,30 +7756,23 @@ del /f /q "%~f0"
         
         while not stop_event.is_set():
             try:
-                wh_cfg = self.settings.get('rejoin_webhook', {})
-                wh_url = wh_cfg.get('url', '').strip()
-
                 check_presence = config.get('check_presence', True)
                 disconnect_detected = False
                 game_id = ''
-                
+
                 if check_presence:
                     in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id)
                     if pres_err:
-                        if wh_url:
-                            _ping_pe = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
-                            self._send_webhook_embed(
-                                wh_url, "Presence Check Error",
-                                f"**{account}**\n{pres_err}",
-                                16776960,
-                                ping_user_id=_ping_pe or None
-                            )
+                        self.discord_manager.send_rejoin_embed(
+                            "Auto Rejoin — Presence Error",
+                            f"**{account}**\n{pres_err}",
+                            self.discord_manager.COLOR_WARNING
+                        )
                     disconnect_detected = not in_game
                     
                     if disconnect_detected:
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
-                            print(f"[Auto-Rejoin] [{account}] Presence check failed ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
                             disconnect_detected = False
                             time.sleep(check_interval)
                             continue
@@ -7572,28 +7789,23 @@ del /f /q "%~f0"
                         print(f"[Auto-Rejoin] [{account}] Presence check (any game mode) - in_game: {in_game}, place_id: {current_place_id}")
                         
                         if in_game:
-                            print(f"[Auto-Rejoin] [{account}] Player is in a game (place_id: {current_place_id})")
                             disconnect_detected = False
                             consecutive_failed_checks = 0
                         else:
                             consecutive_failed_checks += 1
                             if consecutive_failed_checks < max_consecutive_fails:
-                                print(f"[Auto-Rejoin] [{account}] Not in any game ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
                                 disconnect_detected = False
                                 time.sleep(check_interval)
                                 continue
                             else:
-                                print(f"[Auto-Rejoin] [{account}] Player not in any game")
                                 disconnect_detected = True
                     else:
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
-                            print(f"[Auto-Rejoin] [{account}] Presence API failed ({consecutive_failed_checks}/{max_consecutive_fails}), will verify next check")
                             disconnect_detected = False
                             time.sleep(check_interval)
                             continue
                         else:
-                            print(f"[Auto-Rejoin] [{account}] Presence API returned None")
                             disconnect_detected = True
                 
                 if disconnect_detected:
@@ -7601,75 +7813,61 @@ del /f /q "%~f0"
                     consecutive_failed_checks = 0
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
 
-                    _ping_id = wh_cfg.get('ping_user_id', '') if wh_cfg.get('enable_ping') else None
-                    if wh_url:
-                        self._send_webhook_embed(
-                            wh_url,
-                            "Account Disconnected",
-                            f"**{account}** disconnected from place `{place_id}`.\nRejoin attempt **{retry_count}/{max_retries}**.",
-                            15287107,
-                            ping_user_id=_ping_id or None
-                        )
-                    
+                    self.discord_manager.send_rejoin_embed(
+                        "Auto Rejoin — Disconnected",
+                        f"**{account}** disconnected from place `{place_id}`.\nRejoin attempt **{retry_count}/{max_retries}**.",
+                        self.discord_manager.COLOR_WARNING
+                    )
+
                     if account in self.auto_rejoin_pids:
                         old_pid = self.auto_rejoin_pids[account]
                         try:
-                            subprocess.run(['taskkill', '/F', '/PID', str(old_pid)], 
+                            subprocess.run(['taskkill', '/F', '/PID', str(old_pid)],
                                          capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
                             time.sleep(1)
                             print(f"[Auto-Rejoin] [{account}] Closed old Roblox instance (PID: {old_pid})")
                         except Exception as e:
                             print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
                         del self.auto_rejoin_pids[account]
-                    
+
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
                     success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
-                    
+
                     if success:
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
-                        if wh_url:
-                            self._send_webhook_embed(
-                                wh_url,
-                                "Rejoin Successful",
-                                f"**{account}** has rejoined place `{place_id}`.",
-                                5438822,
-                                ping_user_id=_ping_id or None
-                            )
+                        self.discord_manager.send_rejoin_embed(
+                            "Auto Rejoin — Success",
+                            f"**{account}** has rejoined place `{place_id}`.",
+                            self.discord_manager.COLOR_SUCCESS
+                        )
                         retry_count = 0
                         time.sleep(10)
                     else:
-                        if wh_url:
-                            self._send_webhook_embed(
-                                wh_url, "Rejoin Failed",
-                                f"**{account}** failed to relaunch for place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                                15287107, ping_user_id=_ping_id or None
-                            )
+                        self.discord_manager.send_rejoin_embed(
+                            "Auto Rejoin — Rejoin Failed",
+                            f"**{account}** failed to relaunch for place `{place_id}` (attempt {retry_count}/{max_retries}).",
+                            self.discord_manager.COLOR_ERROR
+                        )
                         if retry_count >= max_retries:
                             print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
-                            if wh_url:
-                                self._send_webhook_embed(
-                                    wh_url, "Auto Rejoin Stopped",
-                                    f"**{account}** reached max retries ({max_retries}). Auto-rejoin stopped.",
-                                    15287107, ping_user_id=_ping_id or None
-                                )
+                            self.discord_manager.send_rejoin_embed(
+                                "Auto Rejoin — Stopped",
+                                f"**{account}** reached max retries ({max_retries}). Auto-rejoin stopped.",
+                                self.discord_manager.COLOR_ERROR
+                            )
                             break
                         time.sleep(check_interval)
                 else:
-                    print(f"[Auto-Rejoin] [{account}] Still in game {place_id}")
                     retry_count = 0
                     time.sleep(check_interval)
-                    
+
             except Exception as e:
                 print(f"[Auto-Rejoin] [{account}] Error: {e}")
-                wh_cfg_ex = self.settings.get('rejoin_webhook', {})
-                wh_url_ex = wh_cfg_ex.get('url', '').strip()
-                if wh_url_ex:
-                    _ping_ex = wh_cfg_ex.get('ping_user_id', '') if wh_cfg_ex.get('enable_ping') else None
-                    self._send_webhook_embed(
-                        wh_url_ex, "Error",
-                        f"**{account}**\n`{e}`",
-                        15287107, ping_user_id=_ping_ex or None
-                    )
+                self.discord_manager.send_rejoin_embed(
+                    "Auto Rejoin — Error",
+                    f"**{account}**\n```{e}```",
+                    self.discord_manager.COLOR_ERROR
+                )
                 time.sleep(check_interval)
     
     def _launch_and_track_pid(self, account, place_id, private_server, job_id):
@@ -7999,13 +8197,11 @@ del /f /q "%~f0"
                             user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
                             time.sleep(0.05)
                             user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-                        print(f"[Anti-AFK] Sent {action} to PID {pid}")
                     else:
                         scan_code = user32.MapVirtualKeyW(vk_code, 0)
                         user32.keybd_event(vk_code, scan_code, 0, 0)
                         time.sleep(0.05)
                         user32.keybd_event(vk_code, scan_code, KEYEVENTF_KEYUP, 0)
-                        print(f"[Anti-AFK] Sent '{action}' to PID {pid}")
                     
                     if was_minimized:
                         user32.ShowWindow(hwnd, SW_MINIMIZE)
@@ -8090,12 +8286,8 @@ del /f /q "%~f0"
             original_hwnd = user32.GetForegroundWindow()
             current_thread_id = kernel32.GetCurrentThreadId()
             
-            print(f"[Anti-AFK] Found {len(roblox_windows)} Roblox instance(s)")
-            
             for idx, hwnd in enumerate(roblox_windows):
                 try:
-                    print(f"[Anti-AFK] Processing instance {idx + 1}...")
-                    
                     was_minimized = user32.IsIconic(hwnd)
                     if was_minimized:
                         user32.ShowWindow(hwnd, SW_RESTORE)
@@ -8139,8 +8331,6 @@ del /f /q "%~f0"
                 user32.BringWindowToTop(original_hwnd)
                 user32.SetForegroundWindow(original_hwnd)
                 user32.AttachThreadInput(current_thread_id, prev_thread_id, False)
-            
-            print(f"[Anti-AFK] Completed for {len(roblox_windows)} instance(s)")
             
         except Exception as e:
             print(f"[Anti-AFK] Failed: {e}")
