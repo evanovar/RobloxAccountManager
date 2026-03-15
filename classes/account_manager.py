@@ -36,6 +36,7 @@ class RobloxAccountManager:
         self.accounts_file = os.path.join(self.data_folder, "saved_accounts.json")
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.encryptor = None
+        self.secure_settings = {}
         
         if self.encryption_config.is_encryption_enabled():
             method = self.encryption_config.get_encryption_method()
@@ -67,20 +68,40 @@ class RobloxAccountManager:
                 if self.encryptor and isinstance(data, dict) and data.get('encrypted'):
                     try:
                         decrypted_data = self.encryptor.decrypt_data(data['data'])
-                        self._migrate_accounts(decrypted_data)
-                        return decrypted_data
+                        accounts = self._extract_accounts_payload(decrypted_data)
+                        self._migrate_accounts(accounts)
+                        return accounts
                     except Exception as e:
                         raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
                 
                 if isinstance(data, dict):
-                    self._migrate_accounts(data)
-                return data if isinstance(data, dict) else {}
+                    accounts = self._extract_accounts_payload(data)
+                    self._migrate_accounts(accounts)
+                    return accounts
+                self.secure_settings = {}
+                return {}
             except ValueError:
                 raise
             except Exception as e:
                 print(f"[ERROR] Error loading accounts: {e}")
+                self.secure_settings = {}
                 return {}
+        self.secure_settings = {}
         return {}
+
+    def _extract_accounts_payload(self, data):
+        """Support legacy account-only files and wrapped account+secure-settings files."""
+        if not isinstance(data, dict):
+            self.secure_settings = {}
+            return {}
+
+        if isinstance(data.get('accounts'), dict):
+            secure = data.get('secure_settings', {})
+            self.secure_settings = secure if isinstance(secure, dict) else {}
+            return data.get('accounts', {})
+
+        self.secure_settings = {}
+        return data
     
     def _migrate_accounts(self, accounts):
         """Migrate old account data to include new fields"""
@@ -93,16 +114,34 @@ class RobloxAccountManager:
     
     def save_accounts(self):
         """Save accounts to JSON file"""
+        payload = {
+            'accounts': self.accounts,
+            'secure_settings': self.secure_settings,
+        }
         with open(self.accounts_file, 'w', encoding='utf-8') as f:
             if self.encryptor:
-                encrypted_package = self.encryptor.encrypt_data(self.accounts)
+                encrypted_package = self.encryptor.encrypt_data(payload)
                 encrypted_data = {
                     'encrypted': True,
                     'data': encrypted_package
                 }
                 json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
             else:
-                json.dump(self.accounts, f, indent=2, ensure_ascii=False)
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+
+    def get_secure_setting(self, key, default=""):
+        """Read a sensitive setting stored alongside encrypted account data."""
+        return self.secure_settings.get(key, default)
+
+    def set_secure_setting(self, key, value):
+        """Write a sensitive setting and persist it to saved_accounts.json."""
+        if value is None:
+            value = ""
+        if self.secure_settings.get(key) == value:
+            return False
+        self.secure_settings[key] = value
+        self.save_accounts()
+        return True
     
     def create_temp_profile(self):
         """Create a temporary Chrome profile directory"""

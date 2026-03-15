@@ -79,6 +79,7 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
+- `discord.py` - Discord bot handling for remote access
 
 ## ⚠️ Disclaimer
 
