@@ -454,7 +454,7 @@ class AccountManagerUI:
                     "auto_rejoin_configs": {},
                     "multi_roblox_method": "default",
                     "last_joined_user": "",
-                    "auto_tile_windows": True,
+                    "auto_tile_windows": False,
                     "rejoin_webhook": {}
                 }
         except:
@@ -476,7 +476,7 @@ class AccountManagerUI:
                 "disable_launch_popup": False,
                 "multi_roblox_method": "default",
                 "last_joined_user": "",
-                "auto_tile_windows": True,
+                "auto_tile_windows": False,
                 "rejoin_webhook": {}
             }
 
@@ -1221,7 +1221,7 @@ del /f /q "%~f0"
 
         launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
         success = self.manager.launch_roblox(account_name, place_id, private_server_id, launcher_pref, job_id, custom_launcher_path)
-        if success and self.settings.get("auto_tile_windows", True):
+        if success and self.settings.get("auto_tile_windows", False):
             self.root.after(1500, self._tile_roblox_windows_after_launch)
 
         if success:
@@ -3353,7 +3353,7 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
-            if success_count > 1 and self.settings.get("auto_tile_windows", True):
+            if success_count > 1 and self.settings.get("auto_tile_windows", False):
                 threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
@@ -3430,7 +3430,7 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
-            if success_count > 1 and self.settings.get("auto_tile_windows", True):
+            if success_count > 1 and self.settings.get("auto_tile_windows", False):
                 threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
@@ -5074,6 +5074,16 @@ del /f /q "%~f0"
             command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
         )
         disable_launch_popup_check.pack(anchor="w", pady=2)
+        
+        auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
+        auto_tile_check = ttk.Checkbutton(
+            main_frame,
+            text="Auto Tile Windows",
+            variable=auto_tile_windows_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("auto_tile_windows", auto_tile_windows_var)
+        )
+        auto_tile_check.pack(anchor="w", pady=2)
         
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
