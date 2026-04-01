@@ -475,7 +475,7 @@ class RobloxAPI:
     
     
     @staticmethod
-    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id=""):
+    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         """Launch Roblox game with specified account"""
 
         print(f"[INFO] Getting authentication ticket for {username}...")
@@ -497,7 +497,7 @@ class RobloxAPI:
                 "+robloxLocale:en_us+gameLocale:en_us"
             )
             print(f"[INFO] Launching Roblox Home for {username}")
-            return RobloxAPI._execute_launch(url, launcher_preference)
+            return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
 
         link_code = None
 
@@ -555,12 +555,28 @@ class RobloxAPI:
             print(f"[INFO] Job ID: {job_id}")
         print(f"[INFO] Launcher: {launcher_preference}")
 
-        return RobloxAPI._execute_launch(url, launcher_preference)
+        return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
     
     @staticmethod
-    def _execute_launch(url, launcher_preference):
+    def _execute_launch(url, launcher_preference, custom_launcher_path=""):
         """Execute the Roblox launch with the specified launcher"""
         try:
+            if launcher_preference == "custom":
+                custom_path = Path(str(custom_launcher_path or "").strip())
+                if not custom_path:
+                    messagebox.showerror("Custom Launcher Not Set", "Please choose a custom launcher .exe path in Roblox Launcher settings.")
+                    return False
+                if custom_path.suffix.lower() != ".exe":
+                    messagebox.showerror("Invalid Custom Launcher", f"Custom launcher must be an .exe file.\n\nSelected:\n{custom_path}")
+                    return False
+                if not custom_path.exists():
+                    messagebox.showerror("Custom Launcher Not Found", f"Custom launcher executable was not found.\n\nPath:\n{custom_path}")
+                    return False
+
+                subprocess.Popen([str(custom_path), url], creationflags=subprocess.CREATE_NO_WINDOW)
+                print(f"[SUCCESS] Launched with Custom Launcher: {custom_path}")
+                return True
+
             if launcher_preference == "bloxstrap":
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:

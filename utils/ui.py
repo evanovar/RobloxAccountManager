@@ -442,6 +442,7 @@ class AccountManagerUI:
                     "enable_topmost": False,
                     "enable_multi_roblox": False,
                     "confirm_before_launch": False,
+                    "custom_roblox_launcher_path": "",
                     "max_recent_games": 10,
                     "enable_multi_select": False,
                     "anti_afk_enabled": False,
@@ -463,6 +464,7 @@ class AccountManagerUI:
                 "enable_topmost": False,
                 "enable_multi_roblox": False,
                 "confirm_before_launch": False,
+                "custom_roblox_launcher_path": "",
                 "max_recent_games": 10,
                 "enable_multi_select": False,
                 "anti_afk_enabled": False,
@@ -489,6 +491,11 @@ class AccountManagerUI:
         
         if self.settings.get("enable_multi_roblox", False):
             self.root.after(100, self.initialize_multi_roblox)
+
+    def _get_roblox_launcher_config(self):
+        launcher_pref = self.settings.get("roblox_launcher", "default")
+        custom_path = str(self.settings.get("custom_roblox_launcher_path", "") or "").strip()
+        return launcher_pref, custom_path
 
     def apply_window_icon(self, window):
         if self.icon_path and os.path.exists(self.icon_path):
@@ -1210,8 +1217,8 @@ del /f /q "%~f0"
         if not place_id.isdigit():
             return "Place ID must be a number."
 
-        launcher_pref = self.settings.get("roblox_launcher", "default")
-        success = self.manager.launch_roblox(account_name, place_id, private_server_id, launcher_pref, job_id)
+        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+        success = self.manager.launch_roblox(account_name, place_id, private_server_id, launcher_pref, job_id, custom_launcher_path)
         if success and self.settings.get("auto_tile_windows", True):
             self.root.after(1500, self._tile_roblox_windows_after_launch)
 
@@ -1247,8 +1254,8 @@ del /f /q "%~f0"
         if not place_id:
             return f"Could not get game info for '{user_to_join}'."
 
-        launcher_pref = self.settings.get("roblox_launcher", "default")
-        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id)
+        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id, custom_launcher_path)
         if success:
             game_name = RobloxAPI.get_game_name(place_id) or f"Place {place_id}"
             self.add_game_to_list(place_id, game_name, "")
@@ -1268,8 +1275,8 @@ del /f /q "%~f0"
         if not game_id:
             return f"No available servers found for place {place_id}."
 
-        launcher_pref = self.settings.get("roblox_launcher", "default")
-        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id)
+        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id, custom_launcher_path)
         if success:
             game_name = RobloxAPI.get_game_name(place_id) or f"Place {place_id}"
             self.add_game_to_list(place_id, game_name, "")
@@ -3330,12 +3337,12 @@ del /f /q "%~f0"
             usernames = [username]
 
         def worker(selected_usernames):
-            launcher_pref = self.settings.get("roblox_launcher", "default")
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
             success_count = 0
             failed_launch = False
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, "", "", launcher_pref):
+                    if self.manager.launch_roblox(uname, "", "", launcher_pref, "", custom_launcher_path):
                         success_count += 1
                     else:
                         failed_launch = True
@@ -3405,12 +3412,12 @@ del /f /q "%~f0"
                 return
 
         def worker(selected_usernames, pid, psid):
-            launcher_pref = self.settings.get("roblox_launcher", "default")
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
             success_count = 0
             failed_launch = False
             for i, uname in enumerate(selected_usernames):
                 try:
-                    if self.manager.launch_roblox(uname, pid, psid, launcher_pref):
+                    if self.manager.launch_roblox(uname, pid, psid, launcher_pref, "", custom_launcher_path):
                         success_count += 1
                     else:
                         failed_launch = True
@@ -3987,12 +3994,12 @@ del /f /q "%~f0"
                     ))
                     return
                 
-                launcher_pref = self.settings.get("roblox_launcher", "default")
+                launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
                 success_count = 0
                 
                 for uname in selected_usernames:
                     try:
-                        if self.manager.launch_roblox(uname, place_id, "", launcher_pref, game_id):
+                        if self.manager.launch_roblox(uname, place_id, "", launcher_pref, game_id, custom_launcher_path):
                             success_count += 1
                     except Exception as e:
                         print(f"[ERROR] Failed to launch game for {uname}: {e}")
@@ -4104,12 +4111,12 @@ del /f /q "%~f0"
             job_id_window.destroy()
             
             def worker(selected_usernames, pid, jid):
-                launcher_pref = self.settings.get("roblox_launcher", "default")
+                launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
                 success_count = 0
                 
                 for uname in selected_usernames:
                     try:
-                        if self.manager.launch_roblox(uname, pid, "", launcher_pref, jid):
+                        if self.manager.launch_roblox(uname, pid, "", launcher_pref, jid, custom_launcher_path):
                             success_count += 1
                     except Exception as e:
                         print(f"[ERROR] Failed to launch game for {uname}: {e}")
@@ -4186,12 +4193,12 @@ del /f /q "%~f0"
             
             print(f"[SUCCESS] Found smallest server: {game_id}")
             
-            launcher_pref = self.settings.get("roblox_launcher", "default")
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
             success_count = 0
             
             for uname in selected_usernames:
                 try:
-                    if self.manager.launch_roblox(uname, pid, "", launcher_pref, game_id):
+                    if self.manager.launch_roblox(uname, pid, "", launcher_pref, game_id, custom_launcher_path):
                         success_count += 1
                 except Exception as e:
                     print(f"[ERROR] Failed to launch game for {uname}: {e}")
@@ -5163,7 +5170,7 @@ del /f /q "%~f0"
         def open_launcher_selection():
             launcher_window = tk.Toplevel(settings_window)
             launcher_window.title("Roblox Launcher")
-            launcher_window.geometry("350x320")
+            launcher_window.geometry("420x360")
             launcher_window.configure(bg=self.BG_DARK)
             launcher_window.resizable(False, False)
             launcher_window.transient(settings_window)
@@ -5204,6 +5211,7 @@ del /f /q "%~f0"
             
             current_launcher = self.settings.get("roblox_launcher", "default")
             launcher_var = tk.StringVar(value=current_launcher)
+            custom_launcher_path_var = tk.StringVar(value=str(self.settings.get("custom_roblox_launcher_path", "") or "").strip())
             
             radio_style = ttk.Style()
             radio_style.configure(
@@ -5227,22 +5235,99 @@ del /f /q "%~f0"
                 ("Fishstrap", "fishstrap"),
                 ("Froststrap", "froststrap"),
                 ("Voidstrap", "voidstrap"),
-                ("Roblox Client", "client")
+                ("Roblox Client", "client"),
+                ("Custom", "custom"),
             ]
+
+            custom_launcher_display_var = tk.StringVar()
+
+            def _format_custom_launcher_path_display(path, max_len=56):
+                norm = str(path or "").strip().replace("\\", "/")
+                if not norm:
+                    return ""
+                if len(norm) <= max_len:
+                    return norm
+
+                lower_norm = norm.lower()
+                marker = "/appdata/local/"
+                if marker in lower_norm:
+                    marker_index = lower_norm.index(marker)
+                    prefix = "C:/Users/..." if lower_norm.startswith("c:/users/") else (norm[:10] + "...")
+                    tail = norm[marker_index:]
+                    available = max_len - len(prefix)
+                    if available <= 3:
+                        return (prefix[:max_len - 3] + "...") if max_len > 3 else prefix[:max_len]
+                    if len(tail) > available:
+                        tail = tail[:available - 3] + "..."
+                    return prefix + tail
+
+                start_len = max(10, int(max_len * 0.35))
+                end_len = max(12, max_len - start_len - 3)
+                return f"{norm[:start_len]}...{norm[-end_len:]}"
+
+            def _refresh_custom_launcher_path_display(*_):
+                custom_launcher_display_var.set(
+                    _format_custom_launcher_path_display(custom_launcher_path_var.get())
+                )
+
+            custom_launcher_path_var.trace_add("write", _refresh_custom_launcher_path_display)
+            _refresh_custom_launcher_path_display()
             
             for name, value in launchers:
+                row = ttk.Frame(launchers_frame, style="Dark.TFrame")
+                row.pack(fill="x", pady=3)
+
                 rb = ttk.Radiobutton(
-                    launchers_frame,
+                    row,
                     text=name,
                     variable=launcher_var,
                     value=value,
                     style="Dark.TRadiobutton"
                 )
-                rb.pack(anchor="w", pady=3)
+                rb.pack(side="left", anchor="w")
+
+                if value == "custom":
+                    def browse_custom_launcher():
+                        selected_path = filedialog.askopenfilename(
+                            title="Select Custom Roblox Launcher (.exe)",
+                            filetypes=[("Executable Files", "*.exe")],
+                        )
+                        if not selected_path:
+                            return
+                        custom_launcher_path_var.set(selected_path)
+                        launcher_var.set("custom")
+
+                    ttk.Button(
+                        row,
+                        text="Browse .exe",
+                        style="Dark.TButton",
+                        command=browse_custom_launcher,
+                    ).pack(side="right")
+
+                    ttk.Label(
+                        row,
+                        textvariable=custom_launcher_display_var,
+                        style="Dark.TLabel",
+                        font=(self.FONT_FAMILY, 8),
+                    ).pack(side="left", fill="x", expand=True, padx=(8, 6))
             
             def save_and_close():
                 selected = launcher_var.get()
+                custom_path = custom_launcher_path_var.get().strip()
+
+                if selected == "custom":
+                    if not custom_path:
+                        messagebox.showwarning("Custom Launcher Required", "Please choose a custom launcher .exe file.", parent=launcher_window)
+                        return
+                    if not custom_path.lower().endswith(".exe"):
+                        messagebox.showwarning("Invalid File", "Custom launcher must be an .exe file.", parent=launcher_window)
+                        return
+                    if not os.path.isfile(custom_path):
+                        messagebox.showwarning("File Not Found", "Selected custom launcher file was not found.", parent=launcher_window)
+                        return
+
                 self.settings["roblox_launcher"] = selected
+                self.settings["custom_roblox_launcher_path"] = custom_path
                 self.save_settings()
                 launcher_window.destroy()
             
@@ -8455,8 +8540,8 @@ del /f /q "%~f0"
         with self.auto_rejoin_launch_lock:
             pids_before = self._get_roblox_pids()
             
-            launcher_pref = self.settings.get("roblox_launcher", "default")
-            success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id)
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+            success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
             
             if not success:
                 return False
