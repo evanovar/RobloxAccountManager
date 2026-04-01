@@ -483,7 +483,7 @@ class AccountManagerUI:
                     json.dump(self.settings, f, indent=2)
             except Exception as e:
                 print(f"[ERROR] Failed to persist migrated Discord settings: {e}")
-        
+
         if self.settings.get("enable_topmost", False):
             self.root.attributes("-topmost", True)
         
@@ -5262,6 +5262,13 @@ del /f /q "%~f0"
         launcher_btn.pack(fill="x", pady=(0, 5))
         
         def force_close_roblox():
+            confirm = messagebox.askyesno(
+                "Confirm Force Close",
+                "Are you sure you want to force close all Roblox instances?"
+            )
+            if not confirm:
+                return
+
             try:
                 result = subprocess.run(
                     ['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'],
