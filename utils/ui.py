@@ -123,6 +123,8 @@ class AccountManagerUI:
         self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
         self.auto_rejoin_pids = {}
         self.auto_rejoin_launch_lock = threading.Lock()
+        self.auto_rejoin_presence_lock = threading.Lock()
+        self.auto_rejoin_next_presence_time = 0.0
         self._webhook_screenshot_thread = None
         
         self.cookie_status = {}
@@ -3502,7 +3504,8 @@ del /f /q "%~f0"
             selectbackground=self.FG_ACCENT,
             highlightthickness=0,
             border=0,
-            font=("Segoe UI", 9)
+            font=("Segoe UI", 9),
+            selectmode=tk.EXTENDED
         )
         rejoin_list.grid(row=0, column=0, sticky="nsew")
         
@@ -3519,6 +3522,24 @@ del /f /q "%~f0"
                 display = f"{account} - {status} - Place: {place_id}"
                 rejoin_list.insert(tk.END, display)
         refresh_rejoin_list()
+
+        ttk.Label(
+            main_frame,
+            text="Tip: Hold Ctrl/Shift to select multiple accounts",
+            style="Dark.TLabel",
+            font=("Segoe UI", 8)
+        ).pack(anchor="w", pady=(0, 8))
+
+        def _get_selected_rejoin_accounts():
+            selected_indices = rejoin_list.curselection()
+            if not selected_indices:
+                return []
+            accounts_list = list(self.auto_rejoin_configs.keys())
+            selected_accounts = []
+            for idx in selected_indices:
+                if 0 <= idx < len(accounts_list):
+                    selected_accounts.append(accounts_list[idx])
+            return selected_accounts
         
         btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         btn_frame.pack(fill="x")
@@ -3660,13 +3681,15 @@ del /f /q "%~f0"
         
         def edit_auto_rejoin():
             """Edit selected auto-rejoin config"""
-            selection = rejoin_list.curselection()
-            if not selection:
+            selected_accounts = _get_selected_rejoin_accounts()
+            if not selected_accounts:
                 messagebox.showwarning("No Selection", "Please select an account to edit.")
                 return
+            if len(selected_accounts) > 1:
+                messagebox.showwarning("Multiple Selected", "Please select only one account to edit.")
+                return
             
-            accounts_list = list(self.auto_rejoin_configs.keys())
-            account = accounts_list[selection[0]]
+            account = selected_accounts[0]
             config = self.auto_rejoin_configs[account]
             
             edit_window = tk.Toplevel(auto_rejoin_window)
@@ -3767,57 +3790,73 @@ del /f /q "%~f0"
             ttk.Button(button_frame, text="Cancel", style="Dark.TButton", command=edit_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
         
         def remove_auto_rejoin():
-            """Remove selected auto-rejoin config"""
-            selection = rejoin_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select an account to remove.")
+            """Remove selected auto-rejoin config(s)"""
+            selected_accounts = _get_selected_rejoin_accounts()
+            if not selected_accounts:
+                messagebox.showwarning("No Selection", "Please select account(s) to remove.")
                 return
-            
-            accounts_list = list(self.auto_rejoin_configs.keys())
-            account = accounts_list[selection[0]]
-            
-            if messagebox.askyesno("Confirm", f"Remove auto-rejoin for {account}?"):
-                self.stop_auto_rejoin_for_account(account)
-                del self.auto_rejoin_configs[account]
+
+            if len(selected_accounts) == 1:
+                confirm_msg = f"Remove auto-rejoin for {selected_accounts[0]}?"
+            else:
+                confirm_msg = f"Remove auto-rejoin for {len(selected_accounts)} selected accounts?"
+
+            if messagebox.askyesno("Confirm", confirm_msg):
+                for account in selected_accounts:
+                    self.stop_auto_rejoin_for_account(account)
+                    if account in self.auto_rejoin_configs:
+                        del self.auto_rejoin_configs[account]
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
                 self.save_settings()
                 refresh_rejoin_list()
         
         def start_selected():
-            """Start auto-rejoin for selected account"""
-            selection = rejoin_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select an account to start.")
+            """Start auto-rejoin for selected account(s)"""
+            selected_accounts = _get_selected_rejoin_accounts()
+            if not selected_accounts:
+                messagebox.showwarning("No Selection", "Please select account(s) to start.")
                 return
-            
-            accounts_list = list(self.auto_rejoin_configs.keys())
-            account = accounts_list[selection[0]]
-            
-            self._match_pids_to_accounts([account])
 
-            self.discord_manager.send_embed(
-                "Auto Rejoin — Started",
-                f"Monitoring **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`.",
-                self.discord_manager.COLOR_SUCCESS
-            )
+            self._match_pids_to_accounts(selected_accounts)
 
-            self.start_auto_rejoin_for_account(account)
+            for account in selected_accounts:
+                self.start_auto_rejoin_for_account(account)
 
             auto_rejoin_window.after(500, refresh_rejoin_list)
-            messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
+            if len(selected_accounts) == 1:
+                account = selected_accounts[0]
+                self.discord_manager.send_embed(
+                    "Auto Rejoin — Started",
+                    f"Monitoring **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`.",
+                    self.discord_manager.COLOR_SUCCESS
+                )
+                messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
+            else:
+                lines = "\n".join(
+                    f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
+                    for acc in selected_accounts
+                )
+                self.discord_manager.send_embed(
+                    "Auto Rejoin — Started",
+                    f"Monitoring {len(selected_accounts)} account(s):\n{lines}",
+                    self.discord_manager.COLOR_SUCCESS
+                )
+                messagebox.showinfo("Started", f"Auto-rejoin started for {len(selected_accounts)} account(s)!")
         
         def stop_selected():
-            """Stop auto-rejoin for selected account"""
-            selection = rejoin_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select an account to stop.")
+            """Stop auto-rejoin for selected account(s)"""
+            selected_accounts = _get_selected_rejoin_accounts()
+            if not selected_accounts:
+                messagebox.showwarning("No Selection", "Please select account(s) to stop.")
                 return
-            
-            accounts_list = list(self.auto_rejoin_configs.keys())
-            account = accounts_list[selection[0]]
-            self.stop_auto_rejoin_for_account(account)
+
+            for account in selected_accounts:
+                self.stop_auto_rejoin_for_account(account)
             refresh_rejoin_list()
-            messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {account}!")
+            if len(selected_accounts) == 1:
+                messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {selected_accounts[0]}!")
+            else:
+                messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {len(selected_accounts)} account(s)!")
         
         def start_all():
             """Start auto-rejoin for all accounts"""
@@ -6496,10 +6535,15 @@ del /f /q "%~f0"
     
     def _instances_monitor_worker(self):
         """Background thread that continuously monitors Roblox instances"""
+        last_memory_refresh = 0.0
+        poll_interval_seconds = 4
+        failed_retry_delay_seconds = 8
+
         while not self.instances_monitor_stop.is_set():
             try:
                 new_pids = set()
                 processes = []
+                pid_to_proc = {}
                 
                 for proc in psutil.process_iter(['pid', 'name', 'create_time', 'memory_info']):
                     try:
@@ -6508,25 +6552,22 @@ del /f /q "%~f0"
                             if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
                                 new_pids.add(pid)
                                 processes.append(proc)
+                                pid_to_proc[pid] = proc
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
                 
                 current_time = time.time()
-                failed_pids_to_retry = []
-                for pid, (fail_time, create_time, memory_mb) in list(self.instances_failed_pids.items()):
-                    if current_time - fail_time >= 5:
-                        if pid in new_pids:
-                            failed_pids_to_retry.append((pid, create_time, memory_mb))
-                        else:
-                            del self.instances_failed_pids[pid]
+                for pid in list(self.instances_failed_pids.keys()):
+                    if pid not in new_pids:
+                        del self.instances_failed_pids[pid]
                 
                 if new_pids != self.instances_pids:
                     print(f"[INFO] Active Instances: PID change detected. Old: {self.instances_pids}, New: {new_pids}")
                     self.instances_pids = new_pids.copy()
-                    
+
+                    old_data_by_pid = {entry['pid']: entry for entry in self.instances_data}
                     new_data = []
-                    used_logs = set()
-                    
+
                     for proc in processes:
                         pid = proc.info['pid']
                         
@@ -6536,111 +6577,93 @@ del /f /q "%~f0"
                         except:
                             memory_mb = 0
                             create_time = 0
-                        
-                        user_id, _ = self._get_user_id_from_pid(pid, used_logs)
-                        username = None
-                        avatar_url = None
-                        
-                        if user_id:
-                            if user_id in self.instances_cache["user_id_to_username"]:
-                                username = self.instances_cache["user_id_to_username"][user_id]
-                            else:
-                                for account in self.manager.accounts:
-                                    stored_uid = self.manager.accounts[account].get("user_id")
-                                    if stored_uid == user_id or stored_uid == str(user_id):
-                                        username = account
-                                        self.instances_cache["user_id_to_username"][user_id] = username
-                                        break
-                                
-                                if not username:
-                                    username = RobloxAPI.get_username_from_user_id(user_id)
-                                    if username:
-                                        self.instances_cache["user_id_to_username"][user_id] = username
-                                        for account in self.manager.accounts:
-                                            if account == username:
-                                                self.manager.accounts[account]["user_id"] = str(user_id)
-                                                self.manager.save_accounts()
-                                                break
-                            
-                            if user_id in self.instances_cache["user_id_to_avatar"]:
-                                avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
-                            else:
-                                avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
-                                if avatar_url:
-                                    self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
-                        
+
+                        prev = old_data_by_pid.get(pid, {})
                         new_data.append({
-                            "pid": pid, "user_id": user_id, "username": username,
-                            "avatar_url": avatar_url, "create_time": create_time, "memory_mb": memory_mb
+                            "pid": pid,
+                            "user_id": prev.get("user_id"),
+                            "username": prev.get("username"),
+                            "avatar_url": prev.get("avatar_url"),
+                            "create_time": create_time,
+                            "memory_mb": memory_mb,
                         })
-                        
-                        if not user_id:
-                            self.instances_failed_pids[pid] = (current_time, create_time, memory_mb)
-                        elif pid in self.instances_failed_pids:
-                            del self.instances_failed_pids[pid]
-                    
+
                     self.instances_data = new_data
-                elif failed_pids_to_retry:
-                    print(f"[INFO] Active Instances: Retrying {len(failed_pids_to_retry)} failed PID(s)")
-                    used_logs = set()
-                    for pid, create_time, memory_mb in failed_pids_to_retry:
-                        user_id, _ = self._get_user_id_from_pid(pid, used_logs)
-                        
-                        if user_id:
-                            print(f"[INFO] Active Instances: Successfully got user ID for PID {pid} on retry")
-                            username = None
-                            avatar_url = None
-                            
-                            if user_id in self.instances_cache["user_id_to_username"]:
-                                username = self.instances_cache["user_id_to_username"][user_id]
-                            else:
-                                for account in self.manager.accounts:
-                                    stored_uid = self.manager.accounts[account].get("user_id")
-                                    if stored_uid == user_id or stored_uid == str(user_id):
-                                        username = account
-                                        self.instances_cache["user_id_to_username"][user_id] = username
-                                        break
-                                
-                                if not username:
-                                    username = RobloxAPI.get_username_from_user_id(user_id)
-                                    if username:
-                                        self.instances_cache["user_id_to_username"][user_id] = username
-                                        for account in self.manager.accounts:
-                                            if account == username:
-                                                self.manager.accounts[account]["user_id"] = str(user_id)
-                                                self.manager.save_accounts()
-                                                break
-                            
-                            if user_id in self.instances_cache["user_id_to_avatar"]:
-                                avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
-                            else:
-                                avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
-                                if avatar_url:
-                                    self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
-                            
-                            for entry in self.instances_data:
-                                if entry["pid"] == pid:
-                                    entry["user_id"] = user_id
-                                    entry["username"] = username
-                                    entry["avatar_url"] = avatar_url
-                                    break
-                            
-                            del self.instances_failed_pids[pid]
-                            self.instances_data_updated = True
-                        else:
-                            self.instances_failed_pids[pid] = (current_time, create_time, memory_mb)
-                else:
+                    self.instances_data_updated = True
+
+                if current_time - last_memory_refresh >= poll_interval_seconds:
+                    last_memory_refresh = current_time
                     for entry in self.instances_data:
                         try:
-                            proc = psutil.Process(entry["pid"])
+                            proc = pid_to_proc.get(entry["pid"]) or psutil.Process(entry["pid"])
                             entry["memory_mb"] = proc.memory_info().rss / 1024 / 1024
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             pass
+
+                unresolved_entry = None
+                for entry in self.instances_data:
+                    if entry.get("user_id"):
+                        continue
+                    pid = entry.get("pid")
+                    failed_data = self.instances_failed_pids.get(pid)
+                    if failed_data and (current_time - failed_data[0] < failed_retry_delay_seconds):
+                        continue
+                    unresolved_entry = entry
+                    break
+
+                if unresolved_entry:
+                    pid = unresolved_entry["pid"]
+                    used_logs = set()
+                    user_id, _ = self._get_user_id_from_pid(pid, used_logs)
+
+                    if user_id:
+                        username = None
+                        avatar_url = None
+
+                        if user_id in self.instances_cache["user_id_to_username"]:
+                            username = self.instances_cache["user_id_to_username"][user_id]
+                        else:
+                            for account in self.manager.accounts:
+                                stored_uid = self.manager.accounts[account].get("user_id")
+                                if stored_uid == user_id or stored_uid == str(user_id):
+                                    username = account
+                                    self.instances_cache["user_id_to_username"][user_id] = username
+                                    break
+
+                            if not username:
+                                username = RobloxAPI.get_username_from_user_id(user_id)
+                                if username:
+                                    self.instances_cache["user_id_to_username"][user_id] = username
+                                    for account in self.manager.accounts:
+                                        if account == username:
+                                            self.manager.accounts[account]["user_id"] = str(user_id)
+                                            self.manager.save_accounts()
+                                            break
+
+                        if user_id in self.instances_cache["user_id_to_avatar"]:
+                            avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
+                        else:
+                            avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
+                            if avatar_url:
+                                self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
+
+                        unresolved_entry["user_id"] = user_id
+                        unresolved_entry["username"] = username
+                        unresolved_entry["avatar_url"] = avatar_url
+                        if pid in self.instances_failed_pids:
+                            del self.instances_failed_pids[pid]
+                        self.instances_data_updated = True
+                    else:
+                        self.instances_failed_pids[pid] = (
+                            current_time,
+                            unresolved_entry.get("create_time", 0),
+                            unresolved_entry.get("memory_mb", 0),
+                        )
                 
             except Exception as e:
                 print(f"[ERROR] Active Instances monitor error: {e}")
             
-            self.instances_monitor_stop.wait(2)
+            self.instances_monitor_stop.wait(poll_interval_seconds)
     
     def open_active_instances_window(self):
         """Open window showing all active Roblox instances with pre-cached data"""
@@ -8308,10 +8331,29 @@ del /f /q "%~f0"
         except:
             return False
     
-    def is_player_in_game(self, user_id, cookie, expected_place_id):
+    def _wait_for_presence_slot(self, stop_event=None, min_gap_seconds=0.35):
+        """Throttle Presence API checks so multiple accounts are checked sequentially."""
+        while True:
+            now = time.time()
+            with self.auto_rejoin_presence_lock:
+                wait_for = self.auto_rejoin_next_presence_time - now
+                if wait_for <= 0:
+                    self.auto_rejoin_next_presence_time = now + max(0.1, float(min_gap_seconds))
+                    return True
+
+            sleep_for = min(0.25, max(0.05, wait_for))
+            if stop_event and stop_event.wait(sleep_for):
+                return False
+            if not stop_event:
+                time.sleep(sleep_for)
+
+    def is_player_in_game(self, user_id, cookie, expected_place_id, stop_event=None):
         """Check if player is still in the same game using Presence API.
         Returns (in_game, place_id, game_id, error_msg) — error_msg is None on success."""
         try:
+            if not self._wait_for_presence_slot(stop_event):
+                return False, None, None, "Presence check cancelled"
+
             presence = RobloxAPI.get_player_presence(user_id, cookie)
 
             if presence:
@@ -8361,6 +8403,12 @@ del /f /q "%~f0"
         retry_count = 0
         max_retries = config.get('max_retries', 5)
         check_interval = config.get('check_interval', 10)
+
+        def wait_next_check():
+            base = max(3, int(check_interval))
+            jitter = random.uniform(0.2, min(1.5, base * 0.2))
+            return stop_event.wait(base + jitter)
+
         place_id = config.get('place_id')
         private_server = config.get('private_server', '')
         job_id = config.get('job_id', '')
@@ -8427,7 +8475,7 @@ del /f /q "%~f0"
                 game_id = ''
 
                 if check_presence:
-                    in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id)
+                    in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id, stop_event)
                     if pres_err:
                         self.discord_manager.send_rejoin_embed(
                             "Auto Rejoin — Presence Error",
@@ -8440,11 +8488,14 @@ del /f /q "%~f0"
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
                             disconnect_detected = False
-                            time.sleep(check_interval)
+                            if wait_next_check():
+                                break
                             continue
                     else:
                         consecutive_failed_checks = 0
                 else:
+                    if not self._wait_for_presence_slot(stop_event):
+                        break
                     presence = RobloxAPI.get_player_presence(user_id, cookie)
                     
                     if presence:
@@ -8461,7 +8512,8 @@ del /f /q "%~f0"
                             consecutive_failed_checks += 1
                             if consecutive_failed_checks < max_consecutive_fails:
                                 disconnect_detected = False
-                                time.sleep(check_interval)
+                                if wait_next_check():
+                                    break
                                 continue
                             else:
                                 disconnect_detected = True
@@ -8469,7 +8521,8 @@ del /f /q "%~f0"
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
                             disconnect_detected = False
-                            time.sleep(check_interval)
+                            if wait_next_check():
+                                break
                             continue
                         else:
                             disconnect_detected = True
@@ -8522,10 +8575,12 @@ del /f /q "%~f0"
                                 self.discord_manager.COLOR_ERROR
                             )
                             break
-                        time.sleep(check_interval)
+                        if wait_next_check():
+                            break
                 else:
                     retry_count = 0
-                    time.sleep(check_interval)
+                    if wait_next_check():
+                        break
 
             except Exception as e:
                 print(f"[Auto-Rejoin] [{account}] Error: {e}")
@@ -8534,7 +8589,8 @@ del /f /q "%~f0"
                     f"**{account}**\n```{e}```",
                     self.discord_manager.COLOR_ERROR
                 )
-                time.sleep(check_interval)
+                if wait_next_check():
+                    break
     
     def _launch_and_track_pid(self, account, place_id, private_server, job_id):
         with self.auto_rejoin_launch_lock:
