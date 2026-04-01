@@ -4,6 +4,12 @@
 ![DownloadCount](https://img.shields.io/github/downloads/evanovar/RobloxAccountManager/total)<br>
 [![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
 
+> [!IMPORTANT]
+> Before you see this as a **"Virus"** or **"Unofficial,"** please read:
+> - **Project Status:** This is the current active version of the Roblox Account Manager. While the original C# tool by **ic3w0lf22** is a classic, it has been discontinued. I (evanovar) have built this in Python to keep the project alive and updated.<br><br>
+> - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
+> - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
+
 # 🚀 Roblox Account Manager
 
 A powerful tool for managing multiple Roblox accounts with secure cookie extraction and modern UI interface.
