@@ -4075,6 +4075,15 @@ del /f /q "%~f0"
             check_presence_var = tk.BooleanVar(value=True)
             check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
             check_presence_check.pack(anchor="w", pady=(0, 10))
+
+            check_internet_var = tk.BooleanVar(value=True)
+            check_internet_check = ttk.Checkbutton(
+                form_frame,
+                text="Check internet connection before launching",
+                style="Dark.TCheckbutton",
+                variable=check_internet_var,
+            )
+            check_internet_check.pack(anchor="w", pady=(0, 10))
             
             def save_and_add():
                 selected_indices = account_listbox.curselection()
@@ -4100,7 +4109,8 @@ del /f /q "%~f0"
                     'job_id': job_id,
                     'check_interval': int(interval_spinbox.get()),
                     'max_retries': int(retry_spinbox.get()),
-                    'check_presence': check_presence_var.get()
+                    'check_presence': check_presence_var.get(),
+                    'check_internet_before_launch': check_internet_var.get()
                 }
                 
                 for account in selected_accounts:
@@ -4148,7 +4158,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            edit_window.geometry(f"400x400+{x}+{y}")
+            edit_window.geometry(f"400x430+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 edit_window.attributes("-topmost", True)
@@ -4201,6 +4211,15 @@ del /f /q "%~f0"
             check_presence_var = tk.BooleanVar(value=config.get('check_presence', True))
             check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
             check_presence_check.pack(anchor="w", pady=(0, 10))
+
+            check_internet_var = tk.BooleanVar(value=config.get('check_internet_before_launch', True))
+            check_internet_check = ttk.Checkbutton(
+                form_frame,
+                text="Check internet connection before launching",
+                style="Dark.TCheckbutton",
+                variable=check_internet_var,
+            )
+            check_internet_check.pack(anchor="w", pady=(0, 10))
             
             def save_edit():
                 place_id = place_entry.get().strip()
@@ -4219,7 +4238,8 @@ del /f /q "%~f0"
                     'job_id': job_id,
                     'check_interval': int(interval_spinbox.get()),
                     'max_retries': int(retry_spinbox.get()),
-                    'check_presence': check_presence_var.get()
+                    'check_presence': check_presence_var.get(),
+                    'check_internet_before_launch': check_internet_var.get()
                 }
                 
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
@@ -9097,6 +9117,20 @@ del /f /q "%~f0"
             return hwnd != 0
         except:
             return False
+
+    def _has_internet_connection(self, timeout=3):
+        test_urls = (
+            "https://www.google.com/generate_204",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+        )
+        for url in test_urls:
+            try:
+                resp = requests.get(url, timeout=timeout)
+                if resp.status_code < 500:
+                    return True
+            except Exception:
+                continue
+        return False
     
     def _wait_for_presence_slot(self, stop_event=None, min_gap_seconds=0.35):
         """Throttle Presence API checks so multiple accounts are checked sequentially."""
@@ -9170,11 +9204,31 @@ del /f /q "%~f0"
         retry_count = 0
         max_retries = config.get('max_retries', 5)
         check_interval = config.get('check_interval', 10)
+        check_internet_before_launch = bool(config.get('check_internet_before_launch', True))
+        last_internet_warning_time = 0.0
 
         def wait_next_check():
             base = max(3, int(check_interval))
             jitter = random.uniform(0.2, min(1.5, base * 0.2))
             return stop_event.wait(base + jitter)
+
+        def can_launch_now():
+            nonlocal last_internet_warning_time
+            if not check_internet_before_launch:
+                return True
+            if self._has_internet_connection(timeout=3):
+                return True
+
+            now = time.time()
+            if now - last_internet_warning_time > 60:
+                print(f"[Auto-Rejoin] [{account}] Internet unavailable, delaying launch.")
+                self.discord_manager.send_rejoin_embed(
+                    "Auto Rejoin — Waiting For Internet",
+                    f"**{account}** is waiting for internet before launching.",
+                    self.discord_manager.COLOR_WARNING
+                )
+                last_internet_warning_time = now
+            return False
 
         place_id = config.get('place_id')
         private_server = config.get('private_server', '')
@@ -9222,6 +9276,9 @@ del /f /q "%~f0"
             print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
         else:
             print(f"[Auto-Rejoin] [{account}] No pre-matched PID - launching game...")
+            while not stop_event.is_set() and not can_launch_now():
+                if wait_next_check():
+                    return
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
             if not success:
                 retry_count += 1
@@ -9295,6 +9352,11 @@ del /f /q "%~f0"
                             disconnect_detected = True
                 
                 if disconnect_detected:
+                    if not can_launch_now():
+                        if wait_next_check():
+                            break
+                        continue
+
                     retry_count += 1
                     consecutive_failed_checks = 0
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
