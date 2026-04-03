@@ -9,7 +9,7 @@ import sys
 import queue
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser
+from tkinter import ttk, messagebox, colorchooser, simpledialog
 import requests
 import threading
 import msvcrt
@@ -43,6 +43,7 @@ from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from classes.discord_manager import DiscordManager
+from utils.theme_manager import ThemeManager
 
 class AccountManagerUI:
     def __init__(self, root, manager, icon_path=None, discord_logo_path=None):
@@ -91,7 +92,7 @@ class AccountManagerUI:
             self.root.geometry(f"450x520+{saved_pos['x']}+{saved_pos['y']}")
         else:
             self.root.geometry("450x520")
-        self.root.configure(bg=self.settings.get("theme_bg_dark", "#2b2b2b"))
+        self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
         self.multi_roblox_handle = None
@@ -150,13 +151,26 @@ class AccountManagerUI:
             threading.Thread(target=self._global_screenshot_worker, daemon=True,
                              name="WebhookScreenshot").start()
 
-        self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
-        self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
-        self.BG_LIGHT = self.settings.get("theme_bg_light", "#4b4b4b")
-        self.FG_TEXT = self.settings.get("theme_fg_text", "white")
-        self.FG_ACCENT = self.settings.get("theme_fg_accent", "#0078D7")
-        self.FONT_FAMILY = self.settings.get("theme_font_family", "Segoe UI")
-        self.FONT_SIZE = self.settings.get("theme_font_size", 10)
+        self.theme_manager = ThemeManager(os.path.join(self.data_folder, "themes"))
+        selected_theme = self.settings.get("selected_theme", "Dark")
+        current_theme_config = self._load_current_theme_config()
+        if current_theme_config:
+            source_theme = str(current_theme_config.get("source_theme", selected_theme) or selected_theme)
+            base_data = self.theme_manager.load_theme(source_theme)
+            merged_data = self.theme_manager._merge_with_defaults(base_data)
+            merged_data = self.theme_manager._merge_with_defaults(current_theme_config)
+            self.current_theme_data = merged_data
+        else:
+            self.current_theme_data = self.theme_manager.load_theme(selected_theme)
+        
+        self.BG_DARK = self.current_theme_data["colors"].get("bg_dark", "#2b2b2b")
+        self.BG_MID = self.current_theme_data["colors"].get("bg_mid", "#3a3a3a")
+        self.BG_LIGHT = self.current_theme_data["colors"].get("bg_light", "#4b4b4b")
+        self.FG_TEXT = self.current_theme_data["colors"].get("fg_text", "white")
+        self.FG_ACCENT = self.current_theme_data["colors"].get("fg_accent", "#0078D7")
+        self.FONT_FAMILY = self.current_theme_data["fonts"].get("family", "Segoe UI")
+        self.FONT_SIZE = self.current_theme_data["fonts"].get("size_base", 10)
+        self.root.configure(bg=self.BG_DARK)
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -429,6 +443,435 @@ class AccountManagerUI:
         RobloxAPI.restore_installers()
         self.root.destroy()
 
+    def _deepcopy_theme_data(self, theme_data):
+        return json.loads(json.dumps(theme_data))
+
+    def _normalize_hex_color(self, value, fallback):
+        text = str(value or "").strip()
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+            return text
+
+        try:
+            rgb = self.root.winfo_rgb(text)
+            return "#{:02x}{:02x}{:02x}".format(rgb[0] // 256, rgb[1] // 256, rgb[2] // 256)
+        except Exception:
+            return fallback
+
+    def _apply_theme_data(self, theme_data, selected_theme_name=None, persist_selection=False):
+        merged_theme = self.theme_manager._merge_with_defaults(theme_data)
+
+        colors = merged_theme.get("colors", {})
+        fonts = merged_theme.get("fonts", {})
+        defaults = self.theme_manager.DEFAULT_THEME
+
+        self.BG_DARK = self._normalize_hex_color(colors.get("bg_dark"), defaults["colors"]["bg_dark"])
+        self.BG_MID = self._normalize_hex_color(colors.get("bg_mid"), defaults["colors"]["bg_mid"])
+        self.BG_LIGHT = self._normalize_hex_color(colors.get("bg_light"), defaults["colors"]["bg_light"])
+        self.FG_TEXT = self._normalize_hex_color(colors.get("fg_text"), defaults["colors"]["fg_text"])
+        self.FG_ACCENT = self._normalize_hex_color(colors.get("fg_accent"), defaults["colors"]["fg_accent"])
+
+        self.FONT_FAMILY = str(fonts.get("family", defaults["fonts"]["family"]))
+        try:
+            self.FONT_SIZE = max(8, min(24, int(fonts.get("size_base", defaults["fonts"]["size_base"]))))
+        except Exception:
+            self.FONT_SIZE = defaults["fonts"]["size_base"]
+
+        self.current_theme_data = self._deepcopy_theme_data(merged_theme)
+        self.current_theme_data["colors"]["bg_dark"] = self.BG_DARK
+        self.current_theme_data["colors"]["bg_mid"] = self.BG_MID
+        self.current_theme_data["colors"]["bg_light"] = self.BG_LIGHT
+        self.current_theme_data["colors"]["fg_text"] = self.FG_TEXT
+        self.current_theme_data["colors"]["fg_accent"] = self.FG_ACCENT
+        self.current_theme_data["fonts"]["family"] = self.FONT_FAMILY
+        self.current_theme_data["fonts"]["size_base"] = self.FONT_SIZE
+
+        self.root.configure(bg=self.BG_DARK)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Dark.TFrame", background=self.BG_DARK)
+        style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)))
+        style.map("Dark.TButton", background=[("active", self.BG_LIGHT)], foreground=[("active", self.FG_TEXT)])
+        style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
+        style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+        style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
+        style.configure("Dark.TRadiobutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
+        style.map("Dark.TRadiobutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
+        style.configure("TNotebook", background=self.BG_DARK, borderwidth=0)
+        style.configure("TNotebook.Tab", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor="none")
+        style.map("TNotebook.Tab", background=[("selected", self.BG_LIGHT)], focuscolor=[("!focus", "none")])
+        style.configure(
+            "ThemeEditor.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+        style.map(
+            "ThemeEditor.TCombobox",
+            fieldbackground=[("readonly", self.BG_MID)],
+            foreground=[("readonly", self.FG_TEXT)],
+            selectbackground=[("readonly", self.BG_MID)],
+            selectforeground=[("readonly", self.FG_TEXT)],
+        )
+
+        if hasattr(self, "settings_window") and self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.configure(bg=self.BG_DARK)
+
+        if hasattr(self, "star_btn") and self.star_btn:
+            self.star_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
+        if hasattr(self, "auto_rejoin_btn") and self.auto_rejoin_btn:
+            self.auto_rejoin_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
+        if hasattr(self, "discord_btn") and self.discord_btn:
+            self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
+
+        for widget_name in (
+            "topmost_check",
+            "multi_roblox_check",
+            "confirm_check",
+            "multi_select_check",
+            "disable_launch_popup_check",
+            "auto_tile_check",
+            "start_menu_check",
+            "rename_check",
+            "anti_afk_check",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget:
+                try:
+                    widget.configure(style="Dark.TCheckbutton")
+                except Exception:
+                    pass
+
+        settings_btn = getattr(self, "settings_btn", None)
+        if settings_btn:
+            try:
+                settings_btn.configure(bg=self.BG_DARK, fg=self.FG_TEXT, activebackground=self.BG_MID, activeforeground=self.FG_TEXT)
+            except Exception:
+                pass
+
+        for widget_name in (
+            "key_button",
+            "max_games_spinner",
+            "interval_spinner",
+            "amount_spinner",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget:
+                try:
+                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, buttonbackground=self.BG_LIGHT, readonlybackground=self.BG_MID, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT, insertbackground=self.FG_TEXT, highlightbackground=self.BG_LIGHT)
+                except Exception:
+                    pass
+
+        for widget_name in (
+            "theme_editor_shell",
+            "theme_editor_area",
+            "theme_editor_canvas",
+            "theme_editor_content",
+            "theme_color_section",
+            "theme_color_rows",
+            "theme_font_section",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget:
+                try:
+                    widget.configure(bg=self.BG_MID)
+                except Exception:
+                    pass
+
+        editor_widgets = getattr(self, "theme_editor_widgets", [])
+        color_swatch_widgets = getattr(self, "theme_color_swatch_widgets", {})
+        for widget in editor_widgets:
+            try:
+                if widget in color_swatch_widgets.values():
+                    continue
+                if isinstance(widget, tk.Entry):
+                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, insertbackground=self.FG_TEXT, highlightbackground=self.BG_LIGHT, highlightcolor=self.FG_ACCENT)
+                elif isinstance(widget, tk.Button):
+                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT)
+                elif isinstance(widget, tk.Checkbutton):
+                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectcolor=self.BG_LIGHT, activebackground=self.BG_MID, activeforeground=self.FG_TEXT)
+                elif isinstance(widget, tk.Label):
+                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT)
+                elif isinstance(widget, tk.Frame):
+                    widget.configure(bg=self.BG_MID)
+            except Exception:
+                pass
+
+        color_vars = getattr(self, "theme_color_vars", {})
+        for key, swatch in color_swatch_widgets.items():
+            try:
+                value = color_vars.get(key).get().strip() if key in color_vars else ""
+                if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                    swatch.configure(bg=value)
+            except Exception:
+                pass
+
+        for widget_name in ("theme_family_combo",):
+            widget = getattr(self, widget_name, None)
+            if widget:
+                try:
+                    widget.configure(style="ThemeEditor.TCombobox")
+                except Exception:
+                    pass
+
+        if hasattr(self, "account_list") and self.account_list:
+            self.account_list.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT)
+        if hasattr(self, "game_list") and self.game_list:
+            self.game_list.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT)
+        if hasattr(self, "encryption_label") and self.encryption_label:
+            self.encryption_label.configure(bg=self.BG_DARK)
+
+        if hasattr(self, "account_list"):
+            try:
+                self.refresh_accounts()
+            except Exception:
+                pass
+        if hasattr(self, "game_list"):
+            try:
+                self.refresh_game_list()
+            except Exception:
+                pass
+
+        if persist_selection and selected_theme_name:
+            self.settings["selected_theme"] = selected_theme_name
+            self.save_settings()
+
+    def _get_current_theme_config_path(self):
+        return os.path.join(self.data_folder, "themes", "current_theme.json")
+
+    def _load_current_theme_config(self):
+        path = self._get_current_theme_config_path()
+        if not os.path.exists(path):
+            return None
+
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as exc:
+            print(f"[ERROR] Failed to load current theme config: {exc}")
+            return None
+
+    def _save_current_theme_config(self, theme_data, source_theme_name="Dark"):
+        path = self._get_current_theme_config_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            current_theme_data = self._deepcopy_theme_data(theme_data)
+            current_theme_data.pop("metadata", None)
+            current_theme_data["source_theme"] = source_theme_name or "Dark"
+
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(current_theme_data, handle, indent=2)
+            return True
+        except Exception as exc:
+            print(f"[ERROR] Failed to save current theme config: {exc}")
+            return False
+
+    def open_theme_manager(self, parent=None, on_themes_changed=None):
+        if hasattr(self, "theme_manager_window") and self.theme_manager_window and self.theme_manager_window.winfo_exists():
+            self.theme_manager_window.lift()
+            self.theme_manager_window.focus()
+            return
+
+        owner = parent if parent and parent.winfo_exists() else self.root
+        manager_window = tk.Toplevel(owner)
+        self.theme_manager_window = manager_window
+        self.apply_window_icon(manager_window)
+        manager_window.title("Theme Manager")
+        manager_window.configure(bg=self.BG_DARK)
+        manager_window.geometry("680x420")
+        manager_window.resizable(False, False)
+        manager_window.transient(owner)
+
+        if self.settings.get("enable_topmost", False):
+            manager_window.attributes("-topmost", True)
+
+        if owner is not self.root:
+            manager_window.grab_set()
+
+        container = ttk.Frame(manager_window, style="Dark.TFrame")
+        container.pack(fill="both", expand=True, padx=12, pady=12)
+
+        ttk.Label(
+            container,
+            text="Themes",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w", pady=(0, 6))
+
+        list_shell = tk.Frame(container, bg=self.BG_MID, relief="solid", borderwidth=1)
+        list_shell.pack(fill="both", expand=True)
+
+        header = tk.Frame(list_shell, bg=self.BG_LIGHT)
+        header.pack(fill="x")
+        tk.Label(header, text="Name", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w", width=18).pack(side="left", padx=(8, 4), pady=6)
+        tk.Label(header, text="Author", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w", width=16).pack(side="left", padx=4, pady=6)
+        tk.Label(header, text="Description", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w").pack(side="left", fill="x", expand=True, padx=4, pady=6)
+
+        list_body = tk.Frame(list_shell, bg=self.BG_MID)
+        list_body.pack(fill="both", expand=True)
+
+        theme_list_scroll = tk.Scrollbar(list_body, orient="vertical")
+        theme_list_scroll.pack(side="right", fill="y")
+
+        theme_list_canvas = tk.Canvas(list_body, bg=self.BG_MID, highlightthickness=0, yscrollcommand=theme_list_scroll.set)
+        theme_list_canvas.pack(side="left", fill="both", expand=True)
+        theme_list_scroll.config(command=theme_list_canvas.yview)
+
+        theme_list_container = tk.Frame(theme_list_canvas, bg=self.BG_MID)
+        theme_list_window = theme_list_canvas.create_window((0, 0), window=theme_list_container, anchor="nw")
+
+        def _sync_theme_list_scrollregion(_event=None):
+            theme_list_canvas.configure(scrollregion=theme_list_canvas.bbox("all"))
+
+        def _sync_theme_list_width(event):
+            theme_list_canvas.itemconfigure(theme_list_window, width=event.width)
+
+        theme_list_container.bind("<Configure>", _sync_theme_list_scrollregion)
+        theme_list_canvas.bind("<Configure>", _sync_theme_list_width)
+
+        selected_theme_name = [None]
+        row_widgets = {}
+
+        def _set_row_selected(name):
+            selected_theme_name[0] = name
+            for row_name, widgets in row_widgets.items():
+                is_selected = row_name == name
+                row_bg = self.BG_LIGHT if is_selected else self.BG_MID
+                for widget in widgets:
+                    try:
+                        widget.configure(bg=row_bg)
+                    except Exception:
+                        pass
+
+        def refresh_theme_list(select_name=None):
+            for child in theme_list_container.winfo_children():
+                child.destroy()
+            row_widgets.clear()
+
+            catalog = self.theme_manager.get_available_themes()
+            names = sorted(catalog.keys(), key=str.lower)
+
+            for name in names:
+                data = self.theme_manager.load_theme(name)
+                metadata = data.get("metadata", {})
+                author = str(metadata.get("author", ""))
+                description = str(metadata.get("description", ""))
+
+                row = tk.Frame(theme_list_container, bg=self.BG_MID)
+                row.pack(fill="x", padx=4, pady=1)
+                name_label = tk.Label(row, text=name, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", width=18, font=(self.FONT_FAMILY, 9))
+                author_label = tk.Label(row, text=author, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", width=16, font=(self.FONT_FAMILY, 9))
+                desc_label = tk.Label(row, text=description, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", font=(self.FONT_FAMILY, 9))
+                name_label.pack(side="left", padx=(8, 4), pady=5)
+                author_label.pack(side="left", padx=4, pady=5)
+                desc_label.pack(side="left", fill="x", expand=True, padx=4, pady=5)
+
+                row_widgets[name] = [row, name_label, author_label, desc_label]
+                for widget in row_widgets[name]:
+                    widget.bind("<Button-1>", lambda _event, n=name: _set_row_selected(n))
+
+            preferred = select_name
+            if not preferred and selected_theme_name[0] in names:
+                preferred = selected_theme_name[0]
+            if not preferred and names:
+                preferred = names[0]
+            if preferred:
+                for name in names:
+                    if name.lower() == str(preferred).lower():
+                        preferred = name
+                        break
+                _set_row_selected(preferred)
+
+        def get_selected_theme_name():
+            return selected_theme_name[0]
+
+        def import_theme():
+            path = filedialog.askopenfilename(
+                title="Import Theme JSON",
+                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+                parent=manager_window,
+            )
+            if not path:
+                return
+
+            if not self.theme_manager.import_theme(path):
+                messagebox.showerror("Import Failed", "Could not import this theme file.", parent=manager_window)
+                return
+
+            imported_name = None
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    imported_name = json.load(f).get("metadata", {}).get("name")
+            except Exception:
+                imported_name = None
+
+            refresh_theme_list(select_name=imported_name)
+            if callable(on_themes_changed):
+                on_themes_changed(imported_name)
+
+        def export_theme():
+            selected_name = get_selected_theme_name()
+            if not selected_name:
+                messagebox.showwarning("Export Theme", "Select a theme to export.", parent=manager_window)
+                return
+
+            path = filedialog.asksaveasfilename(
+                title="Export Theme",
+                defaultextension=".json",
+                initialfile=f"{selected_name}.json",
+                filetypes=[("JSON Files", "*.json")],
+                parent=manager_window,
+            )
+            if not path:
+                return
+
+            if not self.theme_manager.export_theme(selected_name, path):
+                messagebox.showerror("Export Failed", "Could not export theme.", parent=manager_window)
+                return
+
+        def remove_theme():
+            selected_name = get_selected_theme_name()
+            if not selected_name:
+                messagebox.showwarning("Remove Theme", "Select a theme to remove.", parent=manager_window)
+                return
+
+            themes = self.theme_manager.get_available_themes()
+            if selected_name not in themes:
+                messagebox.showwarning("Remove Theme", "Theme not found.", parent=manager_window)
+                return
+
+            if not messagebox.askyesno("Remove Theme", f"Remove '{selected_name}'?", parent=manager_window):
+                return
+
+            if not self.theme_manager.delete_theme(selected_name):
+                messagebox.showerror("Remove Failed", "Could not remove theme.", parent=manager_window)
+                return
+
+            refresh_theme_list()
+            if callable(on_themes_changed):
+                on_themes_changed(None)
+
+        button_row = ttk.Frame(container, style="Dark.TFrame")
+        button_row.pack(fill="x", pady=(8, 0))
+
+        ttk.Button(button_row, text="Import", style="Dark.TButton", command=import_theme).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(button_row, text="Export", style="Dark.TButton", command=export_theme).pack(side="left", fill="x", expand=True, padx=4)
+        ttk.Button(button_row, text="Remove", style="Dark.TButton", command=remove_theme).pack(side="left", fill="x", expand=True, padx=4)
+        ttk.Button(button_row, text="Close", style="Dark.TButton", command=manager_window.destroy).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        def on_close_manager():
+            self.theme_manager_window = None
+            manager_window.destroy()
+
+        manager_window.protocol("WM_DELETE_WINDOW", on_close_manager)
+        refresh_theme_list()
+
     def load_settings(self):
         """Load UI settings from file"""
         try:
@@ -455,6 +898,7 @@ class AccountManagerUI:
                     "multi_roblox_method": "default",
                     "last_joined_user": "",
                     "auto_tile_windows": False,
+                    "selected_theme": "Dark",
                     "rejoin_webhook": {}
                 }
         except:
@@ -477,6 +921,7 @@ class AccountManagerUI:
                 "multi_roblox_method": "default",
                 "last_joined_user": "",
                 "auto_tile_windows": False,
+                "selected_theme": "Dark",
                 "rejoin_webhook": {}
             }
 
@@ -500,9 +945,11 @@ class AccountManagerUI:
         return launcher_pref, custom_path
 
     def apply_window_icon(self, window):
-        if self.icon_path and os.path.exists(self.icon_path):
+        icon_path = self.icon_path
+
+        if icon_path and os.path.exists(icon_path):
             try:
-                window.iconbitmap(self.icon_path)
+                window.iconbitmap(icon_path)
             except Exception as e:
                 print(f"[ERROR] Could not set window icon: {e}")
 
@@ -4900,6 +5347,13 @@ del /f /q "%~f0"
         
         def on_settings_close():
             """Save window position before closing"""
+            save_current_theme = getattr(self, "_theme_editor_save_current_config", None)
+            if callable(save_current_theme):
+                try:
+                    save_current_theme()
+                except Exception as exc:
+                    print(f"[ERROR] Failed to save current theme config on close: {exc}")
+
             self.settings['settings_window_position'] = {
                 'x': settings_window.winfo_x(),
                 'y': settings_window.winfo_y()
@@ -4956,7 +5410,7 @@ del /f /q "%~f0"
         style = ttk.Style()
         style.theme_use('clam')
         style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
-        style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=("Segoe UI", 9), focuscolor='none')
+        style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor='none')
         style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
         
         main_frame = ttk.Frame(general_tab, style="Dark.TFrame")
@@ -4971,8 +5425,8 @@ del /f /q "%~f0"
         checkbox_style.configure(
             "Dark.TCheckbutton",
             background=self.BG_DARK,
-            foreground="white",
-            font=("Segoe UI", 10)
+            foreground=self.FG_TEXT,
+            font=(self.FONT_FAMILY, self.FONT_SIZE)
         )
         
         def auto_save_setting(setting_name, var):
@@ -5016,10 +5470,11 @@ del /f /q "%~f0"
             command=auto_save_setting("enable_topmost", topmost_var)
         )
         topmost_check.pack(anchor="w", pady=2)
-        
+        self.topmost_check = topmost_check
+
         multi_roblox_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         multi_roblox_frame.pack(anchor="w", fill="x", pady=2)
-        
+
         multi_roblox_check = ttk.Checkbutton(
             multi_roblox_frame,
             text="Enable Multi Roblox + 773 fix",
@@ -5028,11 +5483,12 @@ del /f /q "%~f0"
             command=on_multi_roblox_toggle
         )
         multi_roblox_check.pack(side="left", anchor="w")
-        
+        self.multi_roblox_check = multi_roblox_check
+
         def open_method_settings():
             """Open Multi Roblox method selection window"""
             self.open_multi_roblox_method_settings()
-        
+
         settings_btn = tk.Button(
             multi_roblox_frame,
             text="⚙️",
@@ -5046,7 +5502,8 @@ del /f /q "%~f0"
             padx=5
         )
         settings_btn.pack(side="right", padx=(5, 0))
-        
+        self.settings_btn = settings_btn
+
         confirm_check = ttk.Checkbutton(
             main_frame,
             text="Confirm Before Launch",
@@ -5055,7 +5512,8 @@ del /f /q "%~f0"
             command=auto_save_setting("confirm_before_launch", confirm_launch_var)
         )
         confirm_check.pack(anchor="w", pady=2)
-        
+        self.confirm_check = confirm_check
+
         multi_select_check = ttk.Checkbutton(
             main_frame,
             text="Multi Select (Ctrl + Click)",
@@ -5064,7 +5522,8 @@ del /f /q "%~f0"
             command=on_multi_select_toggle
         )
         multi_select_check.pack(anchor="w", pady=2)
-        
+        self.multi_select_check = multi_select_check
+
         disable_launch_popup_var = tk.BooleanVar(value=self.settings.get("disable_launch_popup", False))
         disable_launch_popup_check = ttk.Checkbutton(
             main_frame,
@@ -5074,7 +5533,8 @@ del /f /q "%~f0"
             command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
         )
         disable_launch_popup_check.pack(anchor="w", pady=2)
-        
+        self.disable_launch_popup_check = disable_launch_popup_check
+
         auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
         auto_tile_check = ttk.Checkbutton(
             main_frame,
@@ -5084,24 +5544,25 @@ del /f /q "%~f0"
             command=auto_save_setting("auto_tile_windows", auto_tile_windows_var)
         )
         auto_tile_check.pack(anchor="w", pady=2)
-        
+        self.auto_tile_check = auto_tile_check
+
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
             start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
             shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
             return os.path.exists(shortcut_path)
-        
+
         def toggle_start_menu_shortcut():
             """Create or remove Start Menu shortcut"""
             start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
             shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
-            
+
             if start_menu_var.get():
                 try:
                     exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
                     if not getattr(sys, 'frozen', False):
                         exe_path = os.path.abspath(sys.argv[0])
-                    
+
                     ps_script = f'''
                     $WshShell = New-Object -comObject WScript.Shell
                     $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
@@ -5110,8 +5571,7 @@ del /f /q "%~f0"
                     $Shortcut.Description = "Roblox Account Manager"
                     $Shortcut.Save()
                     '''
-                    subprocess.run(["powershell", "-Command", ps_script], 
-                                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    subprocess.run(["powershell", "-Command", ps_script], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
                     print("[INFO] Start Menu shortcut created")
                 except Exception as e:
                     print(f"[ERROR] Failed to create Start Menu shortcut: {e}")
@@ -5123,7 +5583,7 @@ del /f /q "%~f0"
                         print("[INFO] Start Menu shortcut removed")
                 except Exception as e:
                     print(f"[ERROR] Failed to remove Start Menu shortcut: {e}")
-        
+
         start_menu_var = tk.BooleanVar(value=is_start_menu_shortcut_present())
         start_menu_check = ttk.Checkbutton(
             main_frame,
@@ -5133,19 +5593,20 @@ del /f /q "%~f0"
             command=toggle_start_menu_shortcut
         )
         start_menu_check.pack(anchor="w", pady=2)
-        
+        self.start_menu_check = start_menu_check
+
         max_games_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         max_games_frame.pack(fill="x", pady=2)
-        
+
         ttk.Label(
-            max_games_frame, 
-            text="Max Recent Games:", 
+            max_games_frame,
+            text="Max Recent Games:",
             style="Dark.TLabel",
             font=("Segoe UI", 10)
         ).pack(side="left")
-        
+
         max_games_var = tk.IntVar(value=self.settings.get("max_recent_games", 10))
-        
+
         def on_max_games_change():
             try:
                 new_value = max_games_var.get()
@@ -5157,7 +5618,7 @@ del /f /q "%~f0"
                     self.refresh_game_list()
             except:
                 pass
-        
+
         max_games_spinner = tk.Spinbox(
             max_games_frame,
             from_=5,
@@ -5178,10 +5639,11 @@ del /f /q "%~f0"
             highlightthickness=0
         )
         max_games_spinner.pack(side="right")
-        
+        self.max_games_spinner = max_games_spinner
+
         max_games_spinner.bind("<KeyRelease>", lambda e: on_max_games_change())
         max_games_spinner.bind("<FocusOut>", lambda e: on_max_games_change())
-        
+
         ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
         
         console_button = ttk.Button(
@@ -5465,13 +5927,15 @@ del /f /q "%~f0"
             else:
                 self.stop_anti_afk()
         
-        ttk.Checkbutton(
+        anti_afk_check = ttk.Checkbutton(
             roblox_frame,
             text="Enable Anti-AFK",
             variable=anti_afk_var,
             style="Dark.TCheckbutton",
             command=on_anti_afk_toggle
-        ).pack(anchor="w", pady=2)
+        )
+        anti_afk_check.pack(anchor="w", pady=2)
+        self.anti_afk_check = anti_afk_check
         
         settings_frame = ttk.Frame(roblox_frame, style="Dark.TFrame")
         settings_frame.pack(fill="x", pady=(5, 0))
@@ -5495,6 +5959,7 @@ del /f /q "%~f0"
             width=14
         )
         key_button.pack(side="right")
+        self.key_button = key_button
         
         def start_key_recording():
             key_button.config(text="Press...")
@@ -5599,6 +6064,7 @@ del /f /q "%~f0"
             highlightthickness=0
         )
         interval_spinner.pack(side="right")
+        self.interval_spinner = interval_spinner
         
         interval_spinner.bind("<KeyRelease>", lambda e: on_interval_change())
         interval_spinner.bind("<FocusOut>", lambda e: on_interval_change())
@@ -5643,6 +6109,7 @@ del /f /q "%~f0"
             highlightthickness=0
         )
         amount_spinner.pack(side="right")
+        self.amount_spinner = amount_spinner
         
         amount_spinner.bind("<KeyRelease>", lambda e: on_amount_change())
         amount_spinner.bind("<FocusOut>", lambda e: on_amount_change())
@@ -5658,228 +6125,518 @@ del /f /q "%~f0"
         
         themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
         themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
-    
-        def create_color_picker(parent, label_text, current_color, setting_key):
-            frame = ttk.Frame(parent, style="Dark.TFrame")
-            frame.pack(fill="x", pady=3)
-            
-            ttk.Label(
-                frame,
-                text=label_text,
-                style="Dark.TLabel",
-                font=("Segoe UI", 9)
-            ).pack(side="left")
-            
-            color_display = tk.Frame(frame, bg=current_color, width=30, height=20, relief="solid", borderwidth=1)
-            color_display.pack(side="right", padx=(5, 0))
-            
-            def pick_color():
-                color = colorchooser.askcolor(initialcolor=current_color, title=f"Choose {label_text}")
-                if color[1]:
-                    color_display.config(bg=color[1])
-                    self.settings[setting_key] = color[1]
-                    self.save_settings()
-            
-            color_display.bind("<Button-1>", lambda e: pick_color())
-            
-            return frame
-        
-        create_color_picker(themes_frame, "Background Dark:", self.BG_DARK, "theme_bg_dark")
-        create_color_picker(themes_frame, "Background Mid:", self.BG_MID, "theme_bg_mid")
-        create_color_picker(themes_frame, "Background Light:", self.BG_LIGHT, "theme_bg_light")
-        create_color_picker(themes_frame, "Text Color:", self.FG_TEXT, "theme_fg_text")
-        create_color_picker(themes_frame, "Accent Color:", self.FG_ACCENT, "theme_fg_accent")
-        
-        ttk.Label(themes_frame, text="", style="Dark.TLabel").pack(pady=5)
-        
-        font_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
-        font_frame.pack(fill="x", pady=3)
-        
+
+        theme_state = {
+            "loaded_theme_name": self.settings.get("selected_theme", "Dark"),
+            "base_theme_data": None,
+            "theme_is_dirty": False,
+            "suspend_dirty_events": False,
+        }
+
+        theme_title_var = tk.StringVar(value=f"Theme: {theme_state['loaded_theme_name']}")
+        theme_selector_var = tk.StringVar()
+        theme_status_var = tk.StringVar(value="")
+
+        theme_catalog = {}
+
+        def set_theme_title(text):
+            theme_title_var.set(f"Theme: {text}")
+
+        def refresh_theme_catalog(preferred_name=None):
+            nonlocal theme_catalog
+            theme_catalog = self.theme_manager.get_available_themes()
+            theme_names = sorted(theme_catalog.keys(), key=str.lower)
+            theme_selector["values"] = theme_names
+
+            target = preferred_name or theme_state["loaded_theme_name"]
+            if target not in theme_catalog:
+                for name in theme_names:
+                    if name.lower() == str(target).lower():
+                        target = name
+                        break
+            if target not in theme_catalog and theme_names:
+                target = theme_names[0]
+
+            theme_selector_var.set(target or "")
+
+        header_row = ttk.Frame(themes_frame, style="Dark.TFrame")
+        header_row.pack(fill="x", pady=(0, 8))
+
         ttk.Label(
-            font_frame,
-            text="Font Family:",
+            header_row,
+            textvariable=theme_title_var,
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 10, "bold")
+        ).pack(side="left")
+
+        def open_theme_manager_from_settings():
+            self.open_theme_manager(parent=settings_window, on_themes_changed=lambda preferred=None: refresh_theme_catalog(preferred))
+
+        ttk.Button(
+            header_row,
+            text="Themes",
+            style="Dark.TButton",
+            command=open_theme_manager_from_settings
+        ).pack(side="right")
+
+        selector_row = ttk.Frame(themes_frame, style="Dark.TFrame")
+        selector_row.pack(fill="x", pady=(0, 8))
+
+        ttk.Label(
+            selector_row,
+            text="Load Theme:",
             style="Dark.TLabel",
             font=(self.FONT_FAMILY, 9)
-        ).pack(side="left")
-        
-        font_var = tk.StringVar(value=self.FONT_FAMILY)
-        font_options = ["Segoe UI", "Arial", "Calibri", "Consolas", "Courier New", "Times New Roman", "Verdana"]
-        
-        font_menu = ttk.Combobox(
-            font_frame,
-            textvariable=font_var,
-            values=font_options,
+        ).pack(side="left", padx=(0, 6))
+
+        theme_selector = ttk.Combobox(
+            selector_row,
+            textvariable=theme_selector_var,
             state="readonly",
-            width=15,
-            font=(self.FONT_FAMILY, 9)
+            width=28
         )
-        font_menu.pack(side="right")
-        
-        def on_font_change(event=None):
-            self.settings["theme_font_family"] = font_var.get()
-            self.save_settings()
-        
-        font_menu.bind("<<ComboboxSelected>>", on_font_change)
-        
-        size_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
-        size_frame.pack(fill="x", pady=3)
-        
-        ttk.Label(
-            size_frame,
-            text="Font Size:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        ).pack(side="left")
-        
-        size_var = tk.IntVar(value=self.FONT_SIZE)
-        
-        def on_size_change():
-            try:
-                new_size = size_var.get()
-                if new_size < 8:
-                    size_var.set(8)
-                    new_size = 8
-                elif new_size > 16:
-                    size_var.set(16)
-                    new_size = 16
-                self.settings["theme_font_size"] = new_size
-                self.save_settings()
-            except:
-                pass
-        
-        self.size_spinner = tk.Spinbox(
-            size_frame,
-            from_=8,
-            to=16,
-            textvariable=size_var,
-            width=8,
+        theme_selector.pack(side="left", fill="x", expand=True)
+
+        editor_box_height = 220
+        editor_shell = tk.Frame(
+            themes_frame,
             bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            command=on_size_change,
-            readonlybackground=self.BG_MID,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
+            relief="solid",
             borderwidth=1,
-            highlightthickness=0
+            height=editor_box_height,
         )
-        self.size_spinner.pack(side="right")
-        
-        self.size_spinner.bind("<FocusOut>", lambda e: on_size_change())
-        self.size_spinner.bind("<Return>", lambda e: on_size_change())
-        
-        
-        ttk.Label(themes_frame, text="", style="Dark.TLabel").pack(pady=5)
-        
-        def apply_theme():
-            self.BG_DARK = self.settings.get("theme_bg_dark", "#2b2b2b")
-            self.BG_MID = self.settings.get("theme_bg_mid", "#3a3a3a")
-            self.BG_LIGHT = self.settings.get("theme_bg_light", "#4b4b4b")
-            self.FG_TEXT = self.settings.get("theme_fg_text", "white")
-            self.FG_ACCENT = self.settings.get("theme_fg_accent", "#0078D7")
-            self.FONT_FAMILY = self.settings.get("theme_font_family", "Segoe UI")
-            self.FONT_SIZE = self.settings.get("theme_font_size", 10)
-            
-            self.root.configure(bg=self.BG_DARK)
-            if hasattr(self, 'settings_window') and self.settings_window:
-                self.settings_window.configure(bg=self.BG_DARK)
-            if hasattr(self, 'star_btn') and self.star_btn:
-                self.star_btn.config(bg=self.BG_DARK)
-            if hasattr(self, 'auto_rejoin_btn') and self.auto_rejoin_btn:
-                self.auto_rejoin_btn.config(bg=self.BG_DARK)
-            if hasattr(self, 'discord_btn') and self.discord_btn:
-                self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
-            if hasattr(self, 'discord_btn') and self.discord_btn:
-                self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
-            
-            style = ttk.Style()
-            style.configure("Dark.TFrame", background=self.BG_DARK)
-            style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-            style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE - 1))
-            style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
-            style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
-            style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-            style.configure("Dark.TRadiobutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-            style.map("Dark.TRadiobutton", background=[('active', self.BG_DARK)], foreground=[('active', self.FG_TEXT)])
-            
-            style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
-            style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, 9), focuscolor='none')
-            style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
-            
-            settings_window.configure(bg=self.BG_DARK)
-            
-            self.account_list.configure(
+        editor_shell.pack(fill="x", expand=False, pady=(0, 8))
+        editor_shell.pack_propagate(False)
+        self.theme_editor_shell = editor_shell
+
+        editor_area = tk.Frame(editor_shell, bg=self.BG_MID)
+        editor_area.pack(fill="both", expand=True, padx=8, pady=8)
+        self.theme_editor_area = editor_area
+
+        editor_scrollbar = tk.Scrollbar(editor_area, orient="vertical")
+        editor_scrollbar.pack(side="left", fill="y", padx=(0, 8))
+        editor_scrollbar.config(width=10)
+
+        editor_canvas = tk.Canvas(
+            editor_area,
+            bg=self.BG_MID,
+            highlightthickness=0,
+            yscrollcommand=editor_scrollbar.set,
+            height=editor_box_height,
+        )
+        editor_canvas.pack(side="left", fill="both", expand=True)
+        editor_scrollbar.config(command=editor_canvas.yview)
+        self.theme_editor_canvas = editor_canvas
+
+        editor_content = tk.Frame(editor_canvas, bg=self.BG_MID)
+        editor_window = editor_canvas.create_window((0, 0), window=editor_content, anchor="nw")
+        self.theme_editor_content = editor_content
+        self.theme_editor_widgets = []
+
+        style = ttk.Style()
+        style.configure(
+            "ThemeEditor.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+
+        def _sync_editor_scrollregion(_event=None):
+            editor_canvas.configure(scrollregion=editor_canvas.bbox("all"))
+
+        def _sync_editor_width(event):
+            editor_canvas.itemconfigure(editor_window, width=event.width)
+
+        editor_content.bind("<Configure>", _sync_editor_scrollregion)
+        editor_canvas.bind("<Configure>", _sync_editor_width)
+
+        def _scroll_editor(event):
+            editor_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+
+        def _bind_mousewheel_recursive(widget):
+            widget.bind("<MouseWheel>", _scroll_editor)
+            for child in widget.winfo_children():
+                _bind_mousewheel_recursive(child)
+
+        def _refresh_editor_mousewheel_bindings(*_):
+            _bind_mousewheel_recursive(editor_shell)
+
+        editor_shell.bind("<Enter>", _refresh_editor_mousewheel_bindings)
+        editor_shell.bind("<Leave>", lambda _event: editor_canvas.unbind_all("<MouseWheel>"))
+
+        current_theme_config = self._load_current_theme_config()
+        initial_theme_name = self.settings.get("selected_theme", "Dark")
+        if current_theme_config:
+            initial_theme_name = str(current_theme_config.get("source_theme", initial_theme_name) or initial_theme_name)
+
+        theme_state = {
+            "loaded_theme_name": initial_theme_name,
+            "base_theme_name": initial_theme_name,
+            "base_theme_data": None,
+            "theme_is_dirty": False,
+            "suspend_dirty_events": False,
+        }
+
+        color_keys = [
+            ("bg_dark", "Background Dark"),
+            ("bg_mid", "Background Mid"),
+            ("bg_light", "Background Light"),
+            ("fg_text", "Text Color"),
+            ("fg_accent", "Accent Color"),
+        ]
+
+        color_vars = {key: tk.StringVar() for key, _ in color_keys}
+        self.theme_color_vars = color_vars
+
+        font_field_defaults = {
+            "family": self.theme_manager.DEFAULT_THEME["fonts"]["family"],
+            "size_base": str(self.theme_manager.DEFAULT_THEME["fonts"]["size_base"]),
+        }
+        font_vars = {key: tk.StringVar(value=value) for key, value in font_field_defaults.items()}
+
+        def _validated_font_size(text_value, fallback):
+            try:
+                return max(6, min(36, int(str(text_value).strip())))
+            except Exception:
+                return fallback
+
+        def get_editor_theme_data():
+            data = self._deepcopy_theme_data(theme_state["base_theme_data"] or self.theme_manager.DEFAULT_THEME)
+            colors = data.setdefault("colors", {})
+            fonts = data.setdefault("fonts", {})
+
+            for key, _label in color_keys:
+                colors[key] = self._normalize_hex_color(color_vars[key].get(), self.theme_manager.DEFAULT_THEME["colors"].get(key, "#000000"))
+
+            fonts["family"] = font_vars["family"].get().strip() or self.theme_manager.DEFAULT_THEME["fonts"]["family"]
+            fonts["size_base"] = _validated_font_size(font_vars["size_base"].get(), 10)
+
+            return data
+
+        def theme_data_matches_base(current_data):
+            base_data = theme_state["base_theme_data"] or self.theme_manager.DEFAULT_THEME
+            current_colors = current_data.get("colors", {})
+            base_colors = base_data.get("colors", {})
+            current_fonts = current_data.get("fonts", {})
+            base_fonts = base_data.get("fonts", {})
+            for key, _label in color_keys:
+                if self._normalize_hex_color(current_colors.get(key), "") != self._normalize_hex_color(base_colors.get(key), ""):
+                    return False
+            for key in ("family", "size_base"):
+                if str(current_fonts.get(key, "")).strip() != str(base_fonts.get(key, "")).strip():
+                    return False
+            return True
+
+        def update_theme_title_from_state(current_data=None):
+            if theme_state["theme_is_dirty"]:
+                set_theme_title("Custom")
+                return
+            loaded_name = theme_state["loaded_theme_name"] or "Dark"
+            if current_data is not None and not theme_data_matches_base(current_data):
+                theme_state["theme_is_dirty"] = True
+                set_theme_title("Custom")
+            else:
+                set_theme_title(loaded_name)
+
+        def set_status(text):
+            theme_status_var.set(text)
+
+        def mark_theme_dirty(*_):
+            if theme_state["suspend_dirty_events"]:
+                return
+            current_data = get_editor_theme_data()
+            theme_state["theme_is_dirty"] = not theme_data_matches_base(current_data)
+            update_theme_title_from_state(current_data)
+            set_status("Unsaved changes" if theme_state["theme_is_dirty"] else "")
+
+        for var in color_vars.values():
+            var.trace_add("write", mark_theme_dirty)
+        for var in font_vars.values():
+            var.trace_add("write", mark_theme_dirty)
+        def apply_theme_to_editor(theme_name, theme_data_override=None):
+            resolved = theme_name
+            if resolved not in theme_catalog:
+                for existing in theme_catalog.keys():
+                    if existing.lower() == str(theme_name).lower():
+                        resolved = existing
+                        break
+            if resolved not in theme_catalog:
+                return
+
+            base_theme_data = self.theme_manager.load_theme(resolved)
+            merged = self.theme_manager._merge_with_defaults(theme_data_override or base_theme_data)
+            theme_state["suspend_dirty_events"] = True
+            theme_state["base_theme_name"] = resolved
+            theme_state["base_theme_data"] = self._deepcopy_theme_data(base_theme_data)
+            for key, _label in color_keys:
+                color_vars[key].set(str(merged.get("colors", {}).get(key, self.theme_manager.DEFAULT_THEME["colors"].get(key, "#000000"))))
+            fonts = merged.get("fonts", {})
+            font_vars["family"].set(str(fonts.get("family", self.theme_manager.DEFAULT_THEME["fonts"]["family"])))
+            font_vars["size_base"].set(str(int(fonts.get("size_base", 10))))
+            theme_state["suspend_dirty_events"] = False
+
+            theme_state["loaded_theme_name"] = resolved
+            theme_state["theme_is_dirty"] = not theme_data_matches_base(merged)
+            theme_selector_var.set(resolved)
+            set_theme_title("Custom" if theme_state["theme_is_dirty"] else resolved)
+            set_status("")
+
+        def on_theme_selector_change(_event=None):
+            selected_name = theme_selector_var.get().strip()
+            if selected_name:
+                apply_theme_to_editor(selected_name)
+
+        theme_selector.bind("<<ComboboxSelected>>", on_theme_selector_change)
+
+        def choose_theme_color(setting_key, label_text):
+            current_color = color_vars[setting_key].get() or "#000000"
+            picked = colorchooser.askcolor(initialcolor=current_color, title=f"Choose {label_text}", parent=settings_window)
+            if picked and picked[1]:
+                color_vars[setting_key].set(picked[1])
+
+        color_section = tk.Frame(editor_content, bg=self.BG_MID)
+        color_section.pack(fill="x", pady=(0, 8))
+        self.theme_color_section = color_section
+
+        color_header = tk.Label(color_section, text="Colors", bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10, "bold"))
+        color_header.pack(anchor="w", pady=(0, 4))
+        self.theme_editor_widgets.append(color_header)
+
+        color_rows = tk.Frame(color_section, bg=self.BG_MID)
+        color_rows.pack(fill="x")
+        self.theme_color_rows = color_rows
+
+        color_swatches = {}
+        self.theme_color_swatch_widgets = color_swatches
+
+        def make_color_row(parent, key, label_text):
+            row = tk.Frame(parent, bg=self.BG_MID)
+            row.pack(fill="x", pady=2)
+
+            label = tk.Label(row, text=label_text, bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 8), width=18, anchor="w")
+            label.pack(side="left")
+            self.theme_editor_widgets.append(label)
+            self.theme_editor_widgets.append(row)
+
+            entry = tk.Entry(
+                row,
+                textvariable=color_vars[key],
+                width=12,
                 bg=self.BG_MID,
                 fg=self.FG_TEXT,
-                selectbackground=self.FG_ACCENT
+                insertbackground=self.FG_TEXT,
+                relief="solid",
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground=self.BG_LIGHT,
+                highlightcolor=self.FG_ACCENT,
             )
-            
-            self.game_list.configure(
+            entry.pack(side="left", padx=(0, 6))
+            self.theme_editor_widgets.append(entry)
+
+            swatch = tk.Frame(row, bg="#000000", width=18, height=18, relief="solid", borderwidth=1)
+            swatch.pack(side="left", padx=(0, 6))
+            swatch.pack_propagate(False)
+            color_swatches[key] = swatch
+
+            def refresh_swatch(*_):
+                value = color_vars[key].get().strip()
+                if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                    swatch.config(bg=value)
+
+            color_vars[key].trace_add("write", refresh_swatch)
+            refresh_swatch()
+
+            picker_btn = tk.Button(
+                row,
+                text="...",
+                width=3,
                 bg=self.BG_MID,
                 fg=self.FG_TEXT,
-                selectbackground=self.FG_ACCENT
+                relief="flat",
+                activebackground=self.BG_LIGHT,
+                activeforeground=self.FG_TEXT,
+                command=lambda k=key, t=label_text: choose_theme_color(k, t),
             )
-            
-            self.encryption_label.configure(bg=self.BG_DARK)
-            
-            self.size_spinner.configure(
+            picker_btn.pack(side="right")
+            self.theme_editor_widgets.append(picker_btn)
+
+        for key, label in color_keys:
+            make_color_row(color_rows, key, label)
+
+        font_section = tk.Frame(editor_content, bg=self.BG_MID)
+        font_section.pack(fill="x", pady=(4, 8))
+        self.theme_font_section = font_section
+
+        font_header = tk.Label(font_section, text="Fonts", bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10, "bold"))
+        font_header.pack(anchor="w", pady=(0, 4))
+        self.theme_editor_widgets.append(font_header)
+
+        def font_row(parent, label_text, create_widget):
+            row = tk.Frame(parent, bg=self.BG_MID)
+            row.pack(fill="x", pady=2)
+            self.theme_editor_widgets.append(row)
+            label = tk.Label(row, text=label_text, bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 8), width=18, anchor="w")
+            label.pack(side="left")
+            self.theme_editor_widgets.append(label)
+            widget = create_widget(row)
+            widget.pack(side="right", fill="x", expand=True)
+            self.theme_editor_widgets.append(widget)
+            return widget
+
+        font_families = sorted({family for family in tkfont.families() if family and not family.startswith("@")})
+        if "Segoe UI" in font_families:
+            font_families.insert(0, font_families.pop(font_families.index("Segoe UI")))
+
+        font_family_combo = font_row(
+            font_section,
+            "Family",
+            lambda parent: ttk.Combobox(
+                parent,
+                textvariable=font_vars["family"],
+                values=font_families,
+                state="readonly",
+                width=24,
+                style="ThemeEditor.TCombobox",
+            ),
+        )
+        self.theme_family_combo = font_family_combo
+
+        def make_size_entry(variable):
+            return lambda parent: tk.Entry(
+                parent,
+                textvariable=variable,
+                width=10,
                 bg=self.BG_MID,
                 fg=self.FG_TEXT,
-                buttonbackground=self.BG_LIGHT,
-                readonlybackground=self.BG_MID,
-                selectbackground=self.FG_ACCENT,
-                insertbackground=self.FG_TEXT
+                insertbackground=self.FG_TEXT,
+                relief="solid",
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground=self.BG_LIGHT,
+                highlightcolor=self.FG_ACCENT,
             )
-            
-            max_games_spinner.configure(
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                buttonbackground=self.BG_LIGHT,
-                readonlybackground=self.BG_MID,
-                selectbackground=self.FG_ACCENT,
-                insertbackground=self.FG_TEXT
+
+        font_row(font_section, "Base Size", make_size_entry(font_vars["size_base"]))
+
+        def set_theme_from_editor():
+            current_data = get_editor_theme_data()
+            dirty = not theme_data_matches_base(current_data)
+            theme_state["theme_is_dirty"] = dirty
+            update_theme_title_from_state(current_data)
+            self._save_current_theme_config(current_data, theme_state["base_theme_name"])
+            self._apply_theme_data(current_data, selected_theme_name=("Custom" if dirty else theme_state["loaded_theme_name"]), persist_selection=True)
+            set_status("Applied custom theme" if dirty else f"Applied {theme_state['loaded_theme_name']}")
+
+        def save_theme_from_editor():
+            current_data = get_editor_theme_data()
+            suggested_name = theme_state["loaded_theme_name"]
+            theme_name = simpledialog.askstring(
+                "Save Theme",
+                "Theme name:",
+                initialvalue=suggested_name,
+                parent=settings_window,
             )
-            
-            messagebox.showinfo("Theme Applied", "Theme has been updated successfully!")
-        
-        def reset_theme():
-            confirm = messagebox.askyesno(
-                "Reset Theme",
-                "Are you sure you want to reset all theme settings to default?"
+            if theme_name is None:
+                return
+
+            theme_name = str(theme_name).strip()
+            if not theme_name:
+                messagebox.showwarning("Save Theme", "Theme name cannot be empty.", parent=settings_window)
+                return
+
+            safe_theme_name = re.sub(r'[<>:"/\\|?*]', "_", theme_name).strip()
+            if not safe_theme_name:
+                messagebox.showwarning("Save Theme", "Theme name contains only invalid filename characters.", parent=settings_window)
+                return
+
+            suggested_author = ""
+            suggested_description = ""
+            if suggested_name in self.theme_manager.get_available_themes():
+                existing_theme = self.theme_manager.load_theme(suggested_name)
+                suggested_author = existing_theme.get("metadata", {}).get("author", "")
+                suggested_description = existing_theme.get("metadata", {}).get("description", "")
+
+            author_name = simpledialog.askstring(
+                "Save Theme",
+                "Author:",
+                initialvalue=suggested_author,
+                parent=settings_window,
             )
-            if confirm:
-                self.settings["theme_bg_dark"] = "#2b2b2b"
-                self.settings["theme_bg_mid"] = "#3a3a3a"
-                self.settings["theme_bg_light"] = "#4b4b4b"
-                self.settings["theme_fg_text"] = "white"
-                self.settings["theme_fg_accent"] = "#0078D7"
-                self.settings["theme_font_family"] = "Segoe UI"
-                self.settings["theme_font_size"] = 10
-                self.save_settings()
-                apply_theme()
-                
-                settings_window.destroy()
-                self.open_settings()
-        
-        button_frame = ttk.Frame(themes_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x", pady=(5, 0))
-        
-        ttk.Button(
-            button_frame,
-            text="Save & Apply",
-            style="Dark.TButton",
-            command=apply_theme
-        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
-        
-        ttk.Button(
-            button_frame,
-            text="Reset to Default",
-            style="Dark.TButton",
-            command=reset_theme
-        ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+            if author_name is None:
+                return
+            author_name = str(author_name).strip()
+            if not author_name:
+                messagebox.showwarning("Save Theme", "Author cannot be empty.", parent=settings_window)
+                return
+
+            description_text = simpledialog.askstring(
+                "Save Theme",
+                "Description:",
+                initialvalue=suggested_description,
+                parent=settings_window,
+            )
+            if description_text is None:
+                return
+            description_text = str(description_text).strip()
+            if not description_text:
+                messagebox.showwarning("Save Theme", "Description cannot be empty.", parent=settings_window)
+                return
+
+            available = self.theme_manager.get_available_themes()
+            if safe_theme_name in available and available[safe_theme_name].get("builtin", False):
+                messagebox.showwarning("Save Theme", "Cannot overwrite a builtin theme. Choose another name.", parent=settings_window)
+                return
+
+            if safe_theme_name in available and not messagebox.askyesno(
+                "Save Theme",
+                f"Overwrite existing custom theme '{safe_theme_name}'?",
+                parent=settings_window,
+            ):
+                return
+
+            save_data = self._deepcopy_theme_data(current_data)
+            metadata = save_data.setdefault("metadata", {})
+            metadata["name"] = safe_theme_name
+            metadata["author"] = author_name
+            metadata["description"] = description_text
+
+            if not self.theme_manager.save_theme(safe_theme_name, save_data, is_custom=True):
+                messagebox.showerror("Save Theme", "Failed to save theme.", parent=settings_window)
+                return
+
+            self._save_current_theme_config(save_data, safe_theme_name)
+            theme_state["base_theme_name"] = safe_theme_name
+            theme_state["loaded_theme_name"] = safe_theme_name
+            theme_state["theme_is_dirty"] = False
+            refresh_theme_catalog(safe_theme_name)
+            apply_theme_to_editor(safe_theme_name, save_data)
+            set_theme_title(safe_theme_name)
+            set_status("Theme saved")
+            messagebox.showinfo("Save Theme", f"Saved theme '{safe_theme_name}'.", parent=settings_window)
+
+        button_row = ttk.Frame(themes_frame, style="Dark.TFrame")
+        button_row.pack(fill="x")
+
+        ttk.Button(button_row, text="Set Theme", style="Dark.TButton", command=set_theme_from_editor).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(button_row, text="Save Theme", style="Dark.TButton", command=save_theme_from_editor).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        refresh_theme_catalog(self.settings.get("selected_theme", "Dark"))
+        if current_theme_config:
+            apply_theme_to_editor(theme_state["loaded_theme_name"], current_theme_config)
+        else:
+            apply_theme_to_editor(theme_state["loaded_theme_name"])
+        self._theme_editor_save_current_config = lambda: self._save_current_theme_config(get_editor_theme_data(), theme_state["base_theme_name"])
+        if theme_state["theme_is_dirty"]:
+            set_theme_title("Custom")
+        else:
+            set_theme_title(theme_state["loaded_theme_name"])
         
         dc_frame = ttk.Frame(discord_tab, style="Dark.TFrame")
         dc_frame.pack(fill="both", expand=True, padx=20, pady=15)
