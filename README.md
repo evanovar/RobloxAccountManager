@@ -27,6 +27,9 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 - [Installation](#-installation)
 - [Requirements](#-requirements)
 - [Disclaimer](#-disclaimer)
+- [Code Signing Policy](#code-signing-policy)
+- [Privacy Policy](#privacy-policy)
+- [System Changes and Uninstallation](#system-changes-and-uninstallation)
 - [Contributing](#-contributing)
 - [License](#-license)
 - [Support](#-support)
@@ -38,7 +41,7 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 
 **Quick & Easy - No Python Required!**
 
-1. Go to [Releases](https://github.com/evanovar/RobloxAccountManagerConsole/releases)
+1. Go to [Releases](https://github.com/evanovar/RobloxAccountManager/releases)
 2. Download `RobloxAccountManager.exe` from the latest release
 3. Put it in a folder
 4. Double-click to run - that's it!
@@ -90,6 +93,44 @@ The following Python packages are required:
 ## ⚠️ Disclaimer
 
 This tool is for educational purposes only. Users are responsible for complying with Roblox's Terms of Service. The developers are not responsible for any consequences resulting from the use of this tool.
+
+## Code Signing Policy
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+### Team Roles
+
+- Committers and reviewers: [evanovar](https://github.com/evanovar)
+- Approvers: [evanovar](https://github.com/evanovar)
+
+## Privacy Policy
+
+This program does not include hidden telemetry, ad SDKs, or analytics tracking.
+
+Network communication is limited to documented functionality:
+
+- Roblox API calls required for Roblox account and game features.
+- GitHub API/release checks for update-related features.
+- Discord webhook/bot endpoints only when Discord integration is configured by the operator.
+- Optional connectivity checks used by auto-rejoin safety logic.
+
+If Discord/webhook/auto-update features are not enabled, those related network requests are not performed.
+
+## System Changes and Uninstallation
+
+The program may make local system changes based on enabled settings:
+
+- Creates/updates local application data under AccountManagerData.
+- Can create/remove a Start Menu shortcut.
+- Can set Roblox settings files as read-only when the lock option is enabled.
+- Can download optional dependencies/features only when requested by the user.
+
+Uninstallation:
+
+1. Close the application.
+2. Delete the application folder containing RobloxAccountManager.exe.
+3. Delete AccountManagerData if you want to remove local data.
+4. Remove the Start Menu shortcut if it exists.
 
 ## 🤝 Contributing
 
