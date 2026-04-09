@@ -429,9 +429,7 @@ class DiscordManager:
         @bot.event
         async def on_ready():
             try:
-                bot.tree.clear_commands(guild=None)
                 for guild in bot.guilds:
-                    bot.tree.clear_commands(guild=guild)
                     bot.tree.copy_global_to(guild=guild)
                     await bot.tree.sync(guild=guild)
             except Exception as e:
@@ -452,11 +450,13 @@ class DiscordManager:
         @tree.command(name="help", description="Show available bot commands.")
         async def help_command(interaction):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             await self._send_help_embed(interaction)
 
         @tree.command(name="setlogchannel", description="Use this channel for automatic bot logs.")
         async def setlogchannel_command(interaction):
             self._remember_interaction_channel(interaction, force_save=True)
+            await self._defer_interaction(interaction)
             await self._send_interaction_result(
                 interaction,
                 "Log Channel Updated",
@@ -467,6 +467,7 @@ class DiscordManager:
         @tree.command(name="accountlist", description="List all accounts, including expired ones.")
         async def accountlist_command(interaction):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             lines = await asyncio.to_thread(self._call_ui_method, "discord_bot_list_accounts")
             await self._send_interaction_result(interaction, "Account List", "\n".join(lines), color=self.COLOR_INFO)
 
@@ -479,6 +480,7 @@ class DiscordManager:
         )
         async def launch_command(interaction, account_name: str, place_id: str, private_server_id: str = "", job_id: str = ""):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_launch_account",
@@ -498,6 +500,7 @@ class DiscordManager:
         @app_commands.describe(account_name="Account username", user_to_join="Target username to join")
         async def launchuser_command(interaction, account_name: str, user_to_join: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_launch_user",
@@ -515,6 +518,7 @@ class DiscordManager:
         @app_commands.describe(account_name="Account username", place_id="Place ID")
         async def launchsmall_command(interaction, account_name: str, place_id: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_launch_small",
@@ -531,7 +535,7 @@ class DiscordManager:
         @tree.command(name="screenshot", description="Send a screenshot from the active machine.")
         async def screenshot_command(interaction):
             self._remember_interaction_channel(interaction)
-            await interaction.response.defer(thinking=True)
+            await self._defer_interaction(interaction)
             image_bytes = await asyncio.to_thread(self._call_ui_method, "discord_bot_capture_screenshot")
             if not image_bytes:
                 await interaction.followup.send("Failed to capture a screenshot.")
@@ -547,6 +551,7 @@ class DiscordManager:
         ])
         async def autorejoin_command(interaction, action: str, account_name: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_autorejoin_action",
@@ -581,6 +586,7 @@ class DiscordManager:
             check_presence: bool = True,
         ):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_add_autorejoin",
@@ -616,6 +622,7 @@ class DiscordManager:
         ])
         async def settings_command(interaction, action: str, settings_option: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_settings",
@@ -641,6 +648,7 @@ class DiscordManager:
         ])
         async def robloxlauncher_command(interaction, roblox_launcher: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_set_roblox_launcher",
@@ -661,6 +669,7 @@ class DiscordManager:
         ])
         async def antiafk_command(interaction, action: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_set_antiafk",
@@ -686,6 +695,7 @@ class DiscordManager:
             key_amount: int = None,
         ):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_update_antiafk_settings",
@@ -704,6 +714,7 @@ class DiscordManager:
         @app_commands.describe(pid_or_all="Type ALL or a numeric PID")
         async def closeroblox_command(interaction, pid_or_all: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_close_roblox",
@@ -719,6 +730,7 @@ class DiscordManager:
         @tree.command(name="activelist", description="List active Roblox PID to username mapping.")
         async def activelist_command(interaction):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             lines = await asyncio.to_thread(self._call_ui_method, "discord_bot_active_list")
             await self._send_interaction_result(interaction, "Active Instances", "\n".join(lines), color=self.COLOR_INFO)
 
@@ -726,6 +738,7 @@ class DiscordManager:
         @app_commands.describe(pid="Roblox process PID")
         async def setactivewindow_command(interaction, pid: int):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_set_active_window",
@@ -742,6 +755,7 @@ class DiscordManager:
         @app_commands.describe(cookie="Full .ROBLOSECURITY cookie")
         async def addaccount_command(interaction, cookie: str):
             self._remember_interaction_channel(interaction)
+            await self._defer_interaction(interaction)
             result = await asyncio.to_thread(
                 self._call_ui_method,
                 "discord_bot_import_cookie",
@@ -794,13 +808,24 @@ class DiscordManager:
         for name, commands_list in sections.items():
             embed.add_field(name=name, value="\n".join(commands_list), inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.response.send_message(embed=embed)
 
     def _result_color(self, text: str) -> int:
         lowered = (text or "").strip().lower()
         if lowered.startswith(("failed", "invalid", "unsupported", "error")):
             return self.COLOR_ERROR
         return self.COLOR_SUCCESS
+
+    async def _defer_interaction(self, interaction):
+        """Acknowledge slash command quickly to avoid Discord timeout."""
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(thinking=True)
+        except Exception:
+            pass
 
     def _remember_interaction_channel(self, interaction, force_save: bool = False):
         channel_id = getattr(interaction, "channel_id", None)
