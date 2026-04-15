@@ -27,7 +27,6 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 - [Installation](#-installation)
 - [Requirements](#-requirements)
 - [Disclaimer](#-disclaimer)
-- [Code Signing Policy](#code-signing-policy)
 - [Privacy Policy](#privacy-policy)
 - [System Changes and Uninstallation](#system-changes-and-uninstallation)
 - [Contributing](#-contributing)
@@ -93,10 +92,6 @@ The following Python packages are required:
 ## ⚠️ Disclaimer
 
 This tool is for educational purposes only. Users are responsible for complying with Roblox's Terms of Service. The developers are not responsible for any consequences resulting from the use of this tool.
-
-## Code Signing Policy
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 ### Team Roles
 
