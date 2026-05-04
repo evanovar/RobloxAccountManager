@@ -87,7 +87,7 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
-- `discord.py` - Discord bot handling for remote access
+- `discord.py` - (removed) Previously used for a Discord bot; webhook-only integration remains via `requests`.
 
 ## ⚠️ Disclaimer
 
@@ -198,7 +198,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Start/Stop All** | Bulk start/stop all rejoin configurations | Click "Start All" / "Stop All" buttons |
 | **Active Status Display** | See which accounts are actively monitored | [ACTIVE] / [INACTIVE] status shown in list |
 | **Remove Configuration** | Delete rejoin setup for an account | Select account → "Remove" |
-| **Webhook Notifications** | Send Discord webhook alerts on rejoin events, errors, and failures | Click the Discord logo button next to "Auto-Rejoin Accounts" |
+| **Webhook Notifications** | Send Discord webhook alerts on rejoin events, errors, and failures | Configure webhook URL in Settings → Integrations |
 | **Hourly Screenshot Webhook** | Automatically sends a screenshot to Discord every hour while auto-rejoin is active | Configure in webhook settings |
 | **Ping on Error** | Ping a specific Discord user when a rejoin failure occurs | Set User ID in webhook settings |
 
@@ -229,7 +229,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Font Selection** | Choose from 7 preset fonts (Segoe UI, Arial, Calibri, etc.) | Settings → Theme tab → font dropdown |
 | **Font Size Adjustment** | Adjust font size (8–16px) | Settings → Theme tab → size controls |
 | **Always on Top** | Keep the window above all other windows | Settings → General tab → "Always on Top" |
-| **Discord Quick Link** | Discord logo button next to "Quick Actions" opens the project server | Click the Discord logo button |
+| **Discord Quick Link** | Project Discord invite link (no in-app button) | Visit the Discord server link in the About tab or README |
 
 ### Encryption & Data Security
 

@@ -45,27 +45,8 @@ def setup_icon(data_folder):
 
 
 def setup_discord_logo(data_folder):
-    logo_path = os.path.join(data_folder, "discordlogo.png")
-
-    if os.path.exists(logo_path):
-        return logo_path
-
-    try:
-        print("[INFO] Downloading Discord logo...")
-        logo_url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/discordlogo.png"
-        response = requests.get(logo_url, timeout=5)
-
-        if response.status_code == 200:
-            with open(logo_path, 'wb') as f:
-                f.write(response.content)
-            print("[SUCCESS] Discord logo downloaded successfully.")
-            return logo_path
-        else:
-            print(f"[ERROR] Failed to download Discord logo: HTTP {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"[ERROR] Error downloading Discord logo: {e}")
-        return None
+    # Discord logo/download removed since bot integration is disabled
+    return None
 
 
 def apply_icon_to_window(window, icon_path):
@@ -137,8 +118,8 @@ def main():
     root = tk.Tk()
     root.withdraw()
     
-    icon_path, discord_logo_path = apply_icon_async(root, data_folder)
-    app = AccountManagerUI(root, manager, icon_path=icon_path, discord_logo_path=discord_logo_path)
+    icon_path, _ = apply_icon_async(root, data_folder)
+    app = AccountManagerUI(root, manager, icon_path=icon_path, discord_logo_path=None)
     
     root.deiconify()
     root.mainloop()

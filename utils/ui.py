@@ -42,7 +42,6 @@ from urllib.request import urlretrieve
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
-from classes.discord_manager import DiscordManager
 from utils.theme_manager import ThemeManager
 
 class AccountManagerUI:
@@ -50,8 +49,6 @@ class AccountManagerUI:
         self.root = root
         self.manager = manager
         self.icon_path = icon_path
-        self.discord_logo_path = discord_logo_path
-        self.discord_logo_img = None
         self.APP_VERSION = "2.4.7"
         self._game_name_after_id = None
         self._save_settings_timer = None
@@ -139,17 +136,19 @@ class AccountManagerUI:
         self._list_row_map = []
         self._collapsed_groups = set(self.settings.get("group_collapsed", []))
 
-        self.discord_manager = DiscordManager(self.settings)
-        self.discord_manager.set_app(self)
-        if self.discord_manager.enabled and self.discord_manager.has_active_target():
-            self.discord_manager.send_embed(
-                "Connected to Discord!",
-                "Roblox Account Manager started and is now connected.",
-                self.discord_manager.COLOR_SUCCESS
-            )
-        if self.discord_manager.enabled and self.discord_manager.screenshot_enabled:
-            threading.Thread(target=self._global_screenshot_worker, daemon=True,
-                             name="WebhookScreenshot").start()
+        # Discord bot removed; keep webhook-only support
+        try:
+            webhook_cfg = self.settings.get("discord_webhook", {})
+            webhook_url = str(webhook_cfg.get("url", "") or "").strip()
+            if webhook_url:
+                try:
+                    self._send_webhook_embed(webhook_url, "Connected to Discord!", "Roblox Account Manager started and is now connected.", 0x2ECC71)
+                except Exception:
+                    pass
+            if webhook_url and webhook_cfg.get("screenshot_enabled"):
+                threading.Thread(target=self._global_screenshot_worker, daemon=True, name="WebhookScreenshot").start()
+        except Exception:
+            pass
 
         self.theme_manager = ThemeManager(os.path.join(self.data_folder, "themes"))
         selected_theme = self.settings.get("selected_theme", "Dark")
@@ -345,34 +344,6 @@ class AccountManagerUI:
         self.quick_actions_row = quick_actions_row
         self.discord_btn = None
 
-        _discord_img = None
-        if self.discord_logo_path and os.path.exists(self.discord_logo_path):
-            try:
-                _discord_img = tk.PhotoImage(file=self.discord_logo_path)
-                _w, _h = _discord_img.width(), _discord_img.height()
-                _factor = max(1, max(_w, _h) // 20)
-                if _factor > 1:
-                    _discord_img = _discord_img.subsample(_factor, _factor)
-                self.discord_logo_img = _discord_img
-            except Exception:
-                _discord_img = None
-
-        if _discord_img:
-            self.discord_btn = tk.Button(
-                quick_actions_row,
-                image=_discord_img,
-                bg=self.BG_DARK,
-                activebackground=self.BG_DARK,
-                relief="flat",
-                bd=0,
-                cursor="hand2",
-                padx=0,
-                pady=0,
-                highlightthickness=0,
-                command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
-            )
-            self.discord_btn.pack(side="right")
-
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
 
@@ -414,7 +385,6 @@ class AccountManagerUI:
         
         threading.Thread(target=self.check_for_updates, daemon=True).start()
         threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
-        threading.Thread(target=self._watch_discord_logo, daemon=True).start()
         
         if self.settings.get("lock_roblox_settings", False):
             self.root.after(1000, self.apply_and_lock_roblox_settings)
@@ -437,8 +407,7 @@ class AccountManagerUI:
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
 
-        if hasattr(self, 'discord_manager'):
-            self.discord_manager.shutdown()
+        # Discord manager removed; no shutdown needed
         
         RobloxAPI.restore_installers()
         self.root.destroy()
@@ -2558,6 +2527,45 @@ del /f /q "%~f0"
                 print(f"[ERROR] Failed to send webhook embed: {e}")
         threading.Thread(target=_post, daemon=True).start()
 
+    def _maybe_send_webhook_embed(self, title, description, color, ping_user_id=None):
+        try:
+            webhook_cfg = self.settings.get("discord_webhook", {})
+            url = str(webhook_cfg.get("url", "") or "").strip()
+            if webhook_cfg.get("enabled") and url:
+                self._send_webhook_embed(url, title, description, color, ping_user_id=ping_user_id)
+        except Exception:
+            pass
+
+    def _get_webhook_cfg(self):
+        return self.settings.get("discord_webhook", {})
+
+    def _webhook_enabled(self):
+        cfg = self._get_webhook_cfg()
+        return bool(cfg.get("enabled") and str(cfg.get("url", "") or "").strip())
+
+    def _webhook_screenshot_enabled(self):
+        cfg = self._get_webhook_cfg()
+        return bool(cfg.get("screenshot_enabled"))
+
+    def _webhook_screenshot_interval_minutes(self):
+        cfg = self._get_webhook_cfg()
+        try:
+            return max(1, int(cfg.get("screenshot_interval_minutes", 60)))
+        except Exception:
+            return 60
+
+    def _maybe_log_message(self, message: str):
+        try:
+            if not self._webhook_enabled():
+                return
+            url = str(self._get_webhook_cfg().get("url", "") or "").strip()
+            if not url:
+                return
+            # Send as an embed with code block for readability
+            self._send_webhook_embed(url, "Log", f"```{message}```", 0x5865F2)
+        except Exception:
+            pass
+
     def _capture_screenshot_png(self):
         tmp_path = None
         try:
@@ -2593,7 +2601,23 @@ del /f /q "%~f0"
     def _send_webhook_screenshot(self, url, caption=""):
         try:
             image_bytes = self._capture_screenshot_png()
-            self.discord_manager.send_screenshot(image_bytes, caption)
+            if not image_bytes:
+                return
+
+            def _post():
+                try:
+                    with BytesIO(image_bytes) as image_stream:
+                        image_stream.seek(0)
+                        requests.post(
+                            url,
+                            data={"content": caption},
+                            files={"file": ("screenshot.png", image_stream, "image/png")},
+                            timeout=10,
+                        )
+                except Exception as e:
+                    print(f"[ERROR] Webhook screenshot send failed: {e}")
+
+            threading.Thread(target=_post, daemon=True).start()
         except Exception as e:
             print(f"[ERROR] Screenshot send failed: {e}")
 
@@ -2659,50 +2683,7 @@ del /f /q "%~f0"
         if username in self.manager.accounts and isinstance(self.manager.accounts[username], dict):
             self.manager.accounts[username]['cookie_valid'] = is_valid
 
-    def _watch_discord_logo(self):
-        """Background thread: wait for discordlogo.png to appear, then apply it to the UI."""
-        if self.discord_btn is not None:
-            return
-        path = self.discord_logo_path
-        if not path:
-            return
-        for _ in range(60):
-            if os.path.exists(path):
-                self.root.after(0, self._apply_discord_logo_to_ui)
-                return
-            time.sleep(0.5)
-
-    def _apply_discord_logo_to_ui(self):
-        """Load (or reload) the discord logo and create/update the button."""
-        path = self.discord_logo_path
-        if not path or not os.path.exists(path):
-            return
-        try:
-            img = tk.PhotoImage(file=path)
-            w, h = img.width(), img.height()
-            factor = max(1, max(w, h) // 20)
-            if factor > 1:
-                img = img.subsample(factor, factor)
-            self.discord_logo_img = img
-        except Exception:
-            return
-        if self.discord_btn is not None:
-            self.discord_btn.config(image=img, bg=self.BG_DARK, activebackground=self.BG_DARK)
-        else:
-            self.discord_btn = tk.Button(
-                self.quick_actions_row,
-                image=img,
-                bg=self.BG_DARK,
-                activebackground=self.BG_DARK,
-                relief="flat",
-                bd=0,
-                cursor="hand2",
-                padx=0,
-                pady=0,
-                highlightthickness=0,
-                command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
-            )
-            self.discord_btn.pack(side="right")
+    # Discord logo/button support removed; webhook-only integration retained.
 
     def _silent_check_cookies(self):
         """Trigger a background silent cookie check. Safe to call from any thread."""
@@ -4292,10 +4273,10 @@ del /f /q "%~f0"
             auto_rejoin_window.after(500, refresh_rejoin_list)
             if len(selected_accounts) == 1:
                 account = selected_accounts[0]
-                self.discord_manager.send_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Started",
                     f"Monitoring **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`.",
-                    self.discord_manager.COLOR_SUCCESS
+                    0x2ECC71
                 )
                 messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
             else:
@@ -4303,10 +4284,10 @@ del /f /q "%~f0"
                     f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
                     for acc in selected_accounts
                 )
-                self.discord_manager.send_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Started",
                     f"Monitoring {len(selected_accounts)} account(s):\n{lines}",
-                    self.discord_manager.COLOR_SUCCESS
+                    0x2ECC71
                 )
                 messagebox.showinfo("Started", f"Auto-rejoin started for {len(selected_accounts)} account(s)!")
         
@@ -4336,10 +4317,10 @@ del /f /q "%~f0"
                     f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
                     for acc in accounts
                 )
-                self.discord_manager.send_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Started",
                     f"Monitoring {len(accounts)} account(s):\n{lines}",
-                    self.discord_manager.COLOR_SUCCESS
+                    0x2ECC71
                 )
 
             for account in accounts:
@@ -6661,155 +6642,60 @@ del /f /q "%~f0"
         dc_frame = ttk.Frame(discord_tab, style="Dark.TFrame")
         dc_frame.pack(fill="both", expand=True, padx=20, pady=15)
 
-        dc_mode = self.settings.get("discord_ui_mode", "webhook")
         webhook_cfg = self.settings.setdefault("discord_webhook", self._default_discord_integration_settings("webhook"))
-        bot_cfg = self.settings.setdefault("discord_bot", self._default_discord_integration_settings("bot"))
-
-        dc_header_row = ttk.Frame(dc_frame, style="Dark.TFrame")
-        dc_header_row.pack(fill="x", pady=(0, 2))
 
         ttk.Label(
-            dc_header_row, text="Discord Integration",
+            dc_frame, text="Discord Webhook",
             style="Dark.TLabel", font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(side="left")
+        ).pack(anchor="w", pady=(0, 2))
 
-        dc_mode_btn = ttk.Button(
-            dc_header_row, text="Use Bot",
-            style="Dark.TButton",
-        )
-        dc_mode_btn.pack(side="right")
-
-        dc_desc_label = ttk.Label(
-            dc_frame, text="Send log events to a Discord channel via webhook.",
+        ttk.Label(
+            dc_frame, text="Send log events to Discord via webhook.",
             style="Dark.TLabel", font=(self.FONT_FAMILY, 8)
-        )
-        dc_desc_label.pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 10))
 
         sep = ttk.Frame(dc_frame, style="Dark.TFrame", height=1)
         sep.pack(fill="x", pady=(0, 12))
         sep.configure(relief="solid", borderwidth=1)
 
-        def _current_dc_cfg():
-            return bot_cfg if dc_mode == "bot" else webhook_cfg
-
-        def _other_dc_cfg():
-            return webhook_cfg if dc_mode == "bot" else bot_cfg
-
-        current_cfg = _current_dc_cfg()
-
-        dc_enabled_var = tk.BooleanVar(value=current_cfg.get("enabled", False))
-        dc_url_var = tk.StringVar(value=self.get_discord_bot_token() if dc_mode == "bot" else current_cfg.get("url", ""))
-        dc_ping_var = tk.BooleanVar(value=current_cfg.get("enable_ping", False))
-        dc_ping_id_var = tk.StringVar(value=current_cfg.get("ping_user_id", ""))
-        dc_ping_err_var = tk.BooleanVar(value=current_cfg.get("ping_on_error", True))
-        dc_log_all_var = tk.BooleanVar(value=current_cfg.get("log_everything", False))
-        dc_log_err_var = tk.BooleanVar(value=current_cfg.get("log_errors", True))
-        dc_log_ok_var = tk.BooleanVar(value=current_cfg.get("log_success", True))
-        dc_log_warn_var = tk.BooleanVar(value=current_cfg.get("log_warnings", True))
-        dc_log_info_var = tk.BooleanVar(value=current_cfg.get("log_info", False))
-        dc_log_rejoin_var = tk.BooleanVar(value=current_cfg.get("log_auto_rejoin", True))
-        dc_log_rejoin_console_var = tk.BooleanVar(value=current_cfg.get("log_auto_rejoin_console", False))
-        dc_screenshot_interval_var = tk.StringVar(value=str(current_cfg.get("screenshot_interval_minutes", 60)))
-        dc_screenshot_enabled_var = tk.BooleanVar(value=current_cfg.get("screenshot_enabled", False))
-
-        def _get_dc_mode_texts():
-            if dc_mode == "bot":
-                return {
-                    "description": "Send log events to a Discord channel via bot.",
-                    "enable": "Enable Bot",
-                    "url": "Bot Token:",
-                    "filters": "Bot Filters",
-                    "mode_button": "Use Webhook",
-                    "test": "Save Bot",
-                    "filter_title": "Bot Filters",
-                    "filter_help": "Messages containing these substrings won't be \nforwarded to Discord bot messages.\n[ERROR] messages are never filtered.",
-                    "missing_target": "Enter a bot token first.",
-                }
-            return {
-                "description": "Send log events to a Discord channel via webhook.",
-                "enable": "Enable Webhook",
-                "url": "Webhook URL:",
-                "filters": "Webhook Filters",
-                "mode_button": "Use Bot",
-                "test": "Test Webhook",
-                "filter_title": "Webhook Filters",
-                "filter_help": "Messages containing these substrings won't be \nforwarded to Discord.\n[ERROR] messages are never filtered.",
-                "missing_target": "Enter a webhook URL first.",
-            }
-
-        def _load_dc_cfg_to_vars():
-            cfg = _current_dc_cfg()
-            dc_enabled_var.set(cfg.get("enabled", False))
-            dc_url_var.set(self.get_discord_bot_token() if dc_mode == "bot" else cfg.get("url", ""))
-            dc_ping_var.set(cfg.get("enable_ping", False))
-            dc_ping_id_var.set(cfg.get("ping_user_id", ""))
-            dc_ping_err_var.set(cfg.get("ping_on_error", True))
-            dc_log_all_var.set(cfg.get("log_everything", False))
-            dc_log_err_var.set(cfg.get("log_errors", True))
-            dc_log_ok_var.set(cfg.get("log_success", True))
-            dc_log_warn_var.set(cfg.get("log_warnings", True))
-            dc_log_info_var.set(cfg.get("log_info", False))
-            dc_log_rejoin_var.set(cfg.get("log_auto_rejoin", True))
-            dc_log_rejoin_console_var.set(cfg.get("log_auto_rejoin_console", False))
-            dc_screenshot_interval_var.set(str(cfg.get("screenshot_interval_minutes", 60)))
-            dc_screenshot_enabled_var.set(cfg.get("screenshot_enabled", False))
-
-        def _apply_dc_mode_labels():
-            texts = _get_dc_mode_texts()
-            dc_mode_btn.config(text=texts["mode_button"])
-            dc_desc_label.config(text=texts["description"])
-            dc_enable_check.config(text=texts["enable"])
-            dc_url_label.config(text=texts["url"])
-            dc_filters_btn.config(text=texts["filters"])
-            dc_test_btn.config(text=texts["test"])
-
-        def _toggle_dc_mode():
-            nonlocal dc_mode
-            _dc_save()
-            dc_mode = "bot" if dc_mode == "webhook" else "webhook"
-            self.settings["discord_ui_mode"] = dc_mode
-            _load_dc_cfg_to_vars()
-            self.save_settings()
-            _apply_dc_mode_labels()
-            _dc_toggle_fields(_send_connect=False)
+        dc_enabled_var = tk.BooleanVar(value=webhook_cfg.get("enabled", False))
+        dc_url_var = tk.StringVar(value=webhook_cfg.get("url", ""))
+        dc_ping_var = tk.BooleanVar(value=webhook_cfg.get("enable_ping", False))
+        dc_ping_id_var = tk.StringVar(value=webhook_cfg.get("ping_user_id", ""))
+        dc_ping_err_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_error", True))
+        dc_log_all_var = tk.BooleanVar(value=webhook_cfg.get("log_everything", False))
+        dc_log_err_var = tk.BooleanVar(value=webhook_cfg.get("log_errors", True))
+        dc_log_ok_var = tk.BooleanVar(value=webhook_cfg.get("log_success", True))
+        dc_log_warn_var = tk.BooleanVar(value=webhook_cfg.get("log_warnings", True))
+        dc_log_info_var = tk.BooleanVar(value=webhook_cfg.get("log_info", False))
+        dc_log_rejoin_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin", True))
+        dc_log_rejoin_console_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin_console", False))
+        dc_screenshot_interval_var = tk.StringVar(value=str(webhook_cfg.get("screenshot_interval_minutes", 60)))
+        dc_screenshot_enabled_var = tk.BooleanVar(value=webhook_cfg.get("screenshot_enabled", False))
 
         def _dc_save():
-            cfg = _current_dc_cfg()
-            other_cfg = _other_dc_cfg()
-
-            cfg["enabled"] = dc_enabled_var.get()
-            if dc_mode == "bot":
-                self.set_discord_bot_token(dc_url_var.get().strip())
-                cfg.pop("token", None)
-            else:
-                cfg["url"] = dc_url_var.get().strip()
-            cfg["enable_ping"] = dc_ping_var.get()
-            cfg["ping_user_id"] = dc_ping_id_var.get().strip()
-            cfg["ping_on_error"] = dc_ping_err_var.get()
-            cfg["log_everything"] = dc_log_all_var.get()
-            cfg["log_errors"] = dc_log_err_var.get()
-            cfg["log_success"] = dc_log_ok_var.get()
-            cfg["log_warnings"] = dc_log_warn_var.get()
-            cfg["log_info"] = dc_log_info_var.get()
-            cfg["log_auto_rejoin"] = dc_log_rejoin_var.get()
-            cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
+            webhook_cfg["enabled"] = dc_enabled_var.get()
+            webhook_cfg["url"] = dc_url_var.get().strip()
+            webhook_cfg["enable_ping"] = dc_ping_var.get()
+            webhook_cfg["ping_user_id"] = dc_ping_id_var.get().strip()
+            webhook_cfg["ping_on_error"] = dc_ping_err_var.get()
+            webhook_cfg["log_everything"] = dc_log_all_var.get()
+            webhook_cfg["log_errors"] = dc_log_err_var.get()
+            webhook_cfg["log_success"] = dc_log_ok_var.get()
+            webhook_cfg["log_warnings"] = dc_log_warn_var.get()
+            webhook_cfg["log_info"] = dc_log_info_var.get()
+            webhook_cfg["log_auto_rejoin"] = dc_log_rejoin_var.get()
+            webhook_cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
             try:
-                cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
+                webhook_cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
             except (ValueError, TypeError):
-                cfg["screenshot_interval_minutes"] = 60
-            cfg["screenshot_enabled"] = dc_screenshot_enabled_var.get()
-
-            if cfg.get("enabled"):
-                other_cfg["enabled"] = False
+                webhook_cfg["screenshot_interval_minutes"] = 60
+            webhook_cfg["screenshot_enabled"] = dc_screenshot_enabled_var.get()
 
             self.settings["discord_webhook"] = webhook_cfg
-            self.settings["discord_bot"] = bot_cfg
-            self.settings["discord_ui_mode"] = dc_mode
             self.save_settings()
-            self.discord_manager.refresh()
 
         def _dc_toggle_fields(*_, _send_connect=True):
-            cfg = _current_dc_cfg()
             now_enabled = dc_enabled_var.get()
             state = "normal" if now_enabled else "disabled"
             for w in _dc_dependent_widgets:
@@ -6817,15 +6703,14 @@ del /f /q "%~f0"
                     w.config(state=state)
                 except Exception:
                     pass
-            was_enabled = cfg.get("enabled", False)
+            was_enabled = webhook_cfg.get("enabled", False)
             _dc_save()
             if _send_connect and now_enabled and not was_enabled and dc_url_var.get().strip():
-                self.discord_manager.send_embed(
-                    "Connected to Discord!",
-                    "Roblox Account Manager is now connected.",
-                    self.discord_manager.COLOR_SUCCESS
-                )
-            if self.discord_manager.enabled and self.discord_manager.screenshot_enabled:
+                try:
+                    self._send_webhook_embed(dc_url_var.get().strip(), "Connected to Discord!", "Roblox Account Manager is now connected.", 0x2ECC71)
+                except Exception:
+                    pass
+            if dc_url_var.get().strip() and webhook_cfg.get("screenshot_enabled"):
                 self._start_global_screenshot_loop()
             else:
                 self._stop_global_screenshot_loop()
@@ -6875,9 +6760,14 @@ del /f /q "%~f0"
         def _dc_ss_toggle(*_):
             dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
             _dc_save()
-            if self.discord_manager.enabled and self.discord_manager.screenshot_enabled:
-                self._start_global_screenshot_loop()
-            else:
+            # Use webhook settings for screenshot loop
+            try:
+                cfg = self.settings.get("discord_webhook", {})
+                if cfg.get("enabled") and cfg.get("screenshot_enabled"):
+                    self._start_global_screenshot_loop()
+                else:
+                    self._stop_global_screenshot_loop()
+            except Exception:
                 self._stop_global_screenshot_loop()
 
         ttk.Checkbutton(
@@ -6959,40 +6849,20 @@ del /f /q "%~f0"
         def _dc_test():
             test_target = dc_url_var.get().strip()
             if not test_target:
-                messagebox.showwarning("Missing Target", _get_dc_mode_texts()["missing_target"], parent=settings_window)
-                return
-
-            if dc_mode == "bot":
-                dc_enabled_var.set(True)
-                _dc_save()
-                messagebox.showinfo(
-                    "Bot Saved",
-                    "Bot token saved and bot startup requested.\nUse /setlogchannel in Discord to set the log channel.",
-                    parent=settings_window
-                )
+                messagebox.showwarning("Missing Target", "Enter a webhook URL first.", parent=settings_window)
                 return
 
             _dc_save()
-            if dc_mode == "bot" and not bot_cfg.get("channel_id"):
-                messagebox.showinfo(
-                    "Bot Log Channel Required",
-                    "Run any bot slash command in your target channel first, or use /setlogchannel, so the bot knows where to send logs.",
-                    parent=settings_window
-                )
-                return
             _ping = dc_ping_id_var.get().strip() if dc_ping_var.get() else None
-            self.discord_manager.send_embed(
-                "Discord Test",
-                "Discord integration is working correctly!",
-                DiscordManager.COLOR_SUCCESS,
-                ping_user_id=_ping
-            )
+            try:
+                self._send_webhook_embed(test_target, "Discord Test", "Discord integration is working correctly!", 0x2ECC71, ping_user_id=_ping)
+            except Exception:
+                pass
 
         def _open_webhook_filters():
-            texts = _get_dc_mode_texts()
             fw = tk.Toplevel(settings_window)
             self.apply_window_icon(fw)
-            fw.title(texts["filter_title"])
+            fw.title("Webhook Filters")
             fw.configure(bg=self.BG_DARK)
             fw.resizable(False, False)
             fw.transient(settings_window)
@@ -7007,9 +6877,9 @@ del /f /q "%~f0"
             frm = ttk.Frame(fw, style="Dark.TFrame")
             frm.pack(fill="both", expand=True, padx=16, pady=14)
 
-            ttk.Label(frm, text=texts["filter_title"], style="Dark.TLabel",
+            ttk.Label(frm, text="Webhook Filters", style="Dark.TLabel",
                       font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 2))
-            ttk.Label(frm, text=texts["filter_help"],
+            ttk.Label(frm, text="Messages containing these substrings won't be \nforwarded to Discord.\n[ERROR] messages are never filtered.",
                       style="Dark.TLabel", font=(self.FONT_FAMILY, 8),
                       justify="left").pack(anchor="w", pady=(0, 8))
 
@@ -7078,9 +6948,6 @@ del /f /q "%~f0"
         dc_filters_btn.pack(fill="x")
 
         _dc_dependent_widgets = [dc_url_entry, dc_ping_id_entry, dc_ss_entry]
-        dc_mode_btn.config(command=_toggle_dc_mode)
-        _apply_dc_mode_labels()
-        _load_dc_cfg_to_vars()
         _dc_toggle_fields(_send_connect=False)
 
         about_frame = ttk.Frame(about_tab, style="Dark.TFrame")
@@ -8450,7 +8317,8 @@ del /f /q "%~f0"
         if len(self.console_output) > self._MAX_CONSOLE_LINES:
             del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
 
-        self.discord_manager.log_message(message)
+        # Send console logs to webhook if configured
+        self._maybe_log_message(message)
         
         if self.console_text_widget:
             try:
@@ -9101,12 +8969,12 @@ del /f /q "%~f0"
         print("[INFO] Global hourly webhook screenshot stopped")
 
     def _global_screenshot_worker(self):
-        interval = max(1, self.discord_manager.screenshot_interval_minutes) * 60
+        interval = self._webhook_screenshot_interval_minutes() * 60
         time.sleep(interval)
         while self._webhook_screenshot_thread is threading.current_thread():
-            interval = max(1, self.discord_manager.screenshot_interval_minutes) * 60
-            if self.discord_manager.enabled and self.discord_manager.screenshot_enabled and self.discord_manager.has_active_target():
-                self._send_webhook_screenshot(None, "")
+            interval = self._webhook_screenshot_interval_minutes() * 60
+            if self._webhook_enabled() and self._webhook_screenshot_enabled():
+                self._send_webhook_screenshot(self._get_webhook_cfg().get("url", ""), "")
             time.sleep(interval)
     
     def is_roblox_running(self):
@@ -9222,10 +9090,10 @@ del /f /q "%~f0"
             now = time.time()
             if now - last_internet_warning_time > 60:
                 print(f"[Auto-Rejoin] [{account}] Internet unavailable, delaying launch.")
-                self.discord_manager.send_rejoin_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Waiting For Internet",
                     f"**{account}** is waiting for internet before launching.",
-                    self.discord_manager.COLOR_WARNING
+                    0xF39C12
                 )
                 last_internet_warning_time = now
             return False
@@ -9263,10 +9131,10 @@ del /f /q "%~f0"
             print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
         
         print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
-        self.discord_manager.send_rejoin_embed(
+        self._maybe_send_webhook_embed(
             "Auto Rejoin — Started",
             f"**{account}** is now being monitored for place `{place_id}`.",
-            self.discord_manager.COLOR_INFO
+            0x3498DB
         )
 
         consecutive_failed_checks = 0
@@ -9282,10 +9150,10 @@ del /f /q "%~f0"
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
             if not success:
                 retry_count += 1
-                self.discord_manager.send_rejoin_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Launch Failed",
                     f"**{account}** failed to launch place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                    self.discord_manager.COLOR_ERROR
+                    0xE74C3C
                 )
                 if retry_count >= max_retries:
                     print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached on initial launch. Stopping.")
@@ -9301,10 +9169,10 @@ del /f /q "%~f0"
                 if check_presence:
                     in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id, stop_event)
                     if pres_err:
-                        self.discord_manager.send_rejoin_embed(
+                        self._maybe_send_webhook_embed(
                             "Auto Rejoin — Presence Error",
                             f"**{account}**\n{pres_err}",
-                            self.discord_manager.COLOR_WARNING
+                            0xF39C12
                         )
                     disconnect_detected = not in_game
                     
@@ -9361,10 +9229,10 @@ del /f /q "%~f0"
                     consecutive_failed_checks = 0
                     print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
 
-                    self.discord_manager.send_rejoin_embed(
+                    self._maybe_send_webhook_embed(
                         "Auto Rejoin — Disconnected",
                         f"**{account}** disconnected from place `{place_id}`.\nRejoin attempt **{retry_count}/{max_retries}**.",
-                        self.discord_manager.COLOR_WARNING
+                        0xF39C12
                     )
 
                     if account in self.auto_rejoin_pids:
@@ -9383,25 +9251,25 @@ del /f /q "%~f0"
 
                     if success:
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
-                        self.discord_manager.send_rejoin_embed(
+                        self._maybe_send_webhook_embed(
                             "Auto Rejoin — Success",
                             f"**{account}** has rejoined place `{place_id}`.",
-                            self.discord_manager.COLOR_SUCCESS
+                            0x2ECC71
                         )
                         retry_count = 0
                         time.sleep(10)
                     else:
-                        self.discord_manager.send_rejoin_embed(
+                        self._maybe_send_webhook_embed(
                             "Auto Rejoin — Rejoin Failed",
                             f"**{account}** failed to relaunch for place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                            self.discord_manager.COLOR_ERROR
+                            0xE74C3C
                         )
                         if retry_count >= max_retries:
                             print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
-                            self.discord_manager.send_rejoin_embed(
+                            self._maybe_send_webhook_embed(
                                 "Auto Rejoin — Stopped",
                                 f"**{account}** reached max retries ({max_retries}). Auto-rejoin stopped.",
-                                self.discord_manager.COLOR_ERROR
+                                0xE74C3C
                             )
                             break
                         if wait_next_check():
@@ -9413,10 +9281,10 @@ del /f /q "%~f0"
 
             except Exception as e:
                 print(f"[Auto-Rejoin] [{account}] Error: {e}")
-                self.discord_manager.send_rejoin_embed(
+                self._maybe_send_webhook_embed(
                     "Auto Rejoin — Error",
                     f"**{account}**\n```{e}```",
-                    self.discord_manager.COLOR_ERROR
+                    0xE74C3C
                 )
                 if wait_next_check():
                     break
