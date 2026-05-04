@@ -87,7 +87,7 @@ The following Python packages are required:
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
-- `discord.py` - (removed) Previously used for a Discord bot; webhook-only integration remains via `requests`.
+- `pyautoit` - Window rotation and maintenance actions for Anti-AFK
 
 ## ⚠️ Disclaimer
 
@@ -246,8 +246,9 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 
 | Feature | Description | How to Use |
 | :--- | :--- | :--- |
-| **Anti-AFK System** | Periodic key/mouse presses to prevent AFK detection | Settings → Anti-AFK tab → enable & configure |
-| **Key Recording** | Record any keyboard or mouse input as the AFK action | Settings → Anti-AFK → click record button |
-| **Mouse Button Support** | Use LMB, RMB, MMB, scroll, or XButton as AFK input | Settings → Anti-AFK → select mouse action |
-| **Key Press Amount** | Configure how many times the input is triggered (1–10) | Settings → Anti-AFK → set amount |
-| **Configurable Interval** | Set how often the AFK action fires (1–19 minutes) | Settings → Anti-AFK → set interval |
+| **Anti-AFK Window** | Opens a dedicated maintenance window for anti-AFK controls | Roblox tab → click **Anti-AFK** |
+| **Key Recording** | Record any keyboard or mouse input as the maintenance action | Anti-AFK window → click the action key button |
+| **Press Time** | Set how long the chosen input is held during maintenance | Anti-AFK window → set press time |
+| **Configurable Interval** | Set how often maintenance runs | Anti-AFK window → set interval |
+| **30s Countdown Tooltip** | Shows a countdown before each maintenance cycle | Automatic while Anti-AFK is enabled |
+| **Roblox RAM Trim** | Clears the working set of newly detected Roblox processes | Roblox tab → enable **Optimize Roblox Ram** |

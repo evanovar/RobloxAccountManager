@@ -4,3 +4,4 @@ requests>=2.28.0
 pycryptodome>=3.15.0
 pywin32>=305
 psutil>=5.9.0
+pyautoit>=0.6.5

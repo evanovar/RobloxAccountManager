@@ -39,6 +39,7 @@ from PIL import Image, ImageTk
 from io import BytesIO
 from tkinter import filedialog
 from urllib.request import urlretrieve
+import autoit
 from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
@@ -99,6 +100,13 @@ class AccountManagerUI:
         
         self.anti_afk_thread = None
         self.anti_afk_stop_event = threading.Event()
+        self.anti_afk_window = None
+        self.anti_afk_tooltip = None
+        self.anti_afk_tooltip_label = None
+        self.anti_afk_tooltip_timer = None
+        self.optimize_ram_thread = None
+        self.optimize_ram_stop_event = threading.Event()
+        self.optimize_ram_seen_pids = set()
         
         self.rename_thread = None
         self.rename_stop_event = threading.Event()
@@ -136,7 +144,6 @@ class AccountManagerUI:
         self._list_row_map = []
         self._collapsed_groups = set(self.settings.get("group_collapsed", []))
 
-        # Discord bot removed; keep webhook-only support
         try:
             webhook_cfg = self.settings.get("discord_webhook", {})
             webhook_url = str(webhook_cfg.get("url", "") or "").strip()
@@ -400,6 +407,9 @@ class AccountManagerUI:
         
         if hasattr(self, 'anti_afk_stop_event'):
             self.stop_anti_afk()
+
+        if hasattr(self, 'optimize_ram_stop_event'):
+            self.stop_optimize_roblox_ram()
         
         if hasattr(self, 'rename_stop_event'):
             self.stop_rename_monitoring()
@@ -407,8 +417,6 @@ class AccountManagerUI:
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
 
-        # Discord manager removed; no shutdown needed
-        
         RobloxAPI.restore_installers()
         self.root.destroy()
 
@@ -529,6 +537,7 @@ class AccountManagerUI:
             "max_games_spinner",
             "interval_spinner",
             "amount_spinner",
+            "optimize_ram_limit_entry",
         ):
             widget = getattr(self, widget_name, None)
             if widget:
@@ -861,7 +870,9 @@ class AccountManagerUI:
                     "enable_multi_select": False,
                     "anti_afk_enabled": False,
                     "anti_afk_interval_minutes": 10,
+                    "anti_afk_press_time_seconds": 1,
                     "anti_afk_key": "w",
+                    "optimize_roblox_ram": False,
                     "disable_launch_popup": False,
                     "auto_rejoin_configs": {},
                     "multi_roblox_method": "default",
@@ -884,7 +895,9 @@ class AccountManagerUI:
                 "enable_multi_select": False,
                 "anti_afk_enabled": False,
                 "anti_afk_interval_minutes": 10,
+                "anti_afk_press_time_seconds": 1,
                 "anti_afk_key": "w",
+                "optimize_roblox_ram": False,
                 "auto_rejoin_configs": {},
                 "disable_launch_popup": False,
                 "multi_roblox_method": "default",
@@ -895,6 +908,18 @@ class AccountManagerUI:
             }
 
         settings_migrated = self._ensure_discord_settings_defaults()
+        if "anti_afk_press_count" not in self.settings:
+            self.settings["anti_afk_press_count"] = self.settings.get("anti_afk_press_time_seconds", self.settings.get("anti_afk_key_amount", 1))
+            settings_migrated = True
+        if "anti_afk_press_time_seconds" not in self.settings:
+            self.settings["anti_afk_press_time_seconds"] = self.settings.get("anti_afk_key_amount", 1)
+            settings_migrated = True
+        if "optimize_roblox_ram" not in self.settings:
+            self.settings["optimize_roblox_ram"] = False
+            settings_migrated = True
+        if "optimize_roblox_ram_limit_mb" not in self.settings:
+            self.settings["optimize_roblox_ram_limit_mb"] = 750
+            settings_migrated = True
         if settings_migrated:
             try:
                 with open(self.settings_file, 'w') as f:
@@ -1541,36 +1566,12 @@ del /f /q "%~f0"
                     changed = True
 
         webhook_cfg = self.settings.setdefault("discord_webhook", {})
-        bot_cfg = self.settings.setdefault("discord_bot", {})
 
         for key, value in self._default_discord_integration_settings("webhook").items():
             webhook_cfg.setdefault(key, value)
-        for key, value in self._default_discord_integration_settings("bot").items():
-            bot_cfg.setdefault(key, value)
-
-        legacy_token = str(bot_cfg.pop("token", "") or "").strip()
-        if legacy_token:
-            self.set_discord_bot_token(legacy_token)
-            changed = True
-        elif "token" in bot_cfg:
-            changed = True
 
         self.settings["discord_webhook"] = webhook_cfg
-        self.settings["discord_bot"] = bot_cfg
         return changed
-
-    def get_discord_bot_token(self):
-        try:
-            token = self.manager.get_secure_setting("discord_bot_token", "")
-            return str(token or "").strip()
-        except Exception:
-            return ""
-
-    def set_discord_bot_token(self, token):
-        try:
-            self.manager.set_secure_setting("discord_bot_token", str(token or "").strip())
-        except Exception as e:
-            print(f"[ERROR] Failed to save Discord bot token securely: {e}")
 
     def _process_ui_task_queue(self):
         try:
@@ -1608,353 +1609,6 @@ del /f /q "%~f0"
         if result_box["error"] is not None:
             raise result_box["error"]
         return result_box["value"]
-
-    def discord_bot_list_accounts(self):
-        lines = []
-        for username in sorted(self.manager.accounts.keys()):
-            cookie_valid = self.cookie_status.get(username)
-            if cookie_valid is True:
-                status = "valid"
-            elif cookie_valid is False:
-                status = "expired"
-            else:
-                status = "unknown"
-            note = self.manager.get_account_note(username)
-            suffix = f" - {note}" if note else ""
-            lines.append(f"{username} [{status}]{suffix}")
-        return lines or ["No accounts configured."]
-
-    def discord_bot_launch_account(self, account_name, place_id, private_server_id="", job_id=""):
-        account_name = account_name.strip()
-        place_id = place_id.strip()
-        private_server_id = private_server_id.strip()
-        job_id = job_id.strip()
-
-        if account_name not in self.manager.accounts:
-            return f"Account '{account_name}' was not found."
-        if not place_id.isdigit():
-            return "Place ID must be a number."
-
-        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-        success = self.manager.launch_roblox(account_name, place_id, private_server_id, launcher_pref, job_id, custom_launcher_path)
-        if success and self.settings.get("auto_tile_windows", False):
-            self.root.after(1500, self._tile_roblox_windows_after_launch)
-
-        if success:
-            return f"Launched '{account_name}' on place {place_id}."
-        return f"Failed to launch '{account_name}'."
-
-    def discord_bot_launch_user(self, account_name, user_to_join):
-        account_name = account_name.strip()
-        user_to_join = user_to_join.strip()
-
-        if account_name not in self.manager.accounts:
-            return f"Account '{account_name}' was not found."
-        if not user_to_join:
-            return "User to join is required."
-
-        user_id = RobloxAPI.get_user_id_from_username(user_to_join)
-        if not user_id:
-            return f"User '{user_to_join}' was not found."
-
-        cookie = self.manager.accounts.get(account_name, {}).get("cookie")
-        if not cookie:
-            return f"Failed to get cookie for '{account_name}'."
-
-        presence = RobloxAPI.get_player_presence(user_id, cookie)
-        if not presence:
-            return f"Failed to get presence for '{user_to_join}'."
-        if not presence.get("in_game"):
-            return f"'{user_to_join}' is not currently in a game."
-
-        place_id = str(presence.get("place_id", "")).strip()
-        game_id = str(presence.get("game_id", "")).strip()
-        if not place_id:
-            return f"Could not get game info for '{user_to_join}'."
-
-        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id, custom_launcher_path)
-        if success:
-            game_name = RobloxAPI.get_game_name(place_id) or f"Place {place_id}"
-            self.add_game_to_list(place_id, game_name, "")
-            return f"Launched '{account_name}' to join '{user_to_join}' in place {place_id}."
-        return f"Failed to launch '{account_name}' for join-user."
-
-    def discord_bot_launch_small(self, account_name, place_id):
-        account_name = account_name.strip()
-        place_id = place_id.strip()
-
-        if account_name not in self.manager.accounts:
-            return f"Account '{account_name}' was not found."
-        if not place_id.isdigit():
-            return "Place ID must be a number."
-
-        game_id = RobloxAPI.get_smallest_server(place_id)
-        if not game_id:
-            return f"No available servers found for place {place_id}."
-
-        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-        success = self.manager.launch_roblox(account_name, place_id, "", launcher_pref, game_id, custom_launcher_path)
-        if success:
-            game_name = RobloxAPI.get_game_name(place_id) or f"Place {place_id}"
-            self.add_game_to_list(place_id, game_name, "")
-            return f"Launched '{account_name}' to smallest server in place {place_id}."
-        return f"Failed to launch '{account_name}' to smallest server."
-
-    def discord_bot_capture_screenshot(self):
-        try:
-            return self._capture_screenshot_png()
-        except Exception as e:
-            print(f"[ERROR] Screenshot capture failed: {e}")
-            return None
-
-    def discord_bot_autorejoin_action(self, action, account_name):
-        action = action.strip().lower()
-        account_name = account_name.strip()
-
-        if account_name not in self.auto_rejoin_configs:
-            return f"'{account_name}' is not configured for auto-rejoin."
-
-        if action == "start":
-            self._match_pids_to_accounts([account_name])
-            self.start_auto_rejoin_for_account(account_name)
-            return f"Auto-rejoin started for '{account_name}'."
-
-        if action == "stop":
-            self.stop_auto_rejoin_for_account(account_name)
-            return f"Auto-rejoin stopped for '{account_name}'."
-
-        return "Action must be 'start' or 'stop'."
-
-    def discord_bot_add_autorejoin(self, account_name, place_id, private_server_id="", job_id="", check_interval=10, max_retries=5, check_presence=True):
-        account_name = account_name.strip()
-        place_id = place_id.strip()
-        private_server_id = private_server_id.strip()
-        job_id = job_id.strip()
-
-        if account_name not in self.manager.accounts:
-            return f"Account '{account_name}' was not found."
-        if not place_id.isdigit():
-            return "Place ID must be a number."
-
-        self.auto_rejoin_configs[account_name] = {
-            "place_id": place_id,
-            "private_server": private_server_id,
-            "job_id": job_id,
-            "check_interval": max(5, int(check_interval)),
-            "max_retries": max(1, int(max_retries)),
-            "check_presence": bool(check_presence),
-        }
-        self.settings["auto_rejoin_configs"] = self.auto_rejoin_configs
-        self.save_settings()
-        return f"Auto-rejoin config saved for '{account_name}'."
-
-    def discord_bot_set_general_setting(self, setting_name, enabled=True):
-        aliases = {
-            "topmost": "enable_topmost",
-            "enable_topmost": "enable_topmost",
-            "multi_roblox": "enable_multi_roblox",
-            "enable_multi_roblox": "enable_multi_roblox",
-            "confirm_before_launch": "confirm_before_launch",
-            "multi_select": "enable_multi_select",
-            "enable_multi_select": "enable_multi_select",
-            "disable_launch_popup": "disable_launch_popup",
-            "auto_tile_windows": "auto_tile_windows",
-            "rename_roblox_windows": "rename_roblox_windows",
-        }
-
-        key = aliases.get(setting_name.strip().lower())
-        if not key:
-            return "Unsupported setting name. Use /help to see supported names."
-
-        enabled = bool(enabled)
-        if key == "enable_topmost":
-            self.settings[key] = enabled
-            self.root.attributes("-topmost", enabled)
-            if hasattr(self, "settings_window") and self.settings_window and self.settings_window.winfo_exists():
-                self.settings_window.attributes("-topmost", enabled)
-        elif key == "enable_multi_select":
-            self.settings[key] = enabled
-            self.account_list.config(selectmode=tk.EXTENDED if enabled else tk.SINGLE)
-        elif key == "enable_multi_roblox":
-            if enabled:
-                success = self.enable_multi_roblox()
-                self.settings[key] = bool(success)
-                self.save_settings()
-                return "Multi Roblox enabled." if success else "Failed to enable Multi Roblox."
-            self.disable_multi_roblox()
-            self.settings[key] = False
-        elif key == "rename_roblox_windows":
-            self.settings[key] = enabled
-            if enabled:
-                self.start_rename_monitoring()
-            else:
-                self.stop_rename_monitoring()
-        else:
-            self.settings[key] = enabled
-
-        self.save_settings()
-        return f"{key} set to {enabled}."
-
-    def discord_bot_set_roblox_launcher(self, launcher_name):
-        launcher_name = launcher_name.strip().lower()
-        valid_launchers = {"default", "bloxstrap", "fishstrap", "froststrap", "voidstrap", "client"}
-        if launcher_name not in valid_launchers:
-            return "Invalid launcher. Use /help to see supported launchers."
-
-        self.settings["roblox_launcher"] = launcher_name
-        self.save_settings()
-        return f"Roblox launcher set to '{launcher_name}'."
-
-    def discord_bot_set_antiafk(self, enabled):
-        enabled = bool(enabled)
-        self.settings["anti_afk_enabled"] = enabled
-        if enabled:
-            self.start_anti_afk()
-        else:
-            self.stop_anti_afk()
-        self.save_settings()
-        return f"Anti-AFK {'enabled' if enabled else 'disabled'}."
-
-    def discord_bot_settings(self, action, setting_option):
-        action = action.strip().lower()
-        if action not in {"enable", "disable"}:
-            return "Action must be 'enable' or 'disable'."
-        return self.discord_bot_set_general_setting(setting_option, action == "enable")
-
-    def discord_bot_close_roblox(self, target):
-        target = (target or "").strip()
-        if not target:
-            return "Target is required. Use ALL or a PID."
-
-        if target.upper() == "ALL":
-            result = subprocess.run(
-                ['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            if result.returncode == 0:
-                return "Closed all Roblox instances."
-            return "No Roblox instances were found running."
-
-        if not target.isdigit():
-            return "Invalid target. Use ALL or a numeric PID."
-
-        result = subprocess.run(
-            ['taskkill', '/F', '/PID', target],
-            capture_output=True,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        if result.returncode == 0:
-            return f"Closed Roblox PID {target}."
-        out = (result.stderr or result.stdout or "").strip()
-        return f"Failed to close PID {target}. {out[:180]}".strip()
-
-    def discord_bot_active_list(self):
-        pids = sorted(self._get_roblox_pids())
-        if not pids:
-            return ["No active Roblox instances found."]
-
-        lines = [f"Actives: {len(pids)}"]
-        used_logs = set()
-        for pid in pids:
-            user_id, _ = self._get_user_id_from_pid(pid, used_logs)
-            username = "Unknown"
-            if user_id:
-                try:
-                    username = RobloxAPI.get_username_from_user_id(int(user_id)) or "Unknown"
-                except Exception:
-                    username = "Unknown"
-            lines.append(f"Username: {username} | PID: {pid}")
-        return lines
-
-    def discord_bot_set_active_window(self, pid):
-        pid_text = str(pid).strip()
-        if not pid_text.isdigit():
-            return "Invalid PID. Use a numeric PID."
-
-        pid_int = int(pid_text)
-        if pid_int not in self._get_roblox_pids():
-            return f"PID {pid_int} is not an active Roblox instance."
-
-        hwnds = self._get_roblox_hwnds_from_pids({pid_int})
-        if not hwnds:
-            return f"Failed to focus PID {pid_int}: no visible Roblox window found."
-
-        try:
-            hwnd = hwnds[0]
-            win32gui.ShowWindow(hwnd, 9)
-            win32gui.BringWindowToTop(hwnd)
-            win32gui.SetForegroundWindow(hwnd)
-            return f"Focused Roblox PID {pid_int}."
-        except Exception as e:
-            return f"Failed to focus PID {pid_int}: {e}"
-
-    def discord_bot_update_antiafk_settings(self, interval_minutes=None, action_key=None, key_amount=None):
-        updates = []
-
-        if interval_minutes is not None:
-            try:
-                interval = int(interval_minutes)
-            except Exception:
-                return "Interval must be a number."
-            interval = min(19, max(1, interval))
-            self.settings["anti_afk_interval_minutes"] = interval
-            updates.append(f"interval={interval}")
-
-        if action_key is not None:
-            key = str(action_key).strip().lower()
-            if not key:
-                return "Action key cannot be empty."
-            self.settings["anti_afk_key"] = key
-            updates.append(f"key={key}")
-
-        if key_amount is not None:
-            try:
-                amount = int(key_amount)
-            except Exception:
-                return "Key amount must be a number."
-            amount = min(10, max(1, amount))
-            self.settings["anti_afk_key_amount"] = amount
-            updates.append(f"amount={amount}")
-
-        if not updates:
-            return "No Anti-AFK settings provided to update."
-
-        self.save_settings()
-        return "Updated Anti-AFK settings: " + ", ".join(updates)
-
-    def discord_bot_import_cookie(self, cookie):
-        success, username = self.manager.import_cookie_account(cookie)
-        if not success:
-            return "Failed to import cookie account. Check cookie format or validity."
-
-        if username:
-            self.cookie_status[username] = True
-        self.refresh_accounts()
-        return f"Imported account '{username}'."
-
-    def is_chrome_installed(self):
-        """Best-effort check to see if Google Chrome is installed (Windows)."""
-        try:
-            candidates = []
-            pf = os.environ.get('ProgramFiles')
-            pfx86 = os.environ.get('ProgramFiles(x86)')
-            localapp = os.environ.get('LOCALAPPDATA')
-            if pf:
-                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if pfx86:
-                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if localapp:
-                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            for path in candidates:
-                if path and os.path.exists(path):
-                    return True
-        except Exception:
-            pass
-        return False
 
     def get_browser_path(self):
         """Get path to the selected browser (Chrome or Chromium)."""
@@ -2561,7 +2215,6 @@ del /f /q "%~f0"
             url = str(self._get_webhook_cfg().get("url", "") or "").strip()
             if not url:
                 return
-            # Send as an embed with code block for readability
             self._send_webhook_embed(url, "Log", f"```{message}```", 0x5865F2)
         except Exception:
             pass
@@ -2682,8 +2335,6 @@ del /f /q "%~f0"
         self.cookie_status[username] = is_valid
         if username in self.manager.accounts and isinstance(self.manager.accounts[username], dict):
             self.manager.accounts[username]['cookie_valid'] = is_valid
-
-    # Discord logo/button support removed; webhook-only integration retained.
 
     def _silent_check_cookies(self):
         """Trigger a background silent cookie check. Safe to call from any thread."""
@@ -5909,215 +5560,151 @@ del /f /q "%~f0"
             command=on_rename_toggle
         ).pack(anchor="w", pady=(0, 10))
         
-        ttk.Label(
+        anti_afk_btn = ttk.Button(
             roblox_frame,
-            text="Anti-AFK Settings:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 10, "bold")
-        ).pack(anchor="w", pady=(10, 10))
-        
-        anti_afk_var = tk.BooleanVar(value=self.settings.get("anti_afk_enabled", False))
-        
-        def on_anti_afk_toggle():
-            enabled = anti_afk_var.get()
-            self.settings["anti_afk_enabled"] = enabled
-            self.save_settings()
-            
-            if enabled:
-                self.start_anti_afk()
-            else:
-                self.stop_anti_afk()
-        
-        anti_afk_check = ttk.Checkbutton(
-            roblox_frame,
-            text="Enable Anti-AFK",
-            variable=anti_afk_var,
-            style="Dark.TCheckbutton",
-            command=on_anti_afk_toggle
-        )
-        anti_afk_check.pack(anchor="w", pady=2)
-        self.anti_afk_check = anti_afk_check
-        
-        settings_frame = ttk.Frame(roblox_frame, style="Dark.TFrame")
-        settings_frame.pack(fill="x", pady=(5, 0))
-        
-        action_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
-        action_frame.pack(fill="x", pady=2)
-        
-        ttk.Label(
-            action_frame,
-            text="Action Key:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 9)
-        ).pack(side="left")
-        
-        current_key = self.settings.get("anti_afk_key", "w")
-        
-        key_button = ttk.Button(
-            action_frame,
-            text=current_key.upper(),
+            text="Anti-AFK",
             style="Dark.TButton",
-            width=14
+            command=self.open_anti_afk_window
         )
-        key_button.pack(side="right")
-        self.key_button = key_button
-        
-        def start_key_recording():
-            key_button.config(text="Press...")
-            key_button.focus_set()
-            
-            def finish_recording(recorded_key):
-                key_button.config(text=recorded_key.upper())
-                self.settings["anti_afk_key"] = recorded_key
-                self.save_settings()
-                
-                key_button.unbind("<KeyPress>")
-                key_button.unbind("<Button-1>")
-                key_button.unbind("<Button-2>")
-                key_button.unbind("<Button-3>")
-                key_button.unbind("<Button-4>")
-                key_button.unbind("<Button-5>")
-                key_button.unbind("<MouseWheel>")
-            
-            def on_key_press(event):
-                key = event.keysym.lower()
-                
-                key_mapping = {
-                    "return": "enter",
-                    "control_l": "ctrl",
-                    "control_r": "ctrl",
-                    "shift_l": "shift",
-                    "shift_r": "shift",
-                    "alt_l": "alt",
-                    "alt_r": "alt"
-                }
-                
-                key = key_mapping.get(key, key)
-                finish_recording(key)
-                return "break"
-            
-            def on_mouse_button(event):
-                mouse_mapping = {
-                    1: "lmb",
-                    2: "mmb",
-                    3: "rmb",
-                    4: "xbutton1",
-                    5: "xbutton2"
-                }
-                button = mouse_mapping.get(event.num, f"mouse{event.num}")
-                finish_recording(button)
-                return "break"
-            
-            def on_scroll(event):
-                if event.delta > 0:
-                    finish_recording("scroll_up")
-                else:
-                    finish_recording("scroll_down")
-                return "break"
-            
-            key_button.bind("<KeyPress>", on_key_press)
-            key_button.bind("<Button-1>", on_mouse_button)
-            key_button.bind("<Button-2>", on_mouse_button)
-            key_button.bind("<Button-3>", on_mouse_button)
-            key_button.bind("<Button-4>", on_mouse_button)
-            key_button.bind("<Button-5>", on_mouse_button)
-            key_button.bind("<MouseWheel>", on_scroll)
-        
-        key_button.config(command=start_key_recording)
-        
-        interval_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
-        interval_frame.pack(fill="x", pady=2)
-        
-        ttk.Label(
-            interval_frame,
-            text="Interval (minutes):",
-            style="Dark.TLabel",
-            font=("Segoe UI", 9)
-        ).pack(side="left")
-        
-        interval_var = tk.IntVar(value=self.settings.get("anti_afk_interval_minutes", 10))
-        
-        def on_interval_change():
+        anti_afk_btn.pack(fill="x", pady=(10, 5))
+        self.anti_afk_btn = anti_afk_btn
+
+        optimize_ram_var = tk.BooleanVar(value=self.settings.get("optimize_roblox_ram", False))
+        optimize_ram_limit_var = tk.IntVar(value=int(self.settings.get("optimize_roblox_ram_limit_mb", 750)))
+
+        def on_optimize_ram_toggle():
+            enabled = optimize_ram_var.get()
+            self.settings["optimize_roblox_ram"] = enabled
             try:
-                new_value = interval_var.get()
-                self.settings["anti_afk_interval_minutes"] = new_value
-                self.save_settings()
-            except:
-                pass
-        
-        interval_spinner = tk.Spinbox(
-            interval_frame,
-            from_=1,
-            to=19,
-            textvariable=interval_var,
+                self.settings["optimize_roblox_ram_limit_mb"] = max(1, int(optimize_ram_limit_var.get()))
+            except Exception:
+                self.settings["optimize_roblox_ram_limit_mb"] = 750
+            self.save_settings()
+            if enabled:
+                self.start_optimize_roblox_ram()
+            else:
+                self.stop_optimize_roblox_ram()
+
+        optimize_ram_check = ttk.Checkbutton(
+            roblox_frame,
+            text="Boost Roblox Ram (may cause crash)",
+            variable=optimize_ram_var,
+            style="Dark.TCheckbutton",
+            command=on_optimize_ram_toggle
+        )
+        optimize_ram_check.pack(anchor="w", pady=(0, 10))
+        self.optimize_ram_check = optimize_ram_check
+
+        optimize_ram_limit_row = ttk.Frame(roblox_frame, style="Dark.TFrame")
+        optimize_ram_limit_row.pack(fill="x", pady=(0, 4))
+
+        optimize_ram_limit_label = ttk.Label(
+            optimize_ram_limit_row,
+            text="Low Ram Limit (MB):",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        )
+        optimize_ram_limit_label.pack(side="left")
+
+        optimize_ram_limit_entry = tk.Spinbox(
+            optimize_ram_limit_row,
+            from_=100,
+            to=4096,
+            increment=25,
+            textvariable=optimize_ram_limit_var,
             width=8,
             bg=self.BG_MID,
             fg=self.FG_TEXT,
             buttonbackground=self.BG_LIGHT,
             font=(self.FONT_FAMILY, 9),
-            command=on_interval_change,
             readonlybackground=self.BG_MID,
+            disabledbackground=self.BG_MID,
+            disabledforeground=self.FG_TEXT,
             selectbackground=self.FG_ACCENT,
             selectforeground=self.FG_TEXT,
             insertbackground=self.FG_TEXT,
             relief="flat",
             borderwidth=1,
-            highlightthickness=0
+            highlightthickness=0,
         )
-        interval_spinner.pack(side="right")
-        self.interval_spinner = interval_spinner
-        
-        interval_spinner.bind("<KeyRelease>", lambda e: on_interval_change())
-        interval_spinner.bind("<FocusOut>", lambda e: on_interval_change())
-        
-        amount_frame = ttk.Frame(settings_frame, style="Dark.TFrame")
-        amount_frame.pack(fill="x", pady=2)
-        
-        ttk.Label(
-            amount_frame,
-            text="Key Press Amount:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 9)
-        ).pack(side="left")
-        
-        amount_var = tk.IntVar(value=self.settings.get("anti_afk_key_amount", 1))
-        
-        def on_amount_change():
+        optimize_ram_limit_entry.pack(side="right")
+
+        optimize_ram_tooltip = None
+
+        def show_optimize_ram_tooltip(_event=None):
+            nonlocal optimize_ram_tooltip
+            if optimize_ram_tooltip:
+                return
+            optimize_ram_tooltip = tk.Toplevel(self.root)
+            optimize_ram_tooltip.wm_overrideredirect(True)
+            if self.settings.get("enable_topmost", False):
+                try:
+                    optimize_ram_tooltip.attributes("-topmost", True)
+                except Exception:
+                    pass
+            tooltip_label = tk.Label(
+                optimize_ram_tooltip,
+                text="Low ram limit can increase the CPU of the program, reccomended value is 750 mb",
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)),
+                padx=8,
+                pady=4,
+                relief="solid",
+                borderwidth=1,
+                highlightbackground=self.BG_LIGHT,
+                highlightcolor=self.BG_LIGHT,
+            )
+            tooltip_label.pack()
+            optimize_ram_tooltip.update_idletasks()
+            x = optimize_ram_limit_entry.winfo_rootx()
+            y = optimize_ram_limit_entry.winfo_rooty() + optimize_ram_limit_entry.winfo_height() + 5
+            optimize_ram_tooltip.wm_geometry(f"+{x}+{y}")
+
+        def hide_optimize_ram_tooltip(_event=None):
+            nonlocal optimize_ram_tooltip
+            if optimize_ram_tooltip:
+                try:
+                    optimize_ram_tooltip.destroy()
+                except Exception:
+                    pass
+                optimize_ram_tooltip = None
+
+        optimize_ram_limit_label.bind("<Enter>", show_optimize_ram_tooltip)
+        optimize_ram_limit_label.bind("<Leave>", hide_optimize_ram_tooltip)
+        optimize_ram_limit_entry.bind("<Enter>", show_optimize_ram_tooltip)
+        optimize_ram_limit_entry.bind("<Leave>", hide_optimize_ram_tooltip)
+
+        self.optimize_ram_limit_entry = optimize_ram_limit_entry
+
+        def save_optimize_ram_limit(*_):
             try:
-                new_value = amount_var.get()
-                self.settings["anti_afk_key_amount"] = new_value
-                self.save_settings()
-            except:
-                pass
-        
-        amount_spinner = tk.Spinbox(
-            amount_frame,
-            from_=1,
-            to=10,
-            textvariable=amount_var,
-            width=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            command=on_amount_change,
-            readonlybackground=self.BG_MID,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
-            borderwidth=1,
-            highlightthickness=0
-        )
-        amount_spinner.pack(side="right")
-        self.amount_spinner = amount_spinner
-        
-        amount_spinner.bind("<KeyRelease>", lambda e: on_amount_change())
-        amount_spinner.bind("<FocusOut>", lambda e: on_amount_change())
-        
+                self.settings["optimize_roblox_ram_limit_mb"] = max(1, int(optimize_ram_limit_var.get()))
+            except Exception:
+                self.settings["optimize_roblox_ram_limit_mb"] = 750
+            self.save_settings()
+
+        optimize_ram_limit_entry.bind("<KeyRelease>", save_optimize_ram_limit)
+        optimize_ram_limit_entry.bind("<FocusOut>", save_optimize_ram_limit)
+
+        def update_optimize_ram_controls():
+            state = "normal" if optimize_ram_var.get() else "disabled"
+            optimize_ram_limit_entry.config(state=state)
+
+        update_optimize_ram_controls()
+
+        def on_optimize_ram_toggle_wrapper():
+            update_optimize_ram_controls()
+            on_optimize_ram_toggle()
+
         if self.settings.get("anti_afk_enabled", False):
             self.root.after(1000, self.start_anti_afk)
-        
+
+        if self.settings.get("optimize_roblox_ram", False):
+            self.root.after(1200, self.start_optimize_roblox_ram)
+
+        optimize_ram_check.config(command=on_optimize_ram_toggle_wrapper)
+
         if self.settings.get("rename_roblox_windows", False):
             self.root.after(1000, self.start_rename_monitoring)
         
@@ -6760,7 +6347,6 @@ del /f /q "%~f0"
         def _dc_ss_toggle(*_):
             dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
             _dc_save()
-            # Use webhook settings for screenshot loop
             try:
                 cfg = self.settings.get("discord_webhook", {})
                 if cfg.get("enabled") and cfg.get("screenshot_enabled"):
@@ -8317,7 +7903,6 @@ del /f /q "%~f0"
         if len(self.console_output) > self._MAX_CONSOLE_LINES:
             del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
 
-        # Send console logs to webhook if configured
         self._maybe_log_message(message)
         
         if self.console_text_widget:
@@ -8897,6 +8482,343 @@ del /f /q "%~f0"
             self.anti_afk_stop_event.set()
             self.anti_afk_thread.join(timeout=2)
             print("[Anti-AFK] Stopped")
+        self._hide_anti_afk_tooltip()
+
+    def _hide_anti_afk_tooltip(self):
+        if self.anti_afk_tooltip_timer:
+            try:
+                self.root.after_cancel(self.anti_afk_tooltip_timer)
+            except Exception:
+                pass
+            self.anti_afk_tooltip_timer = None
+
+        if self.anti_afk_tooltip:
+            try:
+                self.anti_afk_tooltip.destroy()
+            except Exception:
+                pass
+            self.anti_afk_tooltip = None
+            self.anti_afk_tooltip_label = None
+
+    def _show_anti_afk_tooltip(self, text):
+        if self.anti_afk_stop_event.is_set() or not self.root.winfo_exists():
+            return
+
+        def _create_or_update():
+            if self.anti_afk_tooltip and self.anti_afk_tooltip.winfo_exists():
+                if self.anti_afk_tooltip_label:
+                    self.anti_afk_tooltip_label.config(text=text)
+                self._position_anti_afk_tooltip(self.anti_afk_tooltip)
+                return
+
+            self.anti_afk_tooltip = tk.Toplevel(self.root)
+            self.anti_afk_tooltip.wm_overrideredirect(True)
+            self.anti_afk_tooltip.configure(bg=self.BG_MID)
+            self.anti_afk_tooltip.attributes("-topmost", True)
+            if self.settings.get("enable_topmost", False):
+                try:
+                    self.anti_afk_tooltip.attributes("-topmost", True)
+                except Exception:
+                    pass
+
+            label = tk.Label(
+                self.anti_afk_tooltip,
+                text=text,
+                bg=self.BG_MID,
+                fg=self.FG_TEXT,
+                font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)),
+                padx=10,
+                pady=5,
+                relief="solid",
+                borderwidth=1,
+                highlightbackground=self.BG_LIGHT,
+                highlightcolor=self.BG_LIGHT,
+            )
+            label.pack()
+            self.anti_afk_tooltip_label = label
+
+            self.anti_afk_tooltip.update_idletasks()
+            self._position_anti_afk_tooltip(self.anti_afk_tooltip)
+
+        if self.root.winfo_exists():
+            self.root.after(0, _create_or_update)
+
+    def _position_anti_afk_tooltip(self, tooltip_window):
+        if not tooltip_window or not tooltip_window.winfo_exists():
+            return
+
+        try:
+            point = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+            x = point.x + 18
+            y = point.y + 22
+            tooltip_window.wm_geometry(f"+{x}+{y}")
+        except Exception:
+            try:
+                x = self.root.winfo_pointerx() + 18
+                y = self.root.winfo_pointery() + 22
+                tooltip_window.wm_geometry(f"+{x}+{y}")
+            except Exception:
+                pass
+
+    def _anti_afk_record_action_key(self, button, key_var):
+        button.config(text="Press...")
+        button.focus_set()
+
+        def finish_recording(recorded_key):
+            key_var.set(recorded_key)
+            button.config(text=recorded_key.upper())
+            self.settings["anti_afk_key"] = recorded_key
+            self.save_settings()
+
+            button.unbind("<KeyPress>")
+            button.unbind("<Button-1>")
+            button.unbind("<Button-2>")
+            button.unbind("<Button-3>")
+            button.unbind("<Button-4>")
+            button.unbind("<Button-5>")
+            button.unbind("<MouseWheel>")
+
+        def on_key_press(event):
+            key = event.keysym.lower()
+            key_mapping = {
+                "return": "enter",
+                "control_l": "ctrl",
+                "control_r": "ctrl",
+                "shift_l": "shift",
+                "shift_r": "shift",
+                "alt_l": "alt",
+                "alt_r": "alt",
+            }
+            finish_recording(key_mapping.get(key, key))
+            return "break"
+
+        def on_mouse_button(event):
+            mouse_mapping = {
+                1: "lmb",
+                2: "mmb",
+                3: "rmb",
+                4: "xbutton1",
+                5: "xbutton2",
+            }
+            finish_recording(mouse_mapping.get(event.num, f"mouse{event.num}"))
+            return "break"
+
+        def on_scroll(event):
+            finish_recording("scroll_up" if event.delta > 0 else "scroll_down")
+            return "break"
+
+        button.bind("<KeyPress>", on_key_press)
+        button.bind("<Button-1>", on_mouse_button)
+        button.bind("<Button-2>", on_mouse_button)
+        button.bind("<Button-3>", on_mouse_button)
+        button.bind("<Button-4>", on_mouse_button)
+        button.bind("<Button-5>", on_mouse_button)
+        button.bind("<MouseWheel>", on_scroll)
+
+    def open_anti_afk_window(self):
+        """Open the standalone Anti-AFK window"""
+        if self.anti_afk_window and self.anti_afk_window.winfo_exists():
+            self.anti_afk_window.deiconify()
+            self.anti_afk_window.lift()
+            self.anti_afk_window.focus_force()
+            return
+
+        anti_afk_window = tk.Toplevel(self.root)
+        self.apply_window_icon(anti_afk_window)
+        self.anti_afk_window = anti_afk_window
+        anti_afk_window.title("Anti AFK")
+        anti_afk_window.configure(bg=self.BG_DARK)
+        anti_afk_window.resizable(False, False)
+        anti_afk_window.transient(self.root)
+
+        settings_width = 300
+        settings_height = 205
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
+        anti_afk_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
+
+        def on_close():
+            self._hide_anti_afk_tooltip()
+            self.anti_afk_window = None
+            anti_afk_window.destroy()
+
+        anti_afk_window.protocol("WM_DELETE_WINDOW", on_close)
+
+        if self.settings.get("enable_topmost", False):
+            anti_afk_window.attributes("-topmost", True)
+
+        main_frame = ttk.Frame(anti_afk_window, style="Dark.TFrame")
+        main_frame.pack(fill="both", expand=True, padx=18, pady=14)
+
+        ttk.Label(
+            main_frame,
+            text="Anti AFK",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+
+        enabled_var = tk.BooleanVar(value=self.settings.get("anti_afk_enabled", False))
+        action_key_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
+        press_time_var = tk.IntVar(value=int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
+        interval_var = tk.IntVar(value=int(self.settings.get("anti_afk_interval_minutes", 10)))
+
+        def save_anti_afk_settings():
+            self.settings["anti_afk_enabled"] = enabled_var.get()
+            self.settings["anti_afk_key"] = action_key_var.get().strip().lower() or "w"
+            try:
+                self.settings["anti_afk_press_count"] = max(1, int(press_time_var.get()))
+            except Exception:
+                self.settings["anti_afk_press_count"] = 1
+            try:
+                self.settings["anti_afk_interval_minutes"] = max(1, int(interval_var.get()))
+            except Exception:
+                self.settings["anti_afk_interval_minutes"] = 10
+            self.save_settings()
+
+        def on_enabled_toggle():
+            save_anti_afk_settings()
+            if enabled_var.get():
+                self.start_anti_afk()
+            else:
+                self.stop_anti_afk()
+
+        ttk.Checkbutton(
+            main_frame,
+            text="Enable Anti-AFK",
+            variable=enabled_var,
+            style="Dark.TCheckbutton",
+            command=on_enabled_toggle
+        ).pack(anchor="w", pady=(0, 10))
+
+        action_row = ttk.Frame(main_frame, style="Dark.TFrame")
+        action_row.pack(fill="x", pady=2)
+        ttk.Label(action_row, text="Action Key:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
+        action_button = ttk.Button(
+            action_row,
+            text=action_key_var.get().upper(),
+            style="Dark.TButton",
+            width=14
+        )
+        action_button.pack(side="right")
+        action_button.config(command=lambda: self._anti_afk_record_action_key(action_button, action_key_var))
+
+        press_row = ttk.Frame(main_frame, style="Dark.TFrame")
+        press_row.pack(fill="x", pady=2)
+        ttk.Label(press_row, text="Press Keys:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
+        press_spinner = tk.Spinbox(
+            press_row,
+            from_=1,
+            to=10,
+            increment=1,
+            textvariable=press_time_var,
+            width=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_LIGHT,
+            font=(self.FONT_FAMILY, 9),
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0,
+        )
+        press_spinner.pack(side="right")
+        press_spinner.bind("<KeyRelease>", lambda _e: save_anti_afk_settings())
+        press_spinner.bind("<FocusOut>", lambda _e: save_anti_afk_settings())
+
+        interval_row = ttk.Frame(main_frame, style="Dark.TFrame")
+        interval_row.pack(fill="x", pady=2)
+        ttk.Label(interval_row, text="Interval (minutes):", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
+        interval_spinner = tk.Spinbox(
+            interval_row,
+            from_=1,
+            to=120,
+            textvariable=interval_var,
+            width=8,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            buttonbackground=self.BG_LIGHT,
+            font=(self.FONT_FAMILY, 9),
+            readonlybackground=self.BG_MID,
+            selectbackground=self.FG_ACCENT,
+            selectforeground=self.FG_TEXT,
+            insertbackground=self.FG_TEXT,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0,
+        )
+        interval_spinner.pack(side="right")
+        interval_spinner.bind("<KeyRelease>", lambda _e: save_anti_afk_settings())
+        interval_spinner.bind("<FocusOut>", lambda _e: save_anti_afk_settings())
+
+        ttk.Button(
+            main_frame,
+            text="Close",
+            style="Dark.TButton",
+            command=on_close
+        ).pack(fill="x", pady=(12, 0))
+
+        if enabled_var.get():
+            self.start_anti_afk()
+
+    def start_optimize_roblox_ram(self):
+        """Start background RAM trimming for newly detected Roblox processes"""
+        if self.optimize_ram_thread and self.optimize_ram_thread.is_alive():
+            return
+
+        self.optimize_ram_stop_event.clear()
+        self.optimize_ram_thread = threading.Thread(target=self._optimize_roblox_ram_worker, daemon=True, name="RobloxRamTrim")
+        self.optimize_ram_thread.start()
+        print("[INFO] Roblox RAM optimization started")
+
+    def stop_optimize_roblox_ram(self):
+        """Stop background RAM trimming"""
+        if self.optimize_ram_thread and self.optimize_ram_thread.is_alive():
+            self.optimize_ram_stop_event.set()
+            self.optimize_ram_thread.join(timeout=2)
+        self.optimize_ram_thread = None
+        self.optimize_ram_stop_event.clear()
+        print("[INFO] Roblox RAM optimization stopped")
+
+    def _trim_roblox_process_ram(self, pid):
+        try:
+            kernel32 = ctypes.windll.kernel32
+            psapi = ctypes.windll.psapi
+            h_process = kernel32.OpenProcess(0x1F0FFF, False, int(pid))
+            if h_process:
+                try:
+                    psapi.EmptyWorkingSet(h_process)
+                finally:
+                    kernel32.CloseHandle(h_process)
+                print(f"[INFO] Trimmed Roblox RAM for PID {pid}")
+        except Exception as e:
+            print(f"[ERROR] Failed to trim RAM for PID {pid}: {e}")
+
+    def _optimize_roblox_ram_worker(self):
+        while not self.optimize_ram_stop_event.is_set():
+            try:
+                limit_mb = max(1, int(self.settings.get("optimize_roblox_ram_limit_mb", 750)))
+                current_pids = sorted(self._get_roblox_pids())
+
+                for pid in current_pids:
+                    if self.optimize_ram_stop_event.is_set():
+                        break
+                    try:
+                        proc = psutil.Process(pid)
+                        memory_mb = proc.memory_info().rss / 1024 / 1024
+                        if memory_mb >= limit_mb:
+                            self._trim_roblox_process_ram(pid)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            except Exception as e:
+                print(f"[ERROR] Roblox RAM optimization error: {e}")
+
+            if self.optimize_ram_stop_event.wait(15):
+                break
     
     def start_auto_rejoin_for_account(self, account):
         """Start the auto-rejoin background thread for a specific account"""
@@ -9510,25 +9432,119 @@ del /f /q "%~f0"
             return None, None
       
     def anti_afk_worker(self):
-        """Background worker that sends key presses to Roblox windows"""
-        last_window_count = 0
-        window_timers = {}
-        
+        """Background worker that rotates Roblox windows during anti-AFK maintenance."""
         while not self.anti_afk_stop_event.is_set():
             try:
-                interval_minutes = self.settings.get("anti_afk_interval_minutes", 10)
-                key = self.settings.get("anti_afk_key", "w")
-                current_time = time.time()
-                
-                for _ in range(interval_minutes * 60):
+                interval_minutes = max(1, int(self.settings.get("anti_afk_interval_minutes", 10)))
+                press_count = max(1, int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
+                action_key = str(self.settings.get("anti_afk_key", "w") or "w").strip().lower()
+                total_seconds = interval_minutes * 60
+                countdown_seconds = min(30, total_seconds)
+                wait_seconds = max(0, total_seconds - countdown_seconds)
+
+                if wait_seconds > 0 and self.anti_afk_stop_event.wait(wait_seconds):
+                    break
+
+                for remaining in range(countdown_seconds, 0, -1):
+                    if self.anti_afk_stop_event.is_set():
+                        return
+                    self._show_anti_afk_tooltip(f"Anti-AFK Maintenance will start in {remaining}s")
                     if self.anti_afk_stop_event.wait(1):
                         return
-                
-                self.send_key_to_roblox_windows_staggered(key, window_timers, current_time)
-                
+
+                self._hide_anti_afk_tooltip()
+                self._anti_afk_run_maintenance_cycle(action_key, press_count)
+
             except Exception as e:
                 print(f"[Anti-AFK] Error: {e}")
                 time.sleep(5)
+
+    def _anti_afk_run_maintenance_cycle(self, action_key, press_count):
+        roblox_pids = self._get_roblox_pids()
+        if not roblox_pids:
+            print("[Anti-AFK] No Roblox processes found")
+            return
+
+        hwnds = self._get_roblox_hwnds_from_pids(roblox_pids)
+        if not hwnds:
+            print("[Anti-AFK] No Roblox windows found")
+            return
+
+        try:
+            original_hwnd = win32gui.GetForegroundWindow()
+        except Exception:
+            original_hwnd = None
+
+        for hwnd in hwnds:
+            if self.anti_afk_stop_event.is_set():
+                break
+
+            window_spec = f"[HANDLE:0x{hwnd:08X}]"
+            try:
+                try:
+                    autoit.win_activate(window_spec)
+                except Exception:
+                    win32gui.ShowWindow(hwnd, 9)
+                    win32gui.SetForegroundWindow(hwnd)
+
+                time.sleep(0.15)
+
+                try:
+                    autoit.win_maximize(window_spec)
+                except Exception:
+                    win32gui.ShowWindow(hwnd, 3)
+
+                time.sleep(0.15)
+                for _ in range(max(1, int(press_count))):
+                    if self.anti_afk_stop_event.is_set():
+                        break
+                    self._anti_afk_perform_action(action_key)
+                    time.sleep(0.15)
+
+                try:
+                    autoit.win_minimize(window_spec)
+                except Exception:
+                    win32gui.ShowWindow(hwnd, 6)
+
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"[Anti-AFK] Error on window {hwnd}: {e}")
+
+        if original_hwnd and win32gui.IsWindow(original_hwnd):
+            try:
+                original_spec = f"[HANDLE:0x{original_hwnd:08X}]"
+                autoit.win_activate(original_spec)
+            except Exception:
+                try:
+                    win32gui.SetForegroundWindow(original_hwnd)
+                except Exception:
+                    pass
+
+    def _anti_afk_perform_action(self, action_key):
+        mouse_actions = {
+            "lmb": "left",
+            "rmb": "right",
+            "mmb": "middle",
+        }
+
+        if action_key in mouse_actions:
+            button = mouse_actions[action_key]
+            autoit.mouse_down(button)
+            time.sleep(0.1)
+            autoit.mouse_up(button)
+            return
+
+        if action_key == "scroll_up":
+            autoit.mouse_wheel("up", 1)
+            return
+
+        if action_key == "scroll_down":
+            autoit.mouse_wheel("down", 1)
+            return
+
+        autoit.send(f"{{{action_key.upper()} down}}")
+        time.sleep(0.1)
+        autoit.send(f"{{{action_key.upper()} up}}")
     
     def send_key_to_roblox_windows(self, action):
         try:
