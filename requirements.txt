@@ -5,3 +5,4 @@ pycryptodome>=3.15.0
 pywin32>=305
 psutil>=5.9.0
 pyautoit>=0.6.5
+websockets>=12.0

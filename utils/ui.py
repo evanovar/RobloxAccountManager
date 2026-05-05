@@ -6,6 +6,7 @@ Contains the main AccountManagerUI class
 import os
 import json
 import sys
+import asyncio
 import queue
 import subprocess
 import tkinter as tk
@@ -18,6 +19,8 @@ from ctypes import wintypes
 import webbrowser
 import time
 import re
+import shlex
+import secrets
 import win32event
 import win32api
 import win32gui
@@ -44,6 +47,7 @@ from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
+import websockets
 
 class AccountManagerUI:
     def __init__(self, root, manager, icon_path=None, discord_logo_path=None):
@@ -132,6 +136,11 @@ class AccountManagerUI:
         self.auto_rejoin_presence_lock = threading.Lock()
         self.auto_rejoin_next_presence_time = 0.0
         self._webhook_screenshot_thread = None
+
+        self.websocket_thread = None
+        self.websocket_stop_event = threading.Event()
+        self.websocket_loop = None
+        self.websocket_running = False
         
         self.cookie_status = {}
         for _u, _d in self.manager.accounts.items():
@@ -150,12 +159,12 @@ class AccountManagerUI:
         try:
             webhook_cfg = self.settings.get("discord_webhook", {})
             webhook_url = str(webhook_cfg.get("url", "") or "").strip()
-            if webhook_url:
+            if webhook_url and webhook_cfg.get("enabled"):
                 try:
                     self._send_webhook_embed(webhook_url, "Connected to Discord!", "Roblox Account Manager started and is now connected.", 0x2ECC71)
                 except Exception:
                     pass
-            if webhook_url and webhook_cfg.get("screenshot_enabled"):
+            if webhook_url and webhook_cfg.get("screenshot_enabled") and webhook_cfg.get("enabled"):
                 threading.Thread(target=self._global_screenshot_worker, daemon=True, name="WebhookScreenshot").start()
         except Exception:
             pass
@@ -400,6 +409,9 @@ class AccountManagerUI:
         
         if self.settings.get("lock_roblox_settings", False):
             self.root.after(1000, self.apply_and_lock_roblox_settings)
+
+        if self.settings.get("developer_mode", False) and self.settings.get("websocket_enabled", False):
+            self.root.after(1200, self.start_websocket_server)
     
     def on_closing(self):
         """Handle application closing - restore installers and exit"""
@@ -421,6 +433,9 @@ class AccountManagerUI:
         
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
+
+        if hasattr(self, 'websocket_stop_event'):
+            self.stop_websocket_server()
 
         RobloxAPI.restore_installers()
         self.root.destroy()
@@ -884,7 +899,10 @@ class AccountManagerUI:
                     "last_joined_user": "",
                     "auto_tile_windows": False,
                     "selected_theme": "Dark",
-                    "rejoin_webhook": {}
+                    "rejoin_webhook": {},
+                    "websocket_enabled": False,
+                    "websocket_port": 8765,
+                    "websocket_require_password": False
                 }
         except:
             self.settings = {
@@ -909,10 +927,14 @@ class AccountManagerUI:
                 "last_joined_user": "",
                 "auto_tile_windows": False,
                 "selected_theme": "Dark",
-                "rejoin_webhook": {}
+                "rejoin_webhook": {},
+                "websocket_enabled": False,
+                "websocket_port": 8765,
+                "websocket_require_password": False
             }
 
         settings_migrated = self._ensure_discord_settings_defaults()
+        settings_migrated = self._ensure_websocket_settings_defaults() or settings_migrated
         if "anti_afk_press_count" not in self.settings:
             self.settings["anti_afk_press_count"] = self.settings.get("anti_afk_press_time_seconds", self.settings.get("anti_afk_key_amount", 1))
             settings_migrated = True
@@ -1546,6 +1568,21 @@ del /f /q "%~f0"
             })
         return base
 
+    def _default_websocket_settings(self):
+        return {
+            "websocket_enabled": False,
+            "websocket_port": 8765,
+            "websocket_require_password": False,
+        }
+
+    def _ensure_websocket_settings_defaults(self):
+        changed = False
+        for key, value in self._default_websocket_settings().items():
+            if key not in self.settings:
+                self.settings[key] = value
+                changed = True
+        return changed
+
     def _ensure_discord_settings_defaults(self):
         changed = False
         old_mode = self.settings.get("discord_webhook", {}).pop("mode", None)
@@ -1614,6 +1651,329 @@ del /f /q "%~f0"
         if result_box["error"] is not None:
             raise result_box["error"]
         return result_box["value"]
+
+    def _get_websocket_password(self):
+        try:
+            return str(self.manager.get_secure_setting("websocket_password", "") or "")
+        except Exception:
+            return ""
+
+    def _set_websocket_password(self, password):
+        try:
+            self.manager.set_secure_setting("websocket_password", str(password or ""))
+            return True
+        except Exception as exc:
+            print(f"[ERROR] Failed to save websocket password: {exc}")
+            return False
+
+    def _get_websocket_port(self):
+        try:
+            return int(self.settings.get("websocket_port", 8765))
+        except Exception:
+            return 8765
+
+    def _set_last_joined_user(self, username):
+        self.settings["last_joined_user"] = username
+        self.save_settings()
+
+    def start_websocket_server(self):
+        if self.websocket_thread and self.websocket_thread.is_alive():
+            return
+
+        if not self.settings.get("developer_mode", False):
+            print("[WARNING] WebSocket server blocked: Developer Mode is disabled")
+            return
+
+        self.websocket_stop_event.clear()
+        self.websocket_thread = threading.Thread(
+            target=self._websocket_server_thread_main,
+            daemon=True,
+            name="WebSocketServer",
+        )
+        self.websocket_thread.start()
+
+    def stop_websocket_server(self):
+        self.websocket_stop_event.set()
+        loop = self.websocket_loop
+        if loop is not None:
+            try:
+                loop.call_soon_threadsafe(lambda: None)
+            except Exception:
+                pass
+
+        thread = self.websocket_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=2)
+
+        self.websocket_thread = None
+        self.websocket_loop = None
+        self.websocket_running = False
+
+    def restart_websocket_server(self):
+        self.stop_websocket_server()
+        if self.settings.get("websocket_enabled", False):
+            self.start_websocket_server()
+
+    def _websocket_server_thread_main(self):
+        loop = asyncio.new_event_loop()
+        self.websocket_loop = loop
+        asyncio.set_event_loop(loop)
+
+        try:
+            loop.run_until_complete(self._websocket_server_main())
+        except Exception as exc:
+            print(f"[ERROR] WebSocket server crashed: {exc}")
+        finally:
+            self.websocket_running = False
+            self.websocket_loop = None
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    async def _websocket_server_main(self):
+        host = "localhost"
+        port = self._get_websocket_port()
+
+        try:
+            async with websockets.serve(self._websocket_client_handler, host, port):
+                self.websocket_running = True
+                print(f"[INFO] WebSocket server started at ws://{host}:{port}")
+                while not self.websocket_stop_event.is_set():
+                    await asyncio.sleep(0.2)
+        except OSError as exc:
+            self.websocket_running = False
+            print(f"[ERROR] Failed to start WebSocket server on port {port}: {exc}")
+        finally:
+            if self.websocket_running:
+                print("[INFO] WebSocket server stopped")
+            self.websocket_running = False
+
+    async def _websocket_client_handler(self, websocket):
+        try:
+            async for raw_message in websocket:
+                response = self._websocket_execute_command(str(raw_message or ""))
+                await websocket.send(json.dumps(response, ensure_ascii=False))
+        except Exception as exc:
+            print(f"[ERROR] WebSocket client handler error: {exc}")
+
+    def _websocket_extract_command_with_auth(self, raw_message):
+        message = str(raw_message or "").strip()
+        require_password = bool(self.settings.get("websocket_require_password", False))
+
+        if not require_password:
+            return True, message, None
+
+        stored_password = self._get_websocket_password()
+        if not stored_password:
+            return False, "", "Password is required but not set"
+
+        if "|" not in message:
+            return False, "", "Missing auth format. Use: AUTH <password> | <command>"
+
+        auth_segment, command_segment = message.split("|", 1)
+        auth_segment = auth_segment.strip()
+        command_segment = command_segment.strip()
+
+        try:
+            auth_parts = shlex.split(auth_segment)
+        except Exception:
+            auth_parts = auth_segment.split()
+
+        if len(auth_parts) < 2 or auth_parts[0].lower() != "auth":
+            return False, "", "Missing auth format. Use: AUTH <password> | <command>"
+
+        provided_password = " ".join(auth_parts[1:])
+        if not secrets.compare_digest(provided_password, stored_password):
+            return False, "", "Authentication failed"
+
+        return True, command_segment, None
+
+    def _websocket_execute_command(self, raw_message):
+        ok, command_text, auth_error = self._websocket_extract_command_with_auth(raw_message)
+        if not ok:
+            return {"ok": False, "error": auth_error}
+
+        if not command_text:
+            return {"ok": False, "error": "Empty command"}
+
+        try:
+            parts = shlex.split(command_text)
+        except Exception:
+            parts = command_text.split()
+
+        if not parts:
+            return {"ok": False, "error": "Empty command"}
+
+        action = parts[0].lower()
+
+        try:
+            if action == "ping":
+                return {"ok": True, "result": "Pong"}
+
+            if action == "getstatus":
+                return self._websocket_command_get_status()
+
+            if action == "launch":
+                return self._websocket_command_launch(parts)
+
+            if action == "joinuser":
+                return self._websocket_command_join_user(parts)
+
+            if action == "autorejoin":
+                return self._websocket_command_auto_rejoin(parts)
+
+            return {
+                "ok": False,
+                "error": "Unknown command",
+                "supported": ["Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _websocket_command_launch(self, parts):
+        if len(parts) < 3:
+            return {"ok": False, "error": "Usage: Launch <account_name> <place_id> [private_server_id] [job_id]"}
+
+        account_name = parts[1]
+        place_id = str(parts[2]).strip()
+        private_server_id = str(parts[3]).strip() if len(parts) >= 4 else ""
+        job_id = str(parts[4]).strip() if len(parts) >= 5 else ""
+
+        if account_name not in self.manager.accounts:
+            return {"ok": False, "error": f"Account not found: {account_name}"}
+        if not place_id.isdigit():
+            return {"ok": False, "error": "Place ID must be numeric"}
+
+        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+        launched = self.manager.launch_roblox(
+            account_name,
+            place_id,
+            private_server_id,
+            launcher_pref,
+            job_id,
+            custom_launcher_path,
+        )
+
+        if launched:
+            try:
+                self._run_on_ui_thread(self._set_last_joined_user, account_name, wait=False)
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "result": {
+                    "action": "Launch",
+                    "account": account_name,
+                    "place_id": place_id,
+                    "private_server_id": private_server_id,
+                    "job_id": job_id,
+                },
+            }
+        return {"ok": False, "error": f"Failed to launch account: {account_name}"}
+
+    def _websocket_command_join_user(self, parts):
+        if len(parts) < 3:
+            return {"ok": False, "error": "Usage: JoinUser <account_name> <user_to_join>"}
+
+        account_name = parts[1]
+        user_to_join = parts[2]
+
+        if account_name not in self.manager.accounts:
+            return {"ok": False, "error": f"Account not found: {account_name}"}
+
+        user_id = RobloxAPI.get_user_id_from_username(user_to_join)
+        if not user_id:
+            return {"ok": False, "error": f"User not found: {user_to_join}"}
+
+        account_data = self.manager.accounts.get(account_name)
+        account_cookie = account_data.get("cookie") if isinstance(account_data, dict) else None
+        if not account_cookie:
+            return {"ok": False, "error": f"Missing cookie for account: {account_name}"}
+
+        presence = RobloxAPI.get_player_presence(user_id, account_cookie)
+        if not presence:
+            return {"ok": False, "error": "Failed to fetch user presence"}
+        if not presence.get("in_game"):
+            return {
+                "ok": False,
+                "error": f"{user_to_join} is not currently in-game",
+                "status": presence.get("last_location", "Unknown"),
+            }
+
+        place_id = str(presence.get("place_id", "") or "")
+        game_id = str(presence.get("game_id", "") or "")
+        if not place_id:
+            return {"ok": False, "error": "Missing place_id in presence response"}
+
+        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+        launched = self.manager.launch_roblox(
+            account_name,
+            place_id,
+            "",
+            launcher_pref,
+            game_id,
+            custom_launcher_path,
+        )
+
+        if launched:
+            try:
+                self._run_on_ui_thread(self._set_last_joined_user, account_name, wait=False)
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "result": {
+                    "action": "JoinUser",
+                    "account": account_name,
+                    "target_user": user_to_join,
+                    "place_id": place_id,
+                    "job_id": game_id,
+                },
+            }
+        return {"ok": False, "error": f"Failed to join user {user_to_join} with account {account_name}"}
+
+    def _websocket_command_get_status(self):
+        try:
+            if not (self.instances_monitor_thread and self.instances_monitor_thread.is_alive()):
+                self.start_instances_monitoring()
+        except Exception:
+            pass
+
+        data = []
+        try:
+            for entry in list(self.instances_data):
+                data.append({
+                    "pid": entry.get("pid"),
+                    "username": entry.get("username"),
+                })
+        except Exception:
+            data = []
+
+        return {"ok": True, "result": data}
+
+    def _websocket_command_auto_rejoin(self, parts):
+        if len(parts) < 3:
+            return {"ok": False, "error": "Usage: AutoRejoin <start|stop> <account_name>"}
+
+        mode = parts[1].lower()
+        account_name = parts[2]
+
+        if account_name not in self.manager.accounts:
+            return {"ok": False, "error": f"Account not found: {account_name}"}
+
+        if mode == "start":
+            if account_name not in self.auto_rejoin_configs:
+                return {"ok": False, "error": f"No auto-rejoin config for account: {account_name}"}
+            self._match_pids_to_accounts([account_name])
+            self.start_auto_rejoin_for_account(account_name)
+            return {"ok": True, "result": {"action": "AutoRejoin", "mode": "start", "account": account_name}}
+
+        if mode == "stop":
+            self.stop_auto_rejoin_for_account(account_name)
+            return {"ok": True, "result": {"action": "AutoRejoin", "mode": "stop", "account": account_name}}
+
+        return {"ok": False, "error": "AutoRejoin mode must be 'start' or 'stop'"}
 
     def is_chrome_installed(self):
         try:
@@ -3439,6 +3799,41 @@ del /f /q "%~f0"
             )
         password_btn.pack(fill="x", padx=2, pady=1)
         
+        try:
+            if self.settings.get("developer_mode", False) and self.settings.get("enable_copy_cookie", False):
+                account_cookie_val = account.get('cookie') if isinstance(account, dict) else None
+                if account_cookie_val:
+                    cookie_btn = tk.Button(
+                        self.account_context_menu,
+                        text=f"Copy Cookie",
+                        anchor="w",
+                        relief="flat",
+                        bg=self.BG_MID,
+                        fg=self.FG_TEXT,
+                        activebackground=self.BG_LIGHT,
+                        activeforeground=self.FG_TEXT,
+                        font=("Segoe UI", 9),
+                        bd=0,
+                        highlightthickness=0,
+                        command=lambda c=account_cookie_val: copy_to_clipboard(c)
+                    )
+                else:
+                    cookie_btn = tk.Button(
+                        self.account_context_menu,
+                        text=f"Copy Cookie",
+                        anchor="w",
+                        relief="flat",
+                        bg=self.BG_MID,
+                        fg="#666666",
+                        font=("Segoe UI", 9),
+                        bd=0,
+                        highlightthickness=0,
+                        state="disabled"
+                    )
+                cookie_btn.pack(fill="x", padx=2, pady=1)
+        except Exception:
+            pass
+
         separator = tk.Frame(self.account_context_menu, height=1, bg="#666666")
         separator.pack(fill="x", padx=2, pady=2)
         
@@ -5184,7 +5579,7 @@ del /f /q "%~f0"
         
         self.root.update_idletasks()
         
-        settings_width = 315
+        settings_width = 330
         settings_height = 385
         
         saved_pos = self.settings.get('settings_window_position')
@@ -5218,9 +5613,193 @@ del /f /q "%~f0"
         
         discord_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(discord_tab, text="Discord")
+        
+        developer_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(developer_tab, text="Developer")
+        
+        dev_frame = ttk.Frame(developer_tab, style="Dark.TFrame")
+        dev_frame.pack(fill="both", expand=True, padx=20, pady=15)
 
-        about_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(about_tab, text="About")
+        ttk.Label(
+            dev_frame,
+            text="Developer",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w", pady=(0, 2))
+
+        ttk.Label(
+            dev_frame,
+            text="Developer options are dangerous. Use only if you \nknow what you're doing",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(0, 10))
+
+        sep = ttk.Frame(dev_frame, style="Dark.TFrame", height=1)
+        sep.pack(fill="x", pady=(0, 8))
+        sep.configure(relief="solid", borderwidth=1)
+
+        dev_mode_var = tk.BooleanVar(value=self.settings.get("developer_mode", False))
+        copy_cookie_var = tk.BooleanVar(value=self.settings.get("enable_copy_cookie", False))
+        ws_enabled_var = tk.BooleanVar(value=self.settings.get("websocket_enabled", False))
+        ws_port_var = tk.StringVar(value=str(self.settings.get("websocket_port", 8765)))
+        ws_require_password_var = tk.BooleanVar(value=self.settings.get("websocket_require_password", False))
+        ws_password_var = tk.StringVar(value="")
+
+        def _save_dev_mode():
+            self.settings["developer_mode"] = dev_mode_var.get()
+            if not dev_mode_var.get():
+                copy_cookie_var.set(False)
+                self.settings["enable_copy_cookie"] = False
+                ws_enabled_var.set(False)
+                self.settings["websocket_enabled"] = False
+                self.stop_websocket_server()
+            self.save_settings()
+            _update_dev_controls()
+
+        def _save_copy_cookie():
+            self.settings["enable_copy_cookie"] = copy_cookie_var.get()
+            self.save_settings()
+
+        def _save_ws_enabled():
+            self.settings["websocket_enabled"] = ws_enabled_var.get()
+            self.save_settings()
+            if ws_enabled_var.get():
+                self.start_websocket_server()
+            else:
+                self.stop_websocket_server()
+            _update_dev_controls()
+
+        def _apply_ws_port():
+            port_text = ws_port_var.get().strip()
+            try:
+                port = int(port_text)
+            except Exception:
+                messagebox.showerror("Invalid Port", "WebSocket port must be a number.", parent=settings_window)
+                return
+
+            if port < 1 or port > 65535:
+                messagebox.showerror("Invalid Port", "WebSocket port must be between 1 and 65535.", parent=settings_window)
+                return
+
+            self.settings["websocket_port"] = port
+            ws_port_var.set(str(port))
+            self.save_settings()
+            if ws_enabled_var.get():
+                self.restart_websocket_server()
+            print(f"[INFO] WebSocket port set to {port}")
+
+        def _save_ws_require_password():
+            self.settings["websocket_require_password"] = ws_require_password_var.get()
+            self.save_settings()
+            _update_dev_controls()
+
+        def _set_ws_password():
+            password = ws_password_var.get()
+            if not password.strip():
+                messagebox.showwarning("Missing Password", "Please enter a password.", parent=settings_window)
+                return
+
+            if self._set_websocket_password(password):
+                ws_password_var.set("")
+                messagebox.showinfo("Saved", "WebSocket password has been updated.", parent=settings_window)
+            else:
+                messagebox.showerror("Error", "Failed to save WebSocket password.", parent=settings_window)
+
+        def _update_dev_controls():
+            state = "normal" if dev_mode_var.get() else "disabled"
+            try:
+                copy_check.config(state=state)
+            except Exception:
+                pass
+            for widget in (ws_enabled_check, ws_port_entry, ws_port_set_btn, ws_require_password_check, ws_password_entry, ws_password_set_btn):
+                try:
+                    widget.config(state=state)
+                except Exception:
+                    pass
+
+            ws_detail_state = "normal" if (dev_mode_var.get() and ws_enabled_var.get()) else "disabled"
+            for widget in (ws_port_entry, ws_port_set_btn, ws_require_password_check):
+                try:
+                    widget.config(state=ws_detail_state)
+                except Exception:
+                    pass
+
+            ws_password_state = "normal" if (dev_mode_var.get() and ws_enabled_var.get() and ws_require_password_var.get()) else "disabled"
+            for widget in (ws_password_entry, ws_password_set_btn):
+                try:
+                    widget.config(state=ws_password_state)
+                except Exception:
+                    pass
+
+        dev_check = ttk.Checkbutton(
+            dev_frame,
+            text="Enable Developer Mode",
+            variable=dev_mode_var,
+            style="Dark.TCheckbutton",
+            command=_save_dev_mode
+        )
+        dev_check.pack(anchor="w", pady=2)
+
+        copy_check = ttk.Checkbutton(
+            dev_frame,
+            text="Enable Copy Cookie",
+            variable=copy_cookie_var,
+            style="Dark.TCheckbutton",
+            command=_save_copy_cookie
+        )
+        copy_check.pack(anchor="w", pady=2)
+
+        ws_sep = ttk.Frame(dev_frame, style="Dark.TFrame", height=1)
+        ws_sep.pack(fill="x", pady=(8, 8))
+        ws_sep.configure(relief="solid", borderwidth=1)
+
+        ttk.Label(
+            dev_frame,
+            text="WebSocket Server",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 10, "bold")
+        ).pack(anchor="w", pady=(0, 2))
+
+        ttk.Label(
+            dev_frame,
+            text="Control RAM from local WebSocket clients.",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(0, 6))
+
+        ws_enabled_check = ttk.Checkbutton(
+            dev_frame,
+            text="Enable WebSocket",
+            variable=ws_enabled_var,
+            style="Dark.TCheckbutton",
+            command=_save_ws_enabled
+        )
+        ws_enabled_check.pack(anchor="w", pady=(0, 4))
+
+        ws_port_row = ttk.Frame(dev_frame, style="Dark.TFrame")
+        ws_port_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(ws_port_row, text="Port:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
+        ws_port_entry = ttk.Entry(ws_port_row, textvariable=ws_port_var, width=10, style="Dark.TEntry")
+        ws_port_entry.pack(side="left", padx=(6, 6))
+        ws_port_set_btn = ttk.Button(ws_port_row, text="Set", style="Dark.TButton", command=_apply_ws_port)
+        ws_port_set_btn.pack(side="left")
+
+        ws_require_password_check = ttk.Checkbutton(
+            dev_frame,
+            text="Request require password",
+            variable=ws_require_password_var,
+            style="Dark.TCheckbutton",
+            command=_save_ws_require_password
+        )
+        ws_require_password_check.pack(anchor="w", pady=(0, 4))
+
+        ws_password_row = ttk.Frame(dev_frame, style="Dark.TFrame")
+        ws_password_row.pack(fill="x", pady=(0, 2))
+        ws_password_entry = ttk.Entry(ws_password_row, textvariable=ws_password_var, show="*", style="Dark.TEntry")
+        ws_password_entry.pack(side="left", fill="x", expand=True)
+        ws_password_set_btn = ttk.Button(ws_password_row, text="Set", style="Dark.TButton", command=_set_ws_password)
+        ws_password_set_btn.pack(side="left", padx=(6, 0))
+        _update_dev_controls()
         
         style = ttk.Style()
         style.theme_use('clam')
@@ -6699,62 +7278,6 @@ del /f /q "%~f0"
         _dc_dependent_widgets = [dc_url_entry, dc_ping_id_entry, dc_ss_entry]
         _dc_toggle_fields(_send_connect=False)
 
-        about_frame = ttk.Frame(about_tab, style="Dark.TFrame")
-        about_frame.pack(fill="both", expand=True, padx=20, pady=15)
-        
-        ttk.Label(
-            about_frame,
-            text="Roblox Account Manager",
-            style="Dark.TLabel",
-            font=("Segoe UI", 14, "bold")
-        ).pack(anchor="center", pady=(10, 5))
-        
-        is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
-        version_text = f"Version {self.APP_VERSION}"
-        
-        ttk.Label(
-            about_frame,
-            text=version_text,
-            style="Dark.TLabel",
-            font=("Segoe UI", 10)
-        ).pack(anchor="center", pady=(0, 5))
-        
-        if is_unstable:
-            ttk.Label(
-                about_frame,
-                text="⚠️ This is an unstable version",
-                style="Dark.TLabel",
-                font=("Segoe UI", 9, "italic"),
-                foreground="#FFA500"
-            ).pack(anchor="center", pady=(0, 10))
-        else:
-            ttk.Label(about_frame, text="", style="Dark.TLabel").pack(pady=(0, 10))
-        
-        ttk.Label(
-            about_frame,
-            text="Made by evanovar",
-            style="Dark.TLabel",
-            font=("Segoe UI", 9)
-        ).pack(anchor="center", pady=(5, 15))
-        
-        ttk.Button(
-            about_frame,
-            text="Discord Server",
-            style="Dark.TButton",
-            command=lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
-        ).pack(fill="x", pady=(0, 10))
-        
-        def open_github():
-            webbrowser.open("https://github.com/evanovar/RobloxAccountManager")
-
-        
-        ttk.Button(
-            about_frame,
-            text="Open GitHub Repository",
-            style="Dark.TButton",
-            command=open_github
-        ).pack(fill="x", pady=(0, 10))
-        
         tool_frame = ttk.Frame(tool_tab, style="Dark.TFrame")
         tool_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
