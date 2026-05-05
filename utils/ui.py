@@ -1615,6 +1615,23 @@ del /f /q "%~f0"
             raise result_box["error"]
         return result_box["value"]
 
+    def is_chrome_installed(self):
+        try:
+            candidates = []
+            pf = os.environ.get('ProgramFiles')
+            pfx86 = os.environ.get('ProgramFiles(x86)')
+            localapp = os.environ.get('LOCALAPPDATA')
+            if pf:
+                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if pfx86:
+                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+            if localapp:
+                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+
+            return any(path and os.path.exists(path) for path in candidates)
+        except Exception:
+            return False
+
     def get_browser_path(self):
         """Get path to the selected browser (Chrome or Chromium)."""
         browser_type = self.settings.get("browser_type", "chrome")
@@ -8783,7 +8800,7 @@ del /f /q "%~f0"
         anti_afk_window.transient(self.root)
 
         settings_width = 300
-        settings_height = 205
+        settings_height = 225
         self.root.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
