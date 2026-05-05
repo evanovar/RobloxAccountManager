@@ -140,6 +140,9 @@ class AccountManagerUI:
         self.account_tooltip = None
         self.account_tooltip_timer = None
         self.account_tooltip_last_index = None
+        self._active_instance_indicators = {}
+        self._active_instance_usernames = set()
+        self._active_instance_indicator_sync_after = None
 
         self._list_row_map = []
         self._collapsed_groups = set(self.settings.get("group_collapsed", []))
@@ -244,7 +247,8 @@ class AccountManagerUI:
 
         scrollbar = ttk.Scrollbar(list_frame, command=self.account_list.yview)
         scrollbar.pack(side="right", fill="y")
-        self.account_list.config(yscrollcommand=scrollbar.set)
+        self.account_list_scrollbar = scrollbar
+        self.account_list.config(yscrollcommand=self._on_account_list_scroll)
         
         self.drag_data = {
             "item": None, 
@@ -262,6 +266,7 @@ class AccountManagerUI:
         self.account_list.bind("<Button-3>", self.show_account_context_menu)
         self.account_list.bind("<Motion>", self.on_account_list_hover)
         self.account_list.bind("<Leave>", self.on_account_list_leave)
+        self.account_list.bind("<<ListboxSelect>>", lambda _event: self._schedule_active_instance_indicator_sync())
 
         right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         right_frame.pack(side="right", fill="y")
@@ -2017,13 +2022,101 @@ del /f /q "%~f0"
         self._save_groups(groups)
         self.refresh_accounts()
 
+    def _on_account_list_scroll(self, first, last):
+        if hasattr(self, "account_list_scrollbar") and self.account_list_scrollbar:
+            try:
+                self.account_list_scrollbar.set(first, last)
+            except Exception:
+                pass
+        self._schedule_active_instance_indicator_sync()
+
+    def _schedule_active_instance_indicator_sync(self):
+        if self._active_instance_indicator_sync_after is not None:
+            try:
+                self.root.after_cancel(self._active_instance_indicator_sync_after)
+            except Exception:
+                pass
+        self._active_instance_indicator_sync_after = self.root.after(0, self._sync_active_instance_indicators)
+
+    def _clear_active_instance_indicators(self):
+        if self._active_instance_indicator_sync_after is not None:
+            try:
+                self.root.after_cancel(self._active_instance_indicator_sync_after)
+            except Exception:
+                pass
+            self._active_instance_indicator_sync_after = None
+
+        for widget in list(self._active_instance_indicators.values()):
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+        self._active_instance_indicators = {}
+
+    def _sync_active_instance_indicators(self):
+        self._active_instance_indicator_sync_after = None
+
+        if not hasattr(self, "account_list") or not self.account_list.winfo_exists():
+            return
+
+        self._clear_active_instance_indicators()
+
+        if not self.settings.get("active_instances_monitoring", False):
+            return
+
+        active_usernames = getattr(self, "_active_instance_usernames", set()) or set()
+        if not active_usernames:
+            return
+
+        try:
+            self.account_list.update_idletasks()
+        except Exception:
+            pass
+
+        dot_color = "#3DDC84"
+        dot_outline = "#2FAF67"
+        normal_bg = self.account_list.cget("bg")
+        selected_bg = self.account_list.cget("selectbackground")
+
+        for index, (kind, username) in enumerate(self._list_row_map):
+            if kind != "account" or username.lower() not in active_usernames:
+                continue
+
+            bbox = self.account_list.bbox(index)
+            if not bbox:
+                continue
+
+            x, y, width, height = bbox
+            row_bg = selected_bg if self.account_list.selection_includes(index) else normal_bg
+            dot = tk.Canvas(
+                self.account_list,
+                width=8,
+                height=8,
+                bg=row_bg,
+                highlightthickness=0,
+                bd=0,
+            )
+            dot.create_oval(0, 0, 7, 7, fill=dot_color, outline=dot_outline)
+            dot.place(x=4, y=y + max(0, (height - 8) // 2))
+            self._active_instance_indicators[username] = dot
+
     def refresh_accounts(self):
         """Refresh the account list"""
         needs_rerender = self.account_list.winfo_width() <= 1
-        
+
+        self._clear_active_instance_indicators()
+
         self.account_list.delete(0, tk.END)
         self._list_row_map = []
         groups = self._get_groups()
+
+        if self.settings.get("active_instances_monitoring", False):
+            try:
+                self._active_instance_usernames = set([u.lower() for u in self._get_active_instance_usernames()])
+            except Exception:
+                self._active_instance_usernames = set()
+        else:
+            self._active_instance_usernames = set()
 
         grouped_usernames = set()
         for members in groups.values():
@@ -2061,6 +2154,8 @@ del /f /q "%~f0"
                     self.account_list.see(i)
                     break
 
+        self._schedule_active_instance_indicator_sync()
+
         if needs_rerender:
             self.root.after(50, self.refresh_accounts)
 
@@ -2068,12 +2163,23 @@ del /f /q "%~f0"
         """Insert a single account row into the Listbox and _list_row_map."""
         note = data.get('note', '') if isinstance(data, dict) else ''
         cookie_valid = self.cookie_status.get(username)
+        
+        is_active = (self.settings.get("active_instances_monitoring", False) and
+                    getattr(self, '_active_instance_usernames', set()) and 
+                    username.lower() in self._active_instance_usernames)
+        
         if cookie_valid is False:
-            display_text = f"\u26a0 {username}"
+            base_text = f"\u26a0 {username}"
         else:
-            display_text = f"{username}"
+            base_text = f"{username}"
         if note:
-            display_text += f" \u2022 {note}"
+            base_text += f" \u2022 {note}"
+        
+        if is_active:
+            display_text = f"    {base_text}"
+        else:
+            display_text = base_text
+        
         idx = self.account_list.size()
         self.account_list.insert(tk.END, display_text)
         self._list_row_map.append(("account", username))
@@ -2146,10 +2252,12 @@ del /f /q "%~f0"
         self.account_tooltip_last_index = None
     
     def extract_username_from_display(self, display_text):
-        """Extract username from display text (handles indicators like ⚠)"""
+        """Extract username from display text (handles indicators like ⚠ and ●)"""
         username_part = display_text.split(' • ')[0]
         
         username_part = username_part.strip()
+        if username_part.startswith('● '):
+            username_part = username_part[2:]
         if username_part.startswith('⚠ '):
             username_part = username_part[2:]
         
@@ -2289,6 +2397,44 @@ del /f /q "%~f0"
             return True
         win32gui.EnumWindows(_cb, None)
         return hwnds
+
+    def _get_active_instance_usernames(self):
+        """Return a list of usernames that correspond to currently running Roblox instances.
+
+        Uses existing PID -> user id helpers and RobloxAPI username lookup. Results are
+        de-duplicated and returned as a list of lowercase usernames for comparison.
+        """
+        res = []
+        try:
+            pids = sorted(self._get_roblox_pids())
+            used = set()
+            for pid in pids:
+                try:
+                    user_id, _ = self._get_user_id_from_pid(pid, used)
+                    if user_id:
+                        uid = int(user_id)
+                        uname = self.instances_cache.get("user_id_to_username", {}).get(uid)
+                        if not uname:
+                            try:
+                                uname = RobloxAPI.get_username_from_user_id(uid) or None
+                            except Exception:
+                                uname = None
+                            if uname:
+                                self.instances_cache.setdefault("user_id_to_username", {})[uid] = uname
+                        if uname:
+                            res.append(str(uname))
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        seen = set()
+        out = []
+        for u in res:
+            key = u.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(u)
+        return out
 
     def _tile_roblox_windows(self):
         pids = self._get_roblox_pids()
@@ -6830,6 +6976,7 @@ del /f /q "%~f0"
 
                     self.instances_data = new_data
                     self.instances_data_updated = True
+                    self.root.after(0, self.refresh_accounts)
 
                 if current_time - last_memory_refresh >= poll_interval_seconds:
                     last_memory_refresh = current_time
@@ -6893,6 +7040,7 @@ del /f /q "%~f0"
                         if pid in self.instances_failed_pids:
                             del self.instances_failed_pids[pid]
                         self.instances_data_updated = True
+                        self.root.after(0, self.refresh_accounts)
                     else:
                         self.instances_failed_pids[pid] = (
                             current_time,
@@ -7168,6 +7316,7 @@ del /f /q "%~f0"
                 refresh_btn.config(state="normal")
                 status_label.config(text="Starting monitoring...")
                 render_instances()
+                self.refresh_accounts()
             else:
                 self.stop_instances_monitoring()
                 refresh_btn.config(state="disabled")
@@ -7183,6 +7332,7 @@ del /f /q "%~f0"
                     style="Dark.TLabel",
                     font=(self.FONT_FAMILY, 10)
                 ).pack(pady=20)
+                self.refresh_accounts()
         
         monitor_checkbox.config(command=toggle_monitoring)
         
