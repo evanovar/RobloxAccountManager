@@ -2693,9 +2693,35 @@ del /f /q "%~f0"
         except Exception:
             return 60
 
+    def _discord_log_message_allowed(self, message: str):
+        """Return True when a console log line is enabled by Discord log filters."""
+        cfg = self._get_webhook_cfg()
+        if cfg.get("log_everything", False):
+            return True
+
+        text = str(message or "")
+
+        # Auto-Rejoin console output has its own Discord filter. Keep it
+        # separate so it does not leak through the generic severity toggles.
+        if "[Auto-Rejoin]" in text:
+            return bool(cfg.get("log_auto_rejoin_console", False))
+
+        if "[ERROR]" in text:
+            return bool(cfg.get("log_errors", True))
+        if "[SUCCESS]" in text:
+            return bool(cfg.get("log_success", True))
+        if "[WARNING]" in text:
+            return bool(cfg.get("log_warnings", True))
+        if "[INFO]" in text:
+            return bool(cfg.get("log_info", False))
+
+        return False
+
     def _maybe_log_message(self, message: str):
         try:
             if not self._webhook_enabled():
+                return
+            if not self._discord_log_message_allowed(message):
                 return
             url = str(self._get_webhook_cfg().get("url", "") or "").strip()
             if not url:
