@@ -1823,13 +1823,74 @@ del /f /q "%~f0"
             if action == "autorejoin":
                 return self._websocket_command_auto_rejoin(parts)
 
+            if action == "add":
+                return self._websocket_command_add(command_text)
+
             return {
                 "ok": False,
                 "error": "Unknown command",
-                "supported": ["Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
+                "supported": ["Add", "Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _websocket_parse_cookie_payloads(self, payload):
+        text = str(payload or "").strip()
+        if not text:
+            return []
+
+        if "_|WARNING:-" in text:
+            parts = text.split("_|WARNING:-")
+            return ["_|WARNING:-" + part.strip() for part in parts if part.strip()]
+
+        return [chunk.strip() for chunk in re.split(r"\s+", text) if chunk.strip()]
+
+    def _websocket_command_add(self, command_text):
+        payload = str(command_text or "").strip()
+        if len(payload) <= 3:
+            return {"ok": False, "error": "Usage: Add <cookie> [cookie2 ...]"}
+
+        cookie_payload = payload[3:].strip()
+        cookies = self._websocket_parse_cookie_payloads(cookie_payload)
+        if not cookies:
+            return {"ok": False, "error": "No cookies provided"}
+
+        imported = []
+        failed = []
+
+        for cookie in cookies:
+            try:
+                success, username = self.manager.import_cookie_account(cookie)
+                if success and username:
+                    imported.append(username)
+                else:
+                    failed.append({"cookie": cookie, "error": "Import failed"})
+            except Exception as exc:
+                failed.append({"cookie": cookie, "error": str(exc)})
+
+        if imported:
+            try:
+                self._run_on_ui_thread(self.refresh_accounts, wait=False)
+            except Exception:
+                pass
+
+        if not imported:
+            return {
+                "ok": False,
+                "error": "Failed to import any accounts",
+                "failed": failed,
+            }
+
+        return {
+            "ok": True,
+            "result": {
+                "action": "Add",
+                "imported": imported,
+                "imported_count": len(imported),
+                "failed_count": len(failed),
+            },
+            "failed": failed,
+        }
 
     def _websocket_command_launch(self, parts):
         if len(parts) < 3:
