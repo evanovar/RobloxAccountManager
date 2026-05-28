@@ -27,18 +27,25 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build EXE
-        run: >
-          pyinstaller
-          --onefile
-          --windowed
-          --icon=icon.ico
-          --name=RobloxAccountManager
-          --hidden-import=win32api
-          --hidden-import=win32con
-          --hidden-import=win32gui
-          --hidden-import=pywintypes
-          --collect-all=discord
-          main.py
+        shell: bash
+        run: |
+          pyinstaller \
+            --onefile \
+            --windowed \
+            --icon=icon.ico \
+            --name=RobloxAccountManager \
+            --hidden-import=win32api \
+            --hidden-import=win32con \
+            --hidden-import=win32gui \
+            --hidden-import=win32process \
+            --hidden-import=win32clipboard \
+            --hidden-import=win32event \
+            --hidden-import=pywintypes \
+            --collect-all=PIL \
+            --collect-all=discord \
+            --collect-all=webdriver_manager \
+            --collect-all=Crypto \
+            main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
