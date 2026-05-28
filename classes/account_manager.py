@@ -749,12 +749,201 @@ class RobloxAccountManager:
             custom_launcher_path,
         )
     
+    def launch_roblox_browser_click(self, username, place_id, private_server="", launcher_preference="default", custom_launcher_path=""):
+        """Join a Roblox game by clicking Play inside a real browser — bypasses the API auth-ticket captcha.
+
+        The browser makes the auth-ticket request with genuine browser headers so Roblox doesn't
+        flag it. We intercept the resulting roblox-player: URL before Chrome handles it, then
+        pass it to the configured launcher (Bloxstrap, Fishstrap, etc.) ourselves.
+        """
+        if username not in self.accounts:
+            print(f"[Browser Join] Account '{username}' not found")
+            return False
+
+        cookie = self.accounts[username]['cookie']
+
+        # Resolve private server value to a bare link code
+        link_code = None
+        if private_server:
+            ps = private_server.strip()
+            if ps.isdigit():
+                link_code = ps
+            elif "roblox.com" in ps:
+                _, lc = RobloxAPI.resolve_share_url(ps, cookie=cookie)
+                if lc:
+                    link_code = lc
+            else:
+                link_code = ps
+
+        if link_code:
+            game_url = f"https://www.roblox.com/games/{place_id}?privateServerLinkCode={link_code}"
+        else:
+            game_url = f"https://www.roblox.com/games/{place_id}"
+
+        print(f"[Browser Join] [{username}] Navigating to: {game_url}")
+
+        profile_dir = tempfile.mkdtemp(prefix="ram_bcj_")
+        driver = None
+        orig_stderr = None
+
+        try:
+            opts = Options()
+            opts.add_argument(f"--user-data-dir={profile_dir}")
+            opts.add_argument("--no-first-run")
+            opts.add_argument("--no-default-browser-check")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_argument("--log-level=3")
+            opts.add_argument("--silent")
+            opts.add_argument("--disable-logging")
+            opts.add_argument("--disable-dev-shm-usage")
+            opts.add_argument("--no-sandbox")
+            opts.add_argument("--disable-gpu")
+            opts.add_argument("--disable-background-networking")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+            opts.add_experimental_option("useAutomationExtension", False)
+            # Allow roblox-player: protocol without Chrome asking for confirmation
+            opts.add_experimental_option("prefs", {
+                "protocol_handler.excluded_schemes": {"roblox-player": False}
+            })
+
+            service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+
+            orig_stderr = sys.stderr
+            sys.stderr = open(os.devnull, 'w')
+            driver = webdriver.Chrome(service=service, options=opts)
+            sys.stderr.close()
+            sys.stderr = orig_stderr
+            orig_stderr = None
+
+            driver.set_page_load_timeout(30)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            # Plant the cookie on the roblox.com domain before navigating to game page
+            driver.get("https://www.roblox.com")
+            driver.add_cookie({
+                "name": ".ROBLOSECURITY",
+                "value": cookie,
+                "domain": ".roblox.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            })
+
+            driver.get(game_url)
+
+            # Intercept window.open and iframe.src so we capture the roblox-player: URL
+            # instead of letting Chrome show its "Open Roblox?" confirmation dialog.
+            driver.execute_script("""
+                window.__rblxLaunchUrl = null;
+
+                var _ow = window.open;
+                window.open = function(u) {
+                    if (typeof u === 'string' && u.startsWith('roblox-player:')) {
+                        window.__rblxLaunchUrl = u;
+                        return null;
+                    }
+                    return _ow.apply(this, arguments);
+                };
+
+                var _iframeSrcDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+                var _oc = document.createElement.bind(document);
+                document.createElement = function(tag) {
+                    var el = _oc(tag);
+                    if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
+                        Object.defineProperty(el, 'src', {
+                            set: function(v) {
+                                if (typeof v === 'string' && v.startsWith('roblox-player:')) {
+                                    window.__rblxLaunchUrl = v;
+                                    return;
+                                }
+                                if (_iframeSrcDesc && _iframeSrcDesc.set) _iframeSrcDesc.set.call(this, v);
+                            },
+                            get: function() {
+                                return _iframeSrcDesc && _iframeSrcDesc.get ? _iframeSrcDesc.get.call(this) : '';
+                            }
+                        });
+                    }
+                    return el;
+                };
+
+                document.addEventListener('click', function(e) {
+                    var el = e.target;
+                    for (var i = 0; i < 6 && el; i++, el = el.parentElement) {
+                        if (el.tagName === 'A' && typeof el.href === 'string' && el.href.startsWith('roblox-player:')) {
+                            e.preventDefault();
+                            window.__rblxLaunchUrl = el.href;
+                            break;
+                        }
+                    }
+                }, true);
+            """)
+
+            # Click the Play button via JS to avoid Selenium click interception issues
+            clicked = driver.execute_script("""
+                var btns = Array.from(document.querySelectorAll('button'));
+                for (var b of btns) {
+                    var txt = (b.textContent || '').trim();
+                    var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                    if (txt === 'Play' || lbl === 'play') {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            """)
+
+            if not clicked:
+                print(f"[Browser Join] [{username}] Could not find Play button")
+                return False
+
+            print(f"[Browser Join] [{username}] Play clicked — waiting for launch URL...")
+
+            # Wait up to 15 s for our interceptor to capture the roblox-player: URL
+            launch_url = None
+            for _ in range(30):
+                try:
+                    launch_url = driver.execute_script("return window.__rblxLaunchUrl;")
+                except Exception:
+                    break
+                if launch_url:
+                    break
+                time.sleep(0.5)
+
+            if launch_url:
+                print(f"[Browser Join] [{username}] Got launch URL — handing off to launcher")
+                RobloxAPI._execute_launch(launch_url, launcher_preference, custom_launcher_path)
+                time.sleep(2)
+                return True
+
+            # window.location navigation to roblox-player: can't be intercepted; if we get
+            # here without a captured URL the OS protocol handler may have already fired.
+            print(f"[Browser Join] [{username}] Launch URL not captured — assuming OS handler fired")
+            time.sleep(2)
+            return True
+
+        except Exception as e:
+            if orig_stderr is not None:
+                sys.stderr = orig_stderr
+            print(f"[Browser Join] [{username}] Error: {e}")
+            traceback.print_exc()
+            return False
+        finally:
+            try:
+                if driver:
+                    driver.quit()
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+            except Exception:
+                pass
+
     def set_account_note(self, username, note):
         """Set or update note for an account"""
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
             return False
-        
+
         self.accounts[username]['note'] = note
         self.save_accounts()
         print(f"[SUCCESS] Note updated for account: {username}")

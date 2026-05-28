@@ -4192,7 +4192,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x470+{x}+{y}")
+            add_window.geometry(f"400x500+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 add_window.attributes("-topmost", True)
@@ -4274,15 +4274,24 @@ del /f /q "%~f0"
                 variable=check_internet_var,
             )
             check_internet_check.pack(anchor="w", pady=(0, 10))
-            
+
+            browser_click_var = tk.BooleanVar(value=False)
+            browser_click_check = ttk.Checkbutton(
+                form_frame,
+                text="Use browser-click join (bypasses captcha)",
+                style="Dark.TCheckbutton",
+                variable=browser_click_var,
+            )
+            browser_click_check.pack(anchor="w", pady=(0, 10))
+
             def save_and_add():
                 selected_indices = account_listbox.curselection()
                 if not selected_indices:
                     messagebox.showwarning("Missing Info", "Please select at least one account.")
                     return
-                
+
                 selected_accounts = [account_listbox.get(i) for i in selected_indices]
-                
+
                 place_id = place_entry.get().strip()
                 if not place_id:
                     messagebox.showwarning("Missing Info", "Please enter a Place ID.")
@@ -4290,9 +4299,9 @@ del /f /q "%~f0"
                 if not place_id.isdigit():
                     messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                     return
-                
+
                 job_id = job_entry.get().strip()
-                
+
                 config = {
                     'place_id': place_id,
                     'private_server': private_entry.get().strip(),
@@ -4300,7 +4309,8 @@ del /f /q "%~f0"
                     'check_interval': int(interval_spinbox.get()),
                     'max_retries': int(retry_spinbox.get()),
                     'check_presence': check_presence_var.get(),
-                    'check_internet_before_launch': check_internet_var.get()
+                    'check_internet_before_launch': check_internet_var.get(),
+                    'join_method': 'browser_click' if browser_click_var.get() else 'api',
                 }
                 
                 for account in selected_accounts:
@@ -4348,7 +4358,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            edit_window.geometry(f"400x430+{x}+{y}")
+            edit_window.geometry(f"400x460+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 edit_window.attributes("-topmost", True)
@@ -4410,7 +4420,16 @@ del /f /q "%~f0"
                 variable=check_internet_var,
             )
             check_internet_check.pack(anchor="w", pady=(0, 10))
-            
+
+            browser_click_var = tk.BooleanVar(value=config.get('join_method', 'api') == 'browser_click')
+            browser_click_check = ttk.Checkbutton(
+                form_frame,
+                text="Use browser-click join (bypasses captcha)",
+                style="Dark.TCheckbutton",
+                variable=browser_click_var,
+            )
+            browser_click_check.pack(anchor="w", pady=(0, 10))
+
             def save_edit():
                 place_id = place_entry.get().strip()
                 if not place_id:
@@ -4419,9 +4438,9 @@ del /f /q "%~f0"
                 if not place_id.isdigit():
                     messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                     return
-                
+
                 job_id = job_entry.get().strip()
-                
+
                 self.auto_rejoin_configs[account] = {
                     'place_id': place_id,
                     'private_server': private_entry.get().strip(),
@@ -4429,7 +4448,8 @@ del /f /q "%~f0"
                     'check_interval': int(interval_spinbox.get()),
                     'max_retries': int(retry_spinbox.get()),
                     'check_presence': check_presence_var.get(),
-                    'check_internet_before_launch': check_internet_var.get()
+                    'check_internet_before_launch': check_internet_var.get(),
+                    'join_method': 'browser_click' if browser_click_var.get() else 'api',
                 }
                 
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
@@ -9904,9 +9924,17 @@ del /f /q "%~f0"
     def _launch_and_track_pid(self, account, place_id, private_server, job_id):
         with self.auto_rejoin_launch_lock:
             pids_before = self._get_roblox_pids()
-            
+
             launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-            success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
+            config = self.auto_rejoin_configs.get(account, {})
+            join_method = config.get('join_method', 'api')
+
+            if join_method == 'browser_click':
+                success = self.manager.launch_roblox_browser_click(
+                    account, place_id, private_server, launcher_pref, custom_launcher_path
+                )
+            else:
+                success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
             
             if not success:
                 return False
