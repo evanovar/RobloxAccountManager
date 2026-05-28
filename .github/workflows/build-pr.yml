@@ -3,6 +3,9 @@ name: Build PR Artifact
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches-ignore:
+      - main
 
 permissions:
   pull-requests: write
@@ -50,11 +53,12 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RobloxAccountManager-PR${{ github.event.pull_request.number }}-run${{ github.run_number }}
+          name: RobloxAccountManager-${{ github.event_name == 'pull_request' && format('PR{0}', github.event.pull_request.number) || github.ref_name }}-run${{ github.run_number }}
           path: dist/RobloxAccountManager.exe
           retention-days: 14
 
       - name: Comment on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
