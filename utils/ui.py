@@ -372,6 +372,19 @@ class AccountManagerUI:
         ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
+        # Dev mode: a Console button that surfaces the captured stdout/stderr
+        # right from the main window. Useful for diagnosing EXE-mode failures
+        # where --windowed has no terminal attached. Toggle with the
+        # Settings → General → Developer Mode checkbox.
+        self.dev_console_btn = ttk.Button(
+            action_frame,
+            text="Console",
+            style="Dark.TButton",
+            command=self.open_console_window,
+        )
+        self._dev_console_pack_kwargs = {"fill": "x", "pady": 2}
+        self._apply_developer_mode()
+
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
 
@@ -908,7 +921,8 @@ class AccountManagerUI:
                     "rejoin_webhook": {},
                     "websocket_enabled": False,
                     "websocket_port": 8765,
-                    "websocket_require_password": False
+                    "websocket_require_password": False,
+                    "developer_mode": False,
                 }
         except:
             self.settings = {
@@ -936,7 +950,8 @@ class AccountManagerUI:
                 "rejoin_webhook": {},
                 "websocket_enabled": False,
                 "websocket_port": 8765,
-                "websocket_require_password": False
+                "websocket_require_password": False,
+                "developer_mode": False,
             }
 
         settings_migrated = self._ensure_discord_settings_defaults()
@@ -3142,7 +3157,12 @@ del /f /q "%~f0"
             self.refresh_accounts()
             messagebox.showinfo("Success", "Account added successfully!")
         else:
-            messagebox.showerror("Error", "Failed to add account.\nPlease make sure you completed the login process.")
+            messagebox.showerror(
+                "Error",
+                "Failed to add account.\nPlease make sure you completed the login process."
+                "\n\nIf Chrome never opened, enable Settings → General → Developer Mode "
+                "and check the Console for the underlying error."
+            )
     
     def _add_account_error(self, error_msg):
         """
@@ -5936,6 +5956,7 @@ del /f /q "%~f0"
         multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
         confirm_launch_var = tk.BooleanVar(value=self.settings.get("confirm_before_launch", False))
         multi_select_var = tk.BooleanVar(value=self.settings.get("enable_multi_select", False))
+        developer_mode_var = tk.BooleanVar(value=self.settings.get("developer_mode", False))
         
         checkbox_style = ttk.Style()
         checkbox_style.configure(
@@ -6061,6 +6082,21 @@ del /f /q "%~f0"
         )
         auto_tile_check.pack(anchor="w", pady=2)
         self.auto_tile_check = auto_tile_check
+
+        def on_developer_mode_toggle():
+            self.settings["developer_mode"] = developer_mode_var.get()
+            self.save_settings()
+            self._apply_developer_mode()
+
+        developer_mode_check = ttk.Checkbutton(
+            main_frame,
+            text="Developer Mode (show Console button on main window)",
+            variable=developer_mode_var,
+            style="Dark.TCheckbutton",
+            command=on_developer_mode_toggle,
+        )
+        developer_mode_check.pack(anchor="w", pady=2)
+        self.developer_mode_check = developer_mode_check
 
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
@@ -8755,6 +8791,18 @@ del /f /q "%~f0"
                 self.console_text_widget.tag_add(tag, pos, end_pos)
                 search_start = end_pos
     
+    def _apply_developer_mode(self):
+        """Show/hide the main-window Console button based on the dev-mode setting."""
+        if not hasattr(self, "dev_console_btn") or self.dev_console_btn is None:
+            return
+        try:
+            if self.settings.get("developer_mode", False):
+                self.dev_console_btn.pack(**self._dev_console_pack_kwargs)
+            else:
+                self.dev_console_btn.pack_forget()
+        except Exception:
+            pass
+
     def open_console_window(self):
         """Open the Console Output window"""
         if self.console_window and tk.Toplevel.winfo_exists(self.console_window):

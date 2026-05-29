@@ -48,6 +48,13 @@ jobs:
             --collect-all=discord \
             --collect-all=webdriver_manager \
             --collect-all=Crypto \
+            --collect-all=selenium \
+            --collect-all=trio \
+            --collect-all=trio_websocket \
+            --collect-all=outcome \
+            --collect-all=sniffio \
+            --collect-all=pywinauto \
+            --collect-all=comtypes \
             main.py
 
       - name: Upload artifact
