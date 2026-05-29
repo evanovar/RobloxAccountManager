@@ -688,6 +688,13 @@ class RobloxAPI:
                 return True
             
             else:  # default
+                # Match the "client" path: remove RobloxPlayerInstaller.exe so the
+                # protocol-handler launch can't spawn it. Concurrent installer
+                # invocations during mass multi-instance launching collide and
+                # throw "Installer encountered a critical error"; with the installer
+                # exe gone that's impossible. Global filesystem state, so it also
+                # protects the profile-join dialog path (same protocol handler).
+                RobloxAPI.quarantine_installers()
                 os.startfile(url)
                 print("[SUCCESS] Roblox launched successfully!")
                 return True
