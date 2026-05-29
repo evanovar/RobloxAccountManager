@@ -390,7 +390,13 @@ class AccountManagerUI:
         self.join_place_dropdown_visible = False
         
         ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(bottom_frame, text="Launch Roblox Home", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
+        self.launch_home_btn = ttk.Button(
+            bottom_frame,
+            text="Launch Roblox Home  ▼",
+            style="Dark.TButton",
+            command=self.show_launch_home_menu,
+        )
+        self.launch_home_btn.pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
         
         self.root.bind("<Button-1>", self.hide_dropdown_on_click_outside)
@@ -3956,6 +3962,47 @@ del /f /q "%~f0"
         menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
         self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
 
+    def show_launch_home_menu(self):
+        """Show a popup menu next to the Launch Roblox Home button with
+        in-app and in-browser launch options."""
+        menu = tk.Menu(
+            self.root,
+            tearoff=0,
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            bd=0,
+        )
+        menu.add_command(label="Launch in App", command=self.launch_home)
+        menu.add_command(label="Launch in Browser", command=self.launch_home_in_browser)
+        try:
+            self.root.update_idletasks()
+            x = self.launch_home_btn.winfo_rootx()
+            y = self.launch_home_btn.winfo_rooty() + self.launch_home_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def launch_home_in_browser(self):
+        """Open a detached Chrome to roblox.com/home logged in as the selected account."""
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+
+        for uname in usernames:
+            threading.Thread(
+                target=self.manager.open_authenticated_browser,
+                args=(uname, "https://www.roblox.com/home"),
+                daemon=True,
+            ).start()
+
     def launch_home(self):
         """Launch Roblox application to home page with the selected account(s) logged in (non-blocking)"""
         if self.settings.get("enable_multi_select", False):
@@ -4155,8 +4202,16 @@ del /f /q "%~f0"
             for account, config in self.auto_rejoin_configs.items():
                 is_active = account in self.auto_rejoin_threads and self.auto_rejoin_threads[account].is_alive()
                 status = "[ACTIVE]" if is_active else "[INACTIVE]"
-                place_id = config.get('place_id', 'Unknown')
-                display = f"{account} - {status} - Place: {place_id}"
+                place_id = config.get('place_id', '').strip()
+                join_off = config.get('join_off_username', '').strip()
+                if place_id and join_off:
+                    display = f"{account} - {status} - Place: {place_id} - via {join_off}"
+                elif join_off:
+                    display = f"{account} - {status} - via {join_off}"
+                elif place_id:
+                    display = f"{account} - {status} - Place: {place_id}"
+                else:
+                    display = f"{account} - {status}"
                 rejoin_list.insert(tk.END, display)
         refresh_rejoin_list()
 
@@ -4192,7 +4247,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x500+{x}+{y}")
+            add_window.geometry(f"400x600+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 add_window.attributes("-topmost", True)
@@ -4236,14 +4291,14 @@ del /f /q "%~f0"
             for account in sorted(self.manager.accounts.keys()):
                 account_listbox.insert(tk.END, account)
             
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            ttk.Label(form_frame, text="Place ID (Optional if joining off a friend below):", style="Dark.TLabel").pack(anchor="w")
             place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
             place_entry.pack(fill="x", pady=(0, 10))
-            
+
             ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
             private_entry = ttk.Entry(form_frame, style="Dark.TEntry")
             private_entry.pack(fill="x", pady=(0, 10))
-            
+
             ttk.Label(form_frame, text="Job ID (Optional):", style="Dark.TLabel").pack(anchor="w")
             job_entry = ttk.Entry(form_frame, style="Dark.TEntry")
             job_entry.pack(fill="x", pady=(0, 10))
@@ -4275,14 +4330,17 @@ del /f /q "%~f0"
             )
             check_internet_check.pack(anchor="w", pady=(0, 10))
 
-            browser_click_var = tk.BooleanVar(value=False)
-            browser_click_check = ttk.Checkbutton(
-                form_frame,
-                text="Use browser-click join (bypasses captcha)",
-                style="Dark.TCheckbutton",
-                variable=browser_click_var,
-            )
-            browser_click_check.pack(anchor="w", pady=(0, 10))
+            ttk.Label(form_frame, text="Join Off Friend (username) — for flagged accounts (Optional):", style="Dark.TLabel").pack(anchor="w")
+            join_off_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            join_off_entry.pack(fill="x", pady=(0, 10))
+
+            def _sync_mutex(*_):
+                place_filled = bool(place_entry.get().strip())
+                join_off_filled = bool(join_off_entry.get().strip())
+                join_off_entry.config(state="disabled" if place_filled else "normal")
+                place_entry.config(state="disabled" if join_off_filled else "normal")
+            place_entry.bind("<KeyRelease>", _sync_mutex)
+            join_off_entry.bind("<KeyRelease>", _sync_mutex)
 
             def save_and_add():
                 selected_indices = account_listbox.curselection()
@@ -4293,14 +4351,34 @@ del /f /q "%~f0"
                 selected_accounts = [account_listbox.get(i) for i in selected_indices]
 
                 place_id = place_entry.get().strip()
-                if not place_id:
-                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
+                join_off = join_off_entry.get().strip()
+                if not place_id and not join_off:
+                    messagebox.showwarning("Missing Info", "Please enter a Place ID or a Join Off Friend username.")
                     return
-                if not place_id.isdigit():
+                if place_id and join_off:
+                    messagebox.showerror(
+                        "Choose One",
+                        "Place ID and Join Off Friend are mutually exclusive — please fill only one.",
+                    )
+                    return
+                if place_id and not place_id.isdigit():
                     messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                     return
 
                 job_id = job_entry.get().strip()
+
+                # Reject self-referential and cyclic join-off configs
+                for acct in selected_accounts:
+                    if join_off and join_off.lower() == acct.lower():
+                        messagebox.showerror("Invalid Join Off", f"{acct} cannot join off itself.")
+                        return
+                    cycle = self._detect_join_off_cycle(acct, join_off)
+                    if cycle:
+                        messagebox.showerror(
+                            "Cycle Detected",
+                            f"Setting {acct} to join off {join_off} would create a cycle:\n{' → '.join(cycle)}"
+                        )
+                        return
 
                 config = {
                     'place_id': place_id,
@@ -4310,7 +4388,7 @@ del /f /q "%~f0"
                     'max_retries': int(retry_spinbox.get()),
                     'check_presence': check_presence_var.get(),
                     'check_internet_before_launch': check_internet_var.get(),
-                    'join_method': 'browser_click' if browser_click_var.get() else 'api',
+                    'join_off_username': join_off,
                 }
                 
                 for account in selected_accounts:
@@ -4358,7 +4436,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            edit_window.geometry(f"400x460+{x}+{y}")
+            edit_window.geometry(f"400x560+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 edit_window.attributes("-topmost", True)
@@ -4379,7 +4457,7 @@ del /f /q "%~f0"
             
             ttk.Label(form_frame, text=f"Account: {account}", style="Dark.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
             
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
+            ttk.Label(form_frame, text="Place ID (Optional if joining off a friend below):", style="Dark.TLabel").pack(anchor="w")
             place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
             place_entry.insert(0, config.get('place_id', ''))
             place_entry.pack(fill="x", pady=(0, 10))
@@ -4421,25 +4499,49 @@ del /f /q "%~f0"
             )
             check_internet_check.pack(anchor="w", pady=(0, 10))
 
-            browser_click_var = tk.BooleanVar(value=config.get('join_method', 'api') == 'browser_click')
-            browser_click_check = ttk.Checkbutton(
-                form_frame,
-                text="Use browser-click join (bypasses captcha)",
-                style="Dark.TCheckbutton",
-                variable=browser_click_var,
-            )
-            browser_click_check.pack(anchor="w", pady=(0, 10))
+            ttk.Label(form_frame, text="Join Off Friend (username) — for flagged accounts (Optional):", style="Dark.TLabel").pack(anchor="w")
+            join_off_entry = ttk.Entry(form_frame, style="Dark.TEntry")
+            join_off_entry.insert(0, config.get('join_off_username', ''))
+            join_off_entry.pack(fill="x", pady=(0, 10))
+
+            def _sync_mutex(*_):
+                place_filled = bool(place_entry.get().strip())
+                join_off_filled = bool(join_off_entry.get().strip())
+                join_off_entry.config(state="disabled" if place_filled else "normal")
+                place_entry.config(state="disabled" if join_off_filled else "normal")
+            place_entry.bind("<KeyRelease>", _sync_mutex)
+            join_off_entry.bind("<KeyRelease>", _sync_mutex)
+            # Reflect initial state for pre-existing configs that had one set
+            _sync_mutex()
 
             def save_edit():
                 place_id = place_entry.get().strip()
-                if not place_id:
-                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
+                join_off = join_off_entry.get().strip()
+                if not place_id and not join_off:
+                    messagebox.showwarning("Missing Info", "Please enter a Place ID or a Join Off Friend username.")
                     return
-                if not place_id.isdigit():
+                if place_id and join_off:
+                    messagebox.showerror(
+                        "Choose One",
+                        "Place ID and Join Off Friend are mutually exclusive — please fill only one.",
+                    )
+                    return
+                if place_id and not place_id.isdigit():
                     messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
                     return
 
                 job_id = job_entry.get().strip()
+
+                if join_off and join_off.lower() == account.lower():
+                    messagebox.showerror("Invalid Join Off", f"{account} cannot join off itself.")
+                    return
+                cycle = self._detect_join_off_cycle(account, join_off)
+                if cycle:
+                    messagebox.showerror(
+                        "Cycle Detected",
+                        f"Setting {account} to join off {join_off} would create a cycle:\n{' → '.join(cycle)}"
+                    )
+                    return
 
                 self.auto_rejoin_configs[account] = {
                     'place_id': place_id,
@@ -4449,7 +4551,7 @@ del /f /q "%~f0"
                     'max_retries': int(retry_spinbox.get()),
                     'check_presence': check_presence_var.get(),
                     'check_internet_before_launch': check_internet_var.get(),
-                    'join_method': 'browser_click' if browser_click_var.get() else 'api',
+                    'join_off_username': join_off,
                 }
                 
                 self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
@@ -4591,7 +4693,7 @@ del /f /q "%~f0"
         
         row3_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
         row3_frame.pack(fill="x")
-        
+
         ttk.Button(row3_frame, text="Start All", style="Dark.TButton", command=start_all).pack(side="left", fill="x", expand=True, padx=(0, 2))
         ttk.Button(row3_frame, text="Stop All", style="Dark.TButton", command=stop_all).pack(side="left", fill="x", expand=True, padx=(2, 0))
 
@@ -9730,12 +9832,13 @@ del /f /q "%~f0"
                 last_internet_warning_time = now
             return False
 
-        place_id = config.get('place_id')
+        place_id = config.get('place_id', '')
         private_server = config.get('private_server', '')
         job_id = config.get('job_id', '')
-        
-        if not place_id:
-            print(f"[Auto-Rejoin] Invalid configuration for {account}")
+        join_off_for_config = config.get('join_off_username', '').strip()
+
+        if not place_id and not join_off_for_config:
+            print(f"[Auto-Rejoin] Invalid configuration for {account} — needs a place_id or a join_off_username")
             return
         
         if account not in self.manager.accounts:
@@ -9780,7 +9883,11 @@ del /f /q "%~f0"
                 if wait_next_check():
                     return
             success = self._launch_and_track_pid(account, place_id, private_server, job_id)
-            if not success:
+            if success is None:
+                # Deliberately skipped (e.g. waiting for join-off parent).
+                # Don't penalize against max_retries — main loop will retry.
+                pass
+            elif not success:
                 retry_count += 1
                 self._maybe_send_webhook_embed(
                     "Auto Rejoin — Launch Failed",
@@ -9795,6 +9902,12 @@ del /f /q "%~f0"
         while not stop_event.is_set():
             try:
                 check_presence = config.get('check_presence', True)
+                # If joining off a friend, the dependent ends up in whatever game
+                # the friend is in — not necessarily place_id. Force the generic
+                # "in any game" branch so we don't loop trying to "fix" them into
+                # a place they were never going to be in.
+                if not place_id or join_off_for_config:
+                    check_presence = False
                 disconnect_detected = False
                 game_id = ''
 
@@ -9881,6 +9994,13 @@ del /f /q "%~f0"
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
                     success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
 
+                    if success is None:
+                        # Deliberately skipped (waiting for join-off parent).
+                        # Undo the retry_count++ so this doesn't burn an attempt.
+                        retry_count = max(0, retry_count - 1)
+                        if wait_next_check():
+                            break
+                        continue
                     if success:
                         print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
                         self._maybe_send_webhook_embed(
@@ -9921,17 +10041,69 @@ del /f /q "%~f0"
                 if wait_next_check():
                     break
     
+    def _detect_join_off_cycle(self, account, new_join_off):
+        """Return the cycle path if setting `account.join_off = new_join_off`
+        would create a cycle in the join-off graph; otherwise None.
+
+        Example: if A joins off B, B joins off C, and you try to set C → A,
+        returns ['C', 'A', 'B', 'C'].
+        """
+        if not new_join_off:
+            return None
+        visited = []
+        current = new_join_off
+        seen = set()
+        while current:
+            if current.lower() in seen:
+                return None  # cycle exists but doesn't involve `account`
+            seen.add(current.lower())
+            visited.append(current)
+            if current.lower() == account.lower():
+                return [account] + visited
+            cfg = self.auto_rejoin_configs.get(current, {})
+            next_off = cfg.get('join_off_username', '').strip()
+            if not next_off:
+                return None
+            current = next_off
+        return None
+
+    def _is_account_currently_in_game(self, username):
+        """Best-effort presence check: returns True if `username` is currently
+        playing any Roblox game. Used as the gate for profile-join dependents.
+        """
+        if username not in self.manager.accounts:
+            return False
+        if 'user_id_cache' not in self.settings:
+            self.settings['user_id_cache'] = {}
+        user_id = RobloxAPI.get_user_id_from_username(
+            username, use_cache=True, cache_dict=self.settings['user_id_cache']
+        )
+        if not user_id:
+            return False
+        cookie = self.manager.accounts[username].get('cookie', '')
+        try:
+            presence = RobloxAPI.get_player_presence(user_id, cookie)
+        except Exception:
+            return False
+        return bool(presence and presence.get('in_game'))
+
     def _launch_and_track_pid(self, account, place_id, private_server, job_id):
         with self.auto_rejoin_launch_lock:
             pids_before = self._get_roblox_pids()
 
             launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
             config = self.auto_rejoin_configs.get(account, {})
-            join_method = config.get('join_method', 'api')
+            join_off = config.get('join_off_username', '').strip()
 
-            if join_method == 'browser_click':
-                success = self.manager.launch_roblox_browser_click(
-                    account, place_id, private_server, launcher_pref, custom_launcher_path
+            if join_off:
+                # Gate the profile-join on the parent actually being in-game.
+                # Returning None signals "deliberately skipped" — the worker
+                # should NOT count this toward max_retries.
+                if not self._is_account_currently_in_game(join_off):
+                    print(f"[Auto-Rejoin] [{account}] Waiting for {join_off} to be in-game before joining off them")
+                    return None
+                success = self.manager.launch_roblox_profile_join(
+                    account, join_off, launcher_pref, custom_launcher_path
                 )
             else:
                 success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)

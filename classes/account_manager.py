@@ -19,6 +19,8 @@ from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -749,6 +751,142 @@ class RobloxAccountManager:
             custom_launcher_path,
         )
     
+    def open_authenticated_browser(self, username, url):
+        """Open a detached Chrome window logged in as `username`, navigated to
+        `url`, and leave it running. Chrome stays alive after this returns.
+        """
+        if username not in self.accounts:
+            print(f"[Browser] Account '{username}' not found")
+            return False
+
+        cookie = self.accounts[username]['cookie']
+
+        print(f"[Browser] [{username}] Opening detached Chrome → {url}")
+
+        profile_dir = tempfile.mkdtemp(prefix="ram_ab_")
+        orig_stderr = None
+
+        try:
+            opts = Options()
+            opts.add_argument(f"--user-data-dir={profile_dir}")
+            opts.add_argument("--no-first-run")
+            opts.add_argument("--no-default-browser-check")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_argument("--log-level=3")
+            opts.add_argument("--silent")
+            opts.add_argument("--disable-logging")
+            opts.add_argument("--disable-dev-shm-usage")
+            opts.add_argument("--no-sandbox")
+            opts.add_argument("--disable-gpu")
+            opts.add_argument("--disable-background-networking")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+            opts.add_experimental_option("useAutomationExtension", False)
+            # Keep Chrome alive after the WebDriver session ends
+            opts.add_experimental_option("detach", True)
+
+            service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+
+            orig_stderr = sys.stderr
+            sys.stderr = open(os.devnull, 'w')
+            driver = webdriver.Chrome(service=service, options=opts)
+            sys.stderr.close()
+            sys.stderr = orig_stderr
+            orig_stderr = None
+
+            driver.set_page_load_timeout(30)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            driver.get("https://www.roblox.com")
+            driver.add_cookie({
+                "name": ".ROBLOSECURITY",
+                "value": cookie,
+                "domain": ".roblox.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            })
+
+            driver.get(url)
+
+            print(f"[Browser] [{username}] Browser ready — Chrome will stay open.")
+            # detach keeps Chrome alive after we drop the driver reference.
+            # Profile dir intentionally left on disk; Chrome still has it locked.
+            return True
+
+        except Exception as e:
+            if orig_stderr is not None:
+                sys.stderr = orig_stderr
+            print(f"[Browser] [{username}] Error: {e}")
+            traceback.print_exc()
+            try:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return False
+
+    def _try_click_chrome_protocol_dialog(self, username):
+        """One-shot scan for Chrome's external-protocol confirmation dialog
+        ("Open Roblox Game Client?"). If found, click the 'Open ...' button
+        and return True. Returns False if no dialog is visible right now.
+
+        Chrome renders this dialog as a Views modal inside the browser window
+        (not a separate top-level window) and the buttons are not Win32
+        controls, so we use UI Automation (pywinauto) to reach them.
+        """
+        try:
+            from pywinauto import Desktop
+        except ImportError:
+            return False
+
+        try:
+            desktop = Desktop(backend="uia")
+        except Exception:
+            return False
+
+        try:
+            for win in desktop.windows(visible_only=True, top_level_only=True):
+                try:
+                    if (win.class_name() or "") != "Chrome_WidgetWin_1":
+                        continue
+                except Exception:
+                    continue
+
+                # Confirm a protocol dialog is open by looking for the
+                # distinctive "wants to open this application" text.
+                has_proto_text = False
+                try:
+                    for t in win.descendants(control_type="Text"):
+                        txt = (t.window_text() or "").lower()
+                        if "wants to open this application" in txt or "open this application" in txt:
+                            has_proto_text = True
+                            break
+                except Exception:
+                    continue
+                if not has_proto_text:
+                    continue
+
+                # Find a button whose name starts with "Open " (the actual
+                # label is the registered handler name, e.g. "Open Roblox
+                # Game Client" or "Open Bloxstrap"). Skip browser-chrome
+                # buttons like tab/menu/window items.
+                try:
+                    for b in win.descendants(control_type="Button"):
+                        name = (b.window_text() or "").strip()
+                        if not name.startswith("Open "):
+                            continue
+                        lname = name.lower()
+                        if any(x in lname for x in (" tab", " window", " menu", " bookmark", " file", " link in")):
+                            continue
+                        print(f"[Browser Join] [{username}] Clicking Chrome protocol dialog button: {name!r}")
+                        b.click_input()
+                        return True
+                except Exception as e:
+                    print(f"[Browser Join] [{username}] Error clicking protocol dialog: {e}")
+                    return False
+        except Exception:
+            return False
+        return False
+
     def launch_roblox_browser_click(self, username, place_id, private_server="", launcher_preference="default", custom_launcher_path=""):
         """Join a Roblox game by clicking Play inside a real browser — bypasses the API auth-ticket captcha.
 
@@ -878,53 +1016,452 @@ class RobloxAccountManager:
                 }, true);
             """)
 
-            # Click the Play button via JS to avoid Selenium click interception issues
-            clicked = driver.execute_script("""
-                var btns = Array.from(document.querySelectorAll('button'));
-                for (var b of btns) {
-                    var txt = (b.textContent || '').trim();
-                    var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
-                    if (txt === 'Play' || lbl === 'play') {
-                        b.click();
-                        return true;
+            # Find the Play button. The Roblox play button is often icon-only (no
+            # text), so we try Roblox-specific selectors first and fall back to
+            # text / aria-label / title matching across all clickables.
+            # Once found we tag it so Selenium can re-locate it for a real click.
+            find_js = r"""
+                function findPlay() {
+                    // 1) Roblox testid hooks
+                    var t = document.querySelector(
+                        '[data-testid="play-button"],' +
+                        '[data-testid="game-detail-play-button"],' +
+                        '[data-testid="PlayButton"]'
+                    );
+                    if (t) return t;
+
+                    // 2) Known Roblox id / container patterns
+                    var ids = [
+                        'game-details-play-button-container',
+                        'PlayButton',
+                        'play-button'
+                    ];
+                    for (var id of ids) {
+                        var el = document.getElementById(id);
+                        if (el) return el.querySelector('button, a, [role="button"]') || el;
                     }
+
+                    // 3) Known Roblox class name patterns
+                    var cls = document.querySelector(
+                        'button.btn-common-play-game-lg,' +
+                        'button[class*="PlayButton"],' +
+                        'button[class*="play-button" i],' +
+                        'a[class*="PlayButton"],' +
+                        'a[class*="play-button" i]'
+                    );
+                    if (cls) return cls;
+
+                    // 4) Text / aria-label / title match across clickable elements
+                    var clickables = Array.from(document.querySelectorAll(
+                        'button, a, [role="button"]'
+                    ));
+                    for (var b of clickables) {
+                        var txt = (b.textContent || '').trim();
+                        var lbl = (b.getAttribute('aria-label') || '').trim();
+                        var ttl = (b.getAttribute('title') || '').trim();
+                        if (txt === 'Play' ||
+                            /^play( |$)/i.test(lbl) ||
+                            /^play( |$)/i.test(ttl)) {
+                            return b;
+                        }
+                    }
+                    return null;
                 }
-                return false;
-            """)
 
-            if not clicked:
-                print(f"[Browser Join] [{username}] Could not find Play button")
-                return False
+                var btn = findPlay();
+                if (!btn) return null;
+                btn.setAttribute('data-ram-play-target', '1');
+                btn.scrollIntoView({block: 'center', inline: 'center'});
+                return {
+                    tag: btn.tagName,
+                    id: btn.id || '',
+                    cls: (btn.className && btn.className.toString) ? btn.className.toString().slice(0, 120) : '',
+                    testid: btn.getAttribute('data-testid') || '',
+                    aria: btn.getAttribute('aria-label') || '',
+                    title: btn.getAttribute('title') || '',
+                    text: (btn.textContent || '').trim().slice(0, 60),
+                    html: btn.outerHTML.slice(0, 300)
+                };
+            """
 
-            print(f"[Browser Join] [{username}] Play clicked — waiting for launch URL...")
-
-            # Wait up to 15 s for our interceptor to capture the roblox-player: URL
-            launch_url = None
-            for _ in range(30):
+            print(f"[Browser Join] [{username}] Searching for Play button (polling up to 20 s)...")
+            found_info = None
+            for attempt in range(40):
                 try:
-                    launch_url = driver.execute_script("return window.__rblxLaunchUrl;")
-                except Exception:
-                    break
-                if launch_url:
+                    found_info = driver.execute_script(find_js)
+                except Exception as e:
+                    print(f"[Browser Join] [{username}] JS error searching for button: {e}")
+                    found_info = None
+                if found_info:
+                    print(f"[Browser Join] [{username}] Found Play button after {(attempt+1)*0.5:.1f}s")
                     break
                 time.sleep(0.5)
 
+            if not found_info:
+                print(f"[Browser Join] [{username}] Could not find Play button after 20s — page DOM has no matching element")
+                return False
+
+            print(f"[Browser Join] [{username}] Button details: tag={found_info['tag']} "
+                  f"id={found_info['id']!r} testid={found_info['testid']!r} "
+                  f"aria={found_info['aria']!r} title={found_info['title']!r} "
+                  f"text={found_info['text']!r}")
+            print(f"[Browser Join] [{username}] Button class: {found_info['cls']!r}")
+            print(f"[Browser Join] [{username}] outerHTML: {found_info['html']}")
+
+            # Click via Selenium ActionChains so the click carries isTrusted=true
+            # (synthetic JS .click() is often ignored by Roblox's React handlers).
+            click_method = None
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, '[data-ram-play-target="1"]')
+                ActionChains(driver).move_to_element(el).pause(0.2).click(el).perform()
+                click_method = "ActionChains"
+            except Exception as e:
+                print(f"[Browser Join] [{username}] ActionChains click failed: {e}")
+                try:
+                    el = driver.find_element(By.CSS_SELECTOR, '[data-ram-play-target="1"]')
+                    el.click()
+                    click_method = "Selenium .click()"
+                except Exception as e2:
+                    print(f"[Browser Join] [{username}] Selenium .click() also failed: {e2}")
+                    try:
+                        driver.execute_script(
+                            "document.querySelector('[data-ram-play-target=\"1\"]').click();"
+                        )
+                        click_method = "JS .click() (fallback)"
+                    except Exception as e3:
+                        print(f"[Browser Join] [{username}] JS fallback click failed: {e3}")
+                        return False
+
+            print(f"[Browser Join] [{username}] Play clicked via {click_method} — waiting up to 20 s for launch URL or Chrome protocol dialog...")
+
+            # Wait for one of two things to happen:
+            #   1. Our JS interceptor catches the roblox-player: URL (then we
+            #      forward it to the user's configured launcher).
+            #   2. Chrome's native "Open Roblox Game Client?" protocol dialog
+            #      appears — JS can't see it, so we dismiss it via UI Automation
+            #      and let the OS protocol handler launch the game.
+            launch_url = None
+            dialog_dismissed = False
+            for i in range(40):
+                try:
+                    launch_url = driver.execute_script("return window.__rblxLaunchUrl;")
+                except Exception as e:
+                    print(f"[Browser Join] [{username}] Error polling launch URL: {e}")
+                    break
+                if launch_url:
+                    print(f"[Browser Join] [{username}] Launch URL captured after {(i+1)*0.5:.1f}s")
+                    break
+
+                if self._try_click_chrome_protocol_dialog(username):
+                    dialog_dismissed = True
+                    print(f"[Browser Join] [{username}] Chrome protocol dialog dismissed after {(i+1)*0.5:.1f}s")
+                    break
+
+                time.sleep(0.5)
+
             if launch_url:
-                print(f"[Browser Join] [{username}] Got launch URL — handing off to launcher")
+                preview = launch_url[:120] + ("..." if len(launch_url) > 120 else "")
+                print(f"[Browser Join] [{username}] URL: {preview}")
+                print(f"[Browser Join] [{username}] Handing off to launcher ({launcher_preference})")
                 RobloxAPI._execute_launch(launch_url, launcher_preference, custom_launcher_path)
                 time.sleep(2)
                 return True
 
-            # window.location navigation to roblox-player: can't be intercepted; if we get
-            # here without a captured URL the OS protocol handler may have already fired.
-            print(f"[Browser Join] [{username}] Launch URL not captured — assuming OS handler fired")
-            time.sleep(2)
-            return True
+            if dialog_dismissed:
+                # OS protocol handler has the URL now and will launch whichever
+                # client is registered for `roblox-player:` (Roblox / Bloxstrap /
+                # Fishstrap / etc). `launcher_preference` is ignored on this path.
+                print(f"[Browser Join] [{username}] OS protocol handler is launching Roblox")
+                time.sleep(3)
+                return True
+
+            # No URL captured AND no dialog seen — collect diagnostics so we can
+            # see what Roblox did in response to the click.
+            try:
+                diag = driver.execute_script("""
+                    return {
+                        url: window.location.href,
+                        hasDialog: !!document.querySelector('[role="dialog"]'),
+                        hasCaptcha: !!document.querySelector('iframe[src*="captcha"], iframe[src*="funcaptcha"], iframe[src*="arkoselabs"]'),
+                        loginLink: !!document.querySelector('a[href*="login"], button[data-action="login"]')
+                    };
+                """)
+                print(f"[Browser Join] [{username}] Post-click state: url={diag['url']} "
+                      f"hasDialog={diag['hasDialog']} hasCaptcha={diag['hasCaptcha']} "
+                      f"loginLink={diag['loginLink']}")
+            except Exception as e:
+                print(f"[Browser Join] [{username}] Diagnostic query failed: {e}")
+
+            print(f"[Browser Join] [{username}] Launch URL never captured and no protocol dialog seen — click did not trigger Roblox's launch flow")
+            return False
 
         except Exception as e:
             if orig_stderr is not None:
                 sys.stderr = orig_stderr
             print(f"[Browser Join] [{username}] Error: {e}")
+            traceback.print_exc()
+            return False
+        finally:
+            try:
+                if driver:
+                    driver.quit()
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    def launch_roblox_profile_join(self, username, friend_username, launcher_preference="default", custom_launcher_path=""):
+        """Join the game that `friend_username` is currently in by navigating
+        to their Roblox profile in a real browser and clicking the Join button.
+
+        Flagged accounts get captcha'd on the main game page join path; joining
+        through a friend's profile appears to skip that gate.
+        """
+        if username not in self.accounts:
+            print(f"[Profile Join] Account '{username}' not found")
+            return False
+
+        cookie = self.accounts[username]['cookie']
+
+        friend_user_id = RobloxAPI.get_user_id_from_username(friend_username)
+        if not friend_user_id:
+            print(f"[Profile Join] [{username}] Could not resolve friend username '{friend_username}' to a user ID")
+            return False
+
+        profile_url = f"https://www.roblox.com/users/{friend_user_id}/profile"
+        print(f"[Profile Join] [{username}] Joining off {friend_username} (uid {friend_user_id}) → {profile_url}")
+
+        profile_dir = tempfile.mkdtemp(prefix="ram_pj_")
+        driver = None
+        orig_stderr = None
+
+        try:
+            opts = Options()
+            opts.add_argument(f"--user-data-dir={profile_dir}")
+            opts.add_argument("--no-first-run")
+            opts.add_argument("--no-default-browser-check")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_argument("--log-level=3")
+            opts.add_argument("--silent")
+            opts.add_argument("--disable-logging")
+            opts.add_argument("--disable-dev-shm-usage")
+            opts.add_argument("--no-sandbox")
+            opts.add_argument("--disable-gpu")
+            opts.add_argument("--disable-background-networking")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+            opts.add_experimental_option("useAutomationExtension", False)
+            opts.add_experimental_option("prefs", {
+                "protocol_handler.excluded_schemes": {"roblox-player": False}
+            })
+
+            service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+
+            orig_stderr = sys.stderr
+            sys.stderr = open(os.devnull, 'w')
+            driver = webdriver.Chrome(service=service, options=opts)
+            sys.stderr.close()
+            sys.stderr = orig_stderr
+            orig_stderr = None
+
+            driver.set_page_load_timeout(30)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            driver.get("https://www.roblox.com")
+            driver.add_cookie({
+                "name": ".ROBLOSECURITY",
+                "value": cookie,
+                "domain": ".roblox.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            })
+
+            driver.get(profile_url)
+
+            # Same interceptor as browser-click — capture the roblox-player: URL
+            # if Roblox surfaces it via window.open / iframe.src / anchor click.
+            driver.execute_script("""
+                window.__rblxLaunchUrl = null;
+
+                var _ow = window.open;
+                window.open = function(u) {
+                    if (typeof u === 'string' && u.startsWith('roblox-player:')) {
+                        window.__rblxLaunchUrl = u;
+                        return null;
+                    }
+                    return _ow.apply(this, arguments);
+                };
+
+                var _iframeSrcDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+                var _oc = document.createElement.bind(document);
+                document.createElement = function(tag) {
+                    var el = _oc(tag);
+                    if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
+                        Object.defineProperty(el, 'src', {
+                            set: function(v) {
+                                if (typeof v === 'string' && v.startsWith('roblox-player:')) {
+                                    window.__rblxLaunchUrl = v;
+                                    return;
+                                }
+                                if (_iframeSrcDesc && _iframeSrcDesc.set) _iframeSrcDesc.set.call(this, v);
+                            },
+                            get: function() {
+                                return _iframeSrcDesc && _iframeSrcDesc.get ? _iframeSrcDesc.get.call(this) : '';
+                            }
+                        });
+                    }
+                    return el;
+                };
+
+                document.addEventListener('click', function(e) {
+                    var el = e.target;
+                    for (var i = 0; i < 6 && el; i++, el = el.parentElement) {
+                        if (el.tagName === 'A' && typeof el.href === 'string' && el.href.startsWith('roblox-player:')) {
+                            e.preventDefault();
+                            window.__rblxLaunchUrl = el.href;
+                            break;
+                        }
+                    }
+                }, true);
+            """)
+
+            # Locate the Join button on the friend's profile. The profile page's
+            # Join button text is just "Join" so the text-matching fallback is
+            # most likely to win here.
+            find_js = r"""
+                function findJoin() {
+                    // 1) testid hooks
+                    var t = document.querySelector(
+                        '[data-testid="profile-join-button"],' +
+                        '[data-testid="join-button"]'
+                    );
+                    if (t) return t;
+
+                    // 2) class-based
+                    var cls = document.querySelector(
+                        'button[class*="ProfileJoinButton"],' +
+                        'button[class*="profile-join" i],' +
+                        'button[class*="JoinButton"]'
+                    );
+                    if (cls) return cls;
+
+                    // 3) Text / aria-label / title — must be exactly "Join"
+                    // to avoid matching "Join Group" / "Join Now" elsewhere
+                    var clickables = Array.from(document.querySelectorAll(
+                        'button, a, [role="button"]'
+                    ));
+                    for (var b of clickables) {
+                        var txt = (b.textContent || '').trim();
+                        var lbl = (b.getAttribute('aria-label') || '').trim();
+                        if (txt === 'Join' || lbl === 'Join' || /^join$/i.test(lbl)) {
+                            return b;
+                        }
+                    }
+                    return null;
+                }
+
+                var btn = findJoin();
+                if (!btn) return null;
+                btn.setAttribute('data-ram-join-target', '1');
+                btn.scrollIntoView({block: 'center', inline: 'center'});
+                return {
+                    tag: btn.tagName,
+                    id: btn.id || '',
+                    cls: (btn.className && btn.className.toString) ? btn.className.toString().slice(0, 120) : '',
+                    testid: btn.getAttribute('data-testid') || '',
+                    aria: btn.getAttribute('aria-label') || '',
+                    title: btn.getAttribute('title') || '',
+                    text: (btn.textContent || '').trim().slice(0, 60),
+                    html: btn.outerHTML.slice(0, 300)
+                };
+            """
+
+            print(f"[Profile Join] [{username}] Searching for Join button (polling up to 20 s)...")
+            found_info = None
+            for attempt in range(40):
+                try:
+                    found_info = driver.execute_script(find_js)
+                except Exception as e:
+                    print(f"[Profile Join] [{username}] JS error searching for button: {e}")
+                    found_info = None
+                if found_info:
+                    print(f"[Profile Join] [{username}] Found Join button after {(attempt+1)*0.5:.1f}s")
+                    break
+                time.sleep(0.5)
+
+            if not found_info:
+                print(f"[Profile Join] [{username}] Could not find Join button on {friend_username}'s profile — friend may not be in a public game")
+                return False
+
+            print(f"[Profile Join] [{username}] Button details: tag={found_info['tag']} "
+                  f"id={found_info['id']!r} testid={found_info['testid']!r} "
+                  f"aria={found_info['aria']!r} text={found_info['text']!r}")
+
+            click_method = None
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, '[data-ram-join-target="1"]')
+                ActionChains(driver).move_to_element(el).pause(0.2).click(el).perform()
+                click_method = "ActionChains"
+            except Exception as e:
+                print(f"[Profile Join] [{username}] ActionChains click failed: {e}")
+                try:
+                    el = driver.find_element(By.CSS_SELECTOR, '[data-ram-join-target="1"]')
+                    el.click()
+                    click_method = "Selenium .click()"
+                except Exception as e2:
+                    print(f"[Profile Join] [{username}] Selenium .click() also failed: {e2}")
+                    try:
+                        driver.execute_script(
+                            "document.querySelector('[data-ram-join-target=\"1\"]').click();"
+                        )
+                        click_method = "JS .click() (fallback)"
+                    except Exception as e3:
+                        print(f"[Profile Join] [{username}] JS fallback click failed: {e3}")
+                        return False
+
+            print(f"[Profile Join] [{username}] Join clicked via {click_method} — waiting up to 20 s for launch URL or Chrome protocol dialog...")
+
+            launch_url = None
+            dialog_dismissed = False
+            for i in range(40):
+                try:
+                    launch_url = driver.execute_script("return window.__rblxLaunchUrl;")
+                except Exception as e:
+                    print(f"[Profile Join] [{username}] Error polling launch URL: {e}")
+                    break
+                if launch_url:
+                    print(f"[Profile Join] [{username}] Launch URL captured after {(i+1)*0.5:.1f}s")
+                    break
+
+                if self._try_click_chrome_protocol_dialog(username):
+                    dialog_dismissed = True
+                    print(f"[Profile Join] [{username}] Chrome protocol dialog dismissed after {(i+1)*0.5:.1f}s")
+                    break
+
+                time.sleep(0.5)
+
+            if launch_url:
+                preview = launch_url[:120] + ("..." if len(launch_url) > 120 else "")
+                print(f"[Profile Join] [{username}] URL: {preview}")
+                print(f"[Profile Join] [{username}] Handing off to launcher ({launcher_preference})")
+                RobloxAPI._execute_launch(launch_url, launcher_preference, custom_launcher_path)
+                time.sleep(2)
+                return True
+
+            if dialog_dismissed:
+                print(f"[Profile Join] [{username}] OS protocol handler is launching Roblox")
+                time.sleep(3)
+                return True
+
+            print(f"[Profile Join] [{username}] Launch URL never captured and no protocol dialog seen — Join click did not trigger launch flow")
+            return False
+
+        except Exception as e:
+            if orig_stderr is not None:
+                sys.stderr = orig_stderr
+            print(f"[Profile Join] [{username}] Error: {e}")
             traceback.print_exc()
             return False
         finally:

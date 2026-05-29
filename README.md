@@ -88,8 +88,10 @@ The following Python packages are required:
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
 - `pywin32` - Windows API access for Multi Roblox feature
+- `pywinauto` - UI Automation for dismissing Chrome's protocol dialog during profile-join
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
 - `pyautoit` - Window rotation and maintenance actions for Anti-AFK
+- `Pillow` - Image handling for embedded resources
 
 ## ⚠️ Disclaimer
 
@@ -176,6 +178,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Game Name Lookup** | Auto-fetch and display game names from Place IDs | Automatic when Place ID changes |
 | **Launch Popup Disable** | Disable success notification popups | Settings → General tab → "Disable Launch Popups" |
 | **Roblox Launcher Selection** | Choose your preferred Roblox launcher | Settings → Roblox tab → select Default, Bloxstrap, Fishstrap, Froststrap, or Roblox Client |
+| **Launch Roblox Home (App / Browser)** | Dropdown on the homepage: launch the Roblox client to home, or open a detached Chrome to roblox.com/home logged in as the selected account | Click "Launch Roblox Home  ▼" → pick **Launch in App** or **Launch in Browser** |
 
 ### Multi Roblox
 
@@ -192,9 +195,12 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 
 | Feature | Description | How to Use |
 | :--- | :--- | :--- |
-| **Auto-Rejoin Setup** | Configure automatic game rejoin for accounts | Click "Auto-Rejoin" → "Add" → select account & Place ID |
+| **Auto-Rejoin Setup** | Configure automatic game rejoin for accounts | Click "Auto-Rejoin" → "Add" → select account & Place ID *or* a friend to join off |
 | **Rejoin Configuration** | Set check interval, private server ID, job ID, and max retries | In Auto-Rejoin window → "Edit" existing config |
-| **Presence Check Toggle** | Optionally rejoin only when player is not in the target Place ID | In Auto-Rejoin config → enable "Check if player is in target Place ID" |
+| **Presence Check Toggle** | Optionally rejoin only when player is not in the target Place ID | In Auto-Rejoin config → enable "Check if player is in target Place ID" (auto-disabled when "Join Off Friend" is set) |
+| **Join Off Friend (flagged-account workaround)** | For accounts captcha'd on the API join path: rejoin by navigating to a friend's profile and clicking Join. Mutually exclusive with Place ID — fill one or the other | In Auto-Rejoin Add/Edit dialog → enter the friend's Roblox username in "Join Off Friend" |
+| **Join-Off Ordering** | Dependent accounts wait until their target friend is in-game before launching. Start order doesn't matter — workers self-coordinate via presence checks | Automatic |
+| **Join-Off Cycle Detection** | Saves are rejected if a `join_off_username` chain would form a loop (A → B → A) | Automatic at save time |
 | **Multi-Select Auto-Rejoin** | Select multiple accounts at once in the Auto-Rejoin window | Hold Ctrl or Shift to select multiple accounts |
 | **Start/Stop Individual** | Control rejoin status per account | Select account → "Start Selected" / "Stop Selected" |
 | **Start/Stop All** | Bulk start/stop all rejoin configurations | Click "Start All" / "Stop All" buttons |
