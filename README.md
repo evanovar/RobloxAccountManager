@@ -12,7 +12,7 @@
 > - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
 > - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
 
-# 🚀 Roblox Account Manager
+# Evanovar RAM
 
 A powerful tool for managing multiple Roblox accounts with secure cookie extraction and modern UI interface.
 
