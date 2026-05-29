@@ -372,19 +372,6 @@ class AccountManagerUI:
         ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
-        # Dev mode: a Console button that surfaces the captured stdout/stderr
-        # right from the main window. Useful for diagnosing EXE-mode failures
-        # where --windowed has no terminal attached. Toggle with the
-        # Settings → General → Developer Mode checkbox.
-        self.dev_console_btn = ttk.Button(
-            action_frame,
-            text="Console",
-            style="Dark.TButton",
-            command=self.open_console_window,
-        )
-        self._dev_console_pack_kwargs = {"fill": "x", "pady": 2}
-        self._apply_developer_mode()
-
         bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
         bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
 
@@ -5796,6 +5783,7 @@ del /f /q "%~f0"
                 self.settings["websocket_enabled"] = False
                 self.stop_websocket_server()
             self.save_settings()
+            self._apply_developer_mode()
             _update_dev_controls()
 
         def _save_copy_cookie():
@@ -5891,6 +5879,14 @@ del /f /q "%~f0"
         )
         copy_check.pack(anchor="w", pady=2)
 
+        show_console_btn = ttk.Button(
+            dev_frame,
+            text="Show Console",
+            style="Dark.TButton",
+            command=self.open_console_window,
+        )
+        show_console_btn.pack(fill="x", pady=(6, 2))
+
         ws_sep = ttk.Frame(dev_frame, style="Dark.TFrame", height=1)
         ws_sep.pack(fill="x", pady=(8, 8))
         ws_sep.configure(relief="solid", borderwidth=1)
@@ -5956,7 +5952,6 @@ del /f /q "%~f0"
         multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
         confirm_launch_var = tk.BooleanVar(value=self.settings.get("confirm_before_launch", False))
         multi_select_var = tk.BooleanVar(value=self.settings.get("enable_multi_select", False))
-        developer_mode_var = tk.BooleanVar(value=self.settings.get("developer_mode", False))
         
         checkbox_style = ttk.Style()
         checkbox_style.configure(
@@ -6083,21 +6078,6 @@ del /f /q "%~f0"
         auto_tile_check.pack(anchor="w", pady=2)
         self.auto_tile_check = auto_tile_check
 
-        def on_developer_mode_toggle():
-            self.settings["developer_mode"] = developer_mode_var.get()
-            self.save_settings()
-            self._apply_developer_mode()
-
-        developer_mode_check = ttk.Checkbutton(
-            main_frame,
-            text="Developer Mode (show Console button on main window)",
-            variable=developer_mode_var,
-            style="Dark.TCheckbutton",
-            command=on_developer_mode_toggle,
-        )
-        developer_mode_check.pack(anchor="w", pady=2)
-        self.developer_mode_check = developer_mode_check
-
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
             start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
@@ -6197,15 +6177,7 @@ del /f /q "%~f0"
         max_games_spinner.bind("<FocusOut>", lambda e: on_max_games_change())
 
         ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
-        
-        console_button = ttk.Button(
-            main_frame,
-            text="Console Output",
-            style="Dark.TButton",
-            command=self.open_console_window
-        )
-        console_button.pack(fill="x", pady=(0, 5))
-        
+
         close_button = ttk.Button(
             main_frame,
             text="Close",
