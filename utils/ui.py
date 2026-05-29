@@ -5709,7 +5709,7 @@ del /f /q "%~f0"
         self.root.update_idletasks()
         
         settings_width = 330
-        settings_height = 385
+        settings_height = 470
         
         saved_pos = self.settings.get('settings_window_position')
         if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
