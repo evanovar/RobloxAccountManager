@@ -892,6 +892,7 @@ class AccountManagerUI:
                     "anti_afk_interval_minutes": 10,
                     "anti_afk_press_time_seconds": 1,
                     "anti_afk_key": "w",
+                    "anti_afk_tooltip_enabled": True,
                     "optimize_roblox_ram": False,
                     "disable_launch_popup": False,
                     "auto_rejoin_configs": {},
@@ -920,6 +921,7 @@ class AccountManagerUI:
                 "anti_afk_interval_minutes": 10,
                 "anti_afk_press_time_seconds": 1,
                 "anti_afk_key": "w",
+                "anti_afk_tooltip_enabled": True,
                 "optimize_roblox_ram": False,
                 "auto_rejoin_configs": {},
                 "disable_launch_popup": False,
@@ -940,6 +942,9 @@ class AccountManagerUI:
             settings_migrated = True
         if "anti_afk_press_time_seconds" not in self.settings:
             self.settings["anti_afk_press_time_seconds"] = self.settings.get("anti_afk_key_amount", 1)
+            settings_migrated = True
+        if "anti_afk_tooltip_enabled" not in self.settings:
+            self.settings["anti_afk_tooltip_enabled"] = True
             settings_migrated = True
         if "optimize_roblox_ram" not in self.settings:
             self.settings["optimize_roblox_ram"] = False
@@ -4253,7 +4258,7 @@ del /f /q "%~f0"
             auto_rejoin_window.update_idletasks()
             x = auto_rejoin_window.winfo_x() + 50
             y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x470+{x}+{y}")
+            add_window.geometry(f"400x500+{x}+{y}")
             
             if self.settings.get("enable_topmost", False):
                 add_window.attributes("-topmost", True)
@@ -5766,6 +5771,9 @@ del /f /q "%~f0"
             else:
                 messagebox.showerror("Error", "Failed to save WebSocket password.", parent=settings_window)
 
+        def _open_websocket_docs():
+            webbrowser.open("https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram")
+
         def _update_dev_controls():
             state = "normal" if dev_mode_var.get() else "disabled"
             try:
@@ -5828,14 +5836,25 @@ del /f /q "%~f0"
             font=(self.FONT_FAMILY, 8)
         ).pack(anchor="w", pady=(0, 6))
 
+        ws_enabled_row = ttk.Frame(dev_frame, style="Dark.TFrame")
+        ws_enabled_row.pack(fill="x", pady=(0, 4))
+
         ws_enabled_check = ttk.Checkbutton(
-            dev_frame,
+            ws_enabled_row,
             text="Enable WebSocket",
             variable=ws_enabled_var,
             style="Dark.TCheckbutton",
             command=_save_ws_enabled
         )
-        ws_enabled_check.pack(anchor="w", pady=(0, 4))
+        ws_enabled_check.pack(side="left")
+
+        ws_docs_btn = ttk.Button(
+            ws_enabled_row,
+            text="Documentation",
+            style="Dark.TButton",
+            command=_open_websocket_docs
+        )
+        ws_docs_btn.pack(side="left", padx=(8, 0))
 
         ws_port_row = ttk.Frame(dev_frame, style="Dark.TFrame")
         ws_port_row.pack(fill="x", pady=(0, 4))
@@ -9252,6 +9271,10 @@ del /f /q "%~f0"
             self.anti_afk_tooltip_label = None
 
     def _show_anti_afk_tooltip(self, text):
+        if not self.settings.get("anti_afk_tooltip_enabled", True):
+            self._hide_anti_afk_tooltip()
+            return
+
         if self.anti_afk_stop_event.is_set() or not self.root.winfo_exists():
             return
 
@@ -9384,7 +9407,7 @@ del /f /q "%~f0"
         anti_afk_window.transient(self.root)
 
         settings_width = 300
-        settings_height = 225
+        settings_height = 250
         self.root.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
@@ -9414,10 +9437,12 @@ del /f /q "%~f0"
         action_key_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
         press_time_var = tk.IntVar(value=int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
         interval_var = tk.IntVar(value=int(self.settings.get("anti_afk_interval_minutes", 10)))
+        tooltip_var = tk.BooleanVar(value=self.settings.get("anti_afk_tooltip_enabled", True))
 
         def save_anti_afk_settings():
             self.settings["anti_afk_enabled"] = enabled_var.get()
             self.settings["anti_afk_key"] = action_key_var.get().strip().lower() or "w"
+            self.settings["anti_afk_tooltip_enabled"] = tooltip_var.get()
             try:
                 self.settings["anti_afk_press_count"] = max(1, int(press_time_var.get()))
             except Exception:
@@ -9441,7 +9466,15 @@ del /f /q "%~f0"
             variable=enabled_var,
             style="Dark.TCheckbutton",
             command=on_enabled_toggle
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            main_frame,
+            text="Show Tooltip",
+            variable=tooltip_var,
+            style="Dark.TCheckbutton",
+            command=save_anti_afk_settings
+        ).pack(anchor="w", pady=2)
 
         action_row = ttk.Frame(main_frame, style="Dark.TFrame")
         action_row.pack(fill="x", pady=2)
@@ -10226,50 +10259,96 @@ del /f /q "%~f0"
         except Exception:
             original_hwnd = None
 
+        original_placement = None
+        if original_hwnd and win32gui.IsWindow(original_hwnd):
+            try:
+                original_placement = win32gui.GetWindowPlacement(original_hwnd)
+            except Exception:
+                original_placement = None
+
         for hwnd in hwnds:
             if self.anti_afk_stop_event.is_set():
                 break
 
             window_spec = f"[HANDLE:0x{hwnd:08X}]"
             try:
+                window_placement = None
+                try:
+                    window_placement = win32gui.GetWindowPlacement(hwnd)
+                except Exception:
+                    window_placement = None
+
                 try:
                     autoit.win_activate(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 9)
-                    win32gui.SetForegroundWindow(hwnd)
+                    try:
+                        win32gui.ShowWindow(hwnd, 9)
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
 
-                time.sleep(0.15)
+                time.sleep(0.12)
 
                 try:
                     autoit.win_maximize(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 3)
+                    try:
+                        win32gui.ShowWindow(hwnd, 3)
+                    except Exception:
+                        pass
 
-                time.sleep(0.15)
+                try:
+                    autoit.win_activate(window_spec)
+                except Exception:
+                    pass
+
+                time.sleep(0.12)
+
                 for _ in range(max(1, int(press_count))):
                     if self.anti_afk_stop_event.is_set():
                         break
                     self._anti_afk_perform_action(action_key)
-                    time.sleep(0.15)
+                    time.sleep(0.1)
+
+                time.sleep(0.08)
+
+                if window_placement:
+                    try:
+                        win32gui.SetWindowPlacement(hwnd, window_placement)
+                    except Exception:
+                        pass
 
                 try:
-                    autoit.win_minimize(window_spec)
+                    autoit.win_activate(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 6)
-
-                time.sleep(0.1)
+                    try:
+                        if window_placement and len(window_placement) > 1 and window_placement[1] == 3:
+                            win32gui.ShowWindow(hwnd, 3)
+                        else:
+                            win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"[Anti-AFK] Error on window {hwnd}: {e}")
 
-        if original_hwnd and win32gui.IsWindow(original_hwnd):
+        if original_placement and win32gui.IsWindow(original_hwnd):
+            hwnd = original_hwnd
+            window_spec = f"[HANDLE:0x{hwnd:08X}]"
             try:
-                original_spec = f"[HANDLE:0x{original_hwnd:08X}]"
-                autoit.win_activate(original_spec)
-            except Exception:
                 try:
-                    win32gui.SetForegroundWindow(original_hwnd)
+                    win32gui.SetWindowPlacement(hwnd, original_placement)
                 except Exception:
                     pass
+
+                try:
+                    autoit.win_activate(window_spec)
+                except Exception:
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _anti_afk_perform_action(self, action_key):
         mouse_actions = {
