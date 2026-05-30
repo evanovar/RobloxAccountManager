@@ -1578,6 +1578,8 @@ del /f /q "%~f0"
             "websocket_enabled": False,
             "websocket_port": 8765,
             "websocket_require_password": False,
+            "websocket_max_message_length": 4096,
+            "websocket_max_add_cookies": 25,
         }
 
     def _ensure_websocket_settings_defaults(self):
@@ -1677,6 +1679,18 @@ del /f /q "%~f0"
         except Exception:
             return 8765
 
+    def _get_websocket_max_message_length(self):
+        try:
+            return max(0, int(self.settings.get("websocket_max_message_length", 4096)))
+        except Exception:
+            return 4096
+
+    def _get_websocket_max_add_cookies(self):
+        try:
+            return max(1, int(self.settings.get("websocket_max_add_cookies", 25)))
+        except Exception:
+            return 25
+
     def _set_last_joined_user(self, username):
         self.settings["last_joined_user"] = username
         self.save_settings()
@@ -1757,7 +1771,15 @@ del /f /q "%~f0"
     async def _websocket_client_handler(self, websocket):
         try:
             async for raw_message in websocket:
-                response = self._websocket_execute_command(str(raw_message or ""))
+                message = str(raw_message or "")
+                max_length = self._get_websocket_max_message_length()
+                if max_length > 0 and len(message) > max_length:
+                    response = {
+                        "ok": False,
+                        "error": f"Message too long (max {max_length} characters)",
+                    }
+                else:
+                    response = self._websocket_execute_command(message)
                 await websocket.send(json.dumps(response, ensure_ascii=False))
         except Exception as exc:
             print(f"[ERROR] WebSocket client handler error: {exc}")
@@ -1813,31 +1835,38 @@ del /f /q "%~f0"
         action = parts[0].lower()
 
         try:
-            if action == "ping":
-                return {"ok": True, "result": "Pong"}
+            handlers = {
+                "ping": lambda: {"ok": True, "result": "Pong"},
+                "getstatus": self._websocket_command_get_status,
+                "launch": lambda: self._websocket_command_launch(parts),
+                "joinuser": lambda: self._websocket_command_join_user(parts),
+                "autorejoin": lambda: self._websocket_command_auto_rejoin(parts),
+                "add": lambda: self._websocket_command_add(command_text),
+                "accountlist": self._websocket_command_account_list,
+            }
 
-            if action == "getstatus":
-                return self._websocket_command_get_status()
-
-            if action == "launch":
-                return self._websocket_command_launch(parts)
-
-            if action == "joinuser":
-                return self._websocket_command_join_user(parts)
-
-            if action == "autorejoin":
-                return self._websocket_command_auto_rejoin(parts)
-
-            if action == "add":
-                return self._websocket_command_add(command_text)
+            handler = handlers.get(action)
+            if handler is not None:
+                return handler()
 
             return {
                 "ok": False,
                 "error": "Unknown command",
-                "supported": ["Add", "Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
+                "supported": self._websocket_supported_commands(),
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _websocket_supported_commands(self):
+        return [
+            "Add",
+            "AccountList",
+            "AutoRejoin",
+            "GetStatus",
+            "JoinUser",
+            "Launch",
+            "Ping",
+        ]
 
     def _websocket_parse_cookie_payloads(self, payload):
         text = str(payload or "").strip()
@@ -1863,7 +1892,20 @@ del /f /q "%~f0"
         imported = []
         failed = []
 
+        max_cookies = self._get_websocket_max_add_cookies()
+        if len(cookies) > max_cookies:
+            return {
+                "ok": False,
+                "error": f"Too many cookies provided (max {max_cookies})",
+            }
+
         for cookie in cookies:
+            if not cookie:
+                failed.append({"cookie": cookie, "error": "Empty cookie"})
+                continue
+            if len(cookie) > 4096:
+                failed.append({"cookie": cookie[:64], "error": "Cookie payload too long"})
+                continue
             try:
                 success, username = self.manager.import_cookie_account(cookie)
                 if success and username:
@@ -1895,6 +1937,21 @@ del /f /q "%~f0"
                 "failed_count": len(failed),
             },
             "failed": failed,
+        }
+
+    def _websocket_command_account_list(self):
+        try:
+            account_names = sorted(str(name) for name in self.manager.accounts.keys())
+        except Exception:
+            account_names = []
+
+        return {
+            "ok": True,
+            "result": {
+                "action": "AccountList",
+                "accounts": account_names,
+                "count": len(account_names),
+            },
         }
 
     def _websocket_command_launch(self, parts):
@@ -2016,7 +2073,11 @@ del /f /q "%~f0"
         except Exception:
             data = []
 
-        return {"ok": True, "result": data}
+        return {
+            "ok": True,
+            "result": data,
+            "action": "GetStatus",
+        }
 
     def _websocket_command_auto_rejoin(self, parts):
         if len(parts) < 3:
