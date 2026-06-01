@@ -3224,6 +3224,79 @@ del /f /q "%~f0"
                     seen.add(username)
         return usernames
 
+    def _copy_text_to_clipboard(self, text):
+        try:
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(str(text), win32clipboard.CF_UNICODETEXT)
+            win32clipboard.CloseClipboard()
+        except Exception:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text))
+            self.root.update()
+
+    def _build_copy_export_lines(self, usernames, mode):
+        lines = []
+
+        for username in usernames:
+            account = self.manager.accounts.get(username)
+            if not isinstance(account, dict):
+                continue
+
+            account_username = str(account.get("username") or username).strip() or username
+            user_id = account.get("user_id", 0)
+            password = str(account.get("password") or "").strip()
+            cookie = str(account.get("cookie") or "").strip()
+
+            if mode == "username":
+                value = account_username
+            elif mode == "userid":
+                value = str(user_id).strip() if user_id else ""
+            elif mode == "password":
+                value = password
+            elif mode == "cookie":
+                value = cookie
+            elif mode == "userpass":
+                if not account_username or not password:
+                    continue
+                value = f"{account_username}:{password}"
+            else:
+                value = ""
+
+            if value:
+                lines.append(value)
+
+        return lines
+
+    def _export_copy_text_file(self, action_name, text):
+        export_folder = os.path.join(self.data_folder, "exports")
+        os.makedirs(export_folder, exist_ok=True)
+
+        safe_action = re.sub(r"[^A-Za-z0-9._-]+", "_", str(action_name).strip()).strip("_") or "export"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_path = os.path.join(export_folder, f"{safe_action}_{timestamp}.txt")
+
+        with open(export_path, "w", encoding="utf-8", newline="\n") as export_file:
+            export_file.write(text)
+
+        return export_path
+
+    def _copy_or_export_accounts(self, usernames, mode, action_name, export_label):
+        lines = self._build_copy_export_lines(usernames, mode)
+        if not lines:
+            messagebox.showwarning("Copy", f"No {export_label.lower()} data found for the selected account(s).")
+            return
+
+        text = "\n".join(lines)
+        self._copy_text_to_clipboard(text)
+
+        if len(usernames) > 1:
+            try:
+                export_path = self._export_copy_text_file(action_name, text)
+                messagebox.showinfo("Exported", f"{export_label} exported to:\n{export_path}")
+            except Exception as exc:
+                messagebox.showerror("Export Failed", f"Could not export {export_label.lower()}:\n{exc}")
+
     def add_account(self):
         """
         Add a new account using browser automation
@@ -3809,8 +3882,14 @@ del /f /q "%~f0"
             self._show_group_context_menu(event, val)
             return
 
-        self.account_list.selection_clear(0, tk.END)
-        self.account_list.selection_set(index)
+        if self.settings.get("enable_multi_select", False):
+            current_selection = set(self.account_list.curselection())
+            if index not in current_selection:
+                self.account_list.selection_clear(0, tk.END)
+                self.account_list.selection_set(index)
+        else:
+            self.account_list.selection_clear(0, tk.END)
+            self.account_list.selection_set(index)
         self.account_list.activate(index)
         
         username = val
@@ -3836,15 +3915,25 @@ del /f /q "%~f0"
         self.account_context_menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
         
         def copy_to_clipboard(text):
-            try:
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardText(str(text), win32clipboard.CF_UNICODETEXT)
-                win32clipboard.CloseClipboard()
-            except Exception:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(str(text))
-                self.root.update()
+            self._copy_text_to_clipboard(text)
+            self.hide_account_context_menu()
+
+        def selected_usernames_for_copy():
+            if self.settings.get("enable_multi_select", False):
+                usernames = self.get_selected_usernames()
+                if usernames:
+                    return usernames
+            return [username]
+
+        selected_for_actions = selected_usernames_for_copy()
+        has_username_lines = bool(self._build_copy_export_lines(selected_for_actions, "username"))
+        has_userid_lines = bool(self._build_copy_export_lines(selected_for_actions, "userid"))
+        has_password_lines = bool(self._build_copy_export_lines(selected_for_actions, "password"))
+        has_cookie_lines = bool(self._build_copy_export_lines(selected_for_actions, "cookie"))
+        has_userpass_lines = bool(self._build_copy_export_lines(selected_for_actions, "userpass"))
+
+        def copy_selected(mode, action_name, export_label):
+            self._copy_or_export_accounts(selected_for_actions, mode, action_name, export_label)
             self.hide_account_context_menu()
         
         def hide_menu():
@@ -3862,11 +3951,29 @@ del /f /q "%~f0"
             font=("Segoe UI", 9),
             bd=0,
             highlightthickness=0,
-            command=lambda: copy_to_clipboard(username)
+            command=lambda: copy_selected("username", "copy_username", "Usernames") if has_username_lines else None
         )
         username_btn.pack(fill="x", padx=2, pady=1)
+
+        userpass_btn = tk.Button(
+            self.account_context_menu,
+            text=f"Copy User:Pass",
+            anchor="w",
+            relief="flat",
+            bg=self.BG_MID,
+            fg=self.FG_TEXT,
+            activebackground=self.BG_LIGHT,
+            activeforeground=self.FG_TEXT,
+            font=("Segoe UI", 9),
+            bd=0,
+            highlightthickness=0,
+            command=lambda: copy_selected("userpass", "copy_userpass", "User:Pass") if has_userpass_lines else None
+        )
+        userpass_btn.pack(fill="x", padx=2, pady=1)
+        if not has_userpass_lines:
+            userpass_btn.config(state="disabled", fg="#666666")
         
-        if user_id:
+        if has_userid_lines:
             userid_btn = tk.Button(
                 self.account_context_menu,
                 text=f"Copy User ID",
@@ -3879,7 +3986,7 @@ del /f /q "%~f0"
                 font=("Segoe UI", 9),
                 bd=0,
                 highlightthickness=0,
-                command=lambda: copy_to_clipboard(user_id)
+                command=lambda: copy_selected("userid", "copy_userid", "User IDs")
             )
         else:
             userid_btn = tk.Button(
@@ -3896,7 +4003,7 @@ del /f /q "%~f0"
             )
         userid_btn.pack(fill="x", padx=2, pady=1)
         
-        if password:
+        if has_password_lines:
             password_btn = tk.Button(
                 self.account_context_menu,
                 text=f"Copy Password",
@@ -3909,7 +4016,7 @@ del /f /q "%~f0"
                 font=("Segoe UI", 9),
                 bd=0,
                 highlightthickness=0,
-                command=lambda: copy_to_clipboard(password)
+                command=lambda: copy_selected("password", "copy_password", "Passwords")
             )
         else:
             password_btn = tk.Button(
@@ -3928,8 +4035,7 @@ del /f /q "%~f0"
         
         try:
             if self.settings.get("developer_mode", False) and self.settings.get("enable_copy_cookie", False):
-                account_cookie_val = account.get('cookie') if isinstance(account, dict) else None
-                if account_cookie_val:
+                if has_cookie_lines:
                     cookie_btn = tk.Button(
                         self.account_context_menu,
                         text=f"Copy Cookie",
@@ -3942,7 +4048,7 @@ del /f /q "%~f0"
                         font=("Segoe UI", 9),
                         bd=0,
                         highlightthickness=0,
-                        command=lambda c=account_cookie_val: copy_to_clipboard(c)
+                        command=lambda: copy_selected("cookie", "copy_cookie", "Cookies")
                     )
                 else:
                     cookie_btn = tk.Button(
