@@ -24,24 +24,28 @@ class HardwareEncryption:
     def _get_machine_id(self):
         """Generate unique machine ID from hardware identifiers"""
         identifiers = []
-        
+
         try:
             if platform.system() == "Windows":
-                result = subprocess.check_output("wmic csproduct get uuid", shell=True)
-                uuid = result.decode().split('\n')[1].strip()
-                identifiers.append(uuid)
-                
-                result = subprocess.check_output("wmic cpu get processorid", shell=True)
-                cpu_id = result.decode().split('\n')[1].strip()
-                identifiers.append(cpu_id)
-                
-                result = subprocess.check_output("wmic baseboard get serialnumber", shell=True)
-                board_serial = result.decode().split('\n')[1].strip()
-                identifiers.append(board_serial)
+                CREATE_NO_WINDOW = 0x08000000
+
+                def _ps(cmd: str) -> str:
+                    out = subprocess.check_output(
+                        ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                        creationflags=CREATE_NO_WINDOW,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                    return out.decode(errors="ignore").strip()
+
+                # i just knew that wmic is going to be removed
+                identifiers.append(_ps("(Get-CimInstance Win32_ComputerSystemProduct).UUID"))
+                identifiers.append(_ps("(Get-CimInstance Win32_Processor).ProcessorId"))
+                identifiers.append(_ps("(Get-CimInstance Win32_BaseBoard).SerialNumber"))
             else:
                 identifiers.append(platform.node())
                 identifiers.append(str(os.getuid()) if hasattr(os, 'getuid') else "0")
-        except:
+        except Exception:
             identifiers.append(platform.node())
             identifiers.append(platform.machine())
         

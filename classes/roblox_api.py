@@ -409,8 +409,14 @@ class RobloxAPI:
             response = requests.post(url, headers=headers, timeout=5)
             if response.status_code == 403 and "x-csrf-token" in response.headers:
                 csrf_token = response.headers["x-csrf-token"]
+                RobloxAPI._last_error = None
+            elif response.status_code == 403:
+                print(f"[ERROR] Failed to get auth ticket, status: 403 (cookie expired or invalid)")
+                RobloxAPI._last_error = "expired_cookie"
+                return None
             else:
-                print(f"[ERROR] Failed to get CSRF token, status: {response.status_code}")
+                print(f"[ERROR] Failed to get auth ticket, status: {response.status_code}")
+                RobloxAPI._last_error = None
                 return None
 
             headers["X-CSRF-TOKEN"] = csrf_token

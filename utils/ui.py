@@ -1,11114 +1,4978 @@
 """
-UI Module for Roblox Account Manager
-Contains the main AccountManagerUI class
+utils/ui.py
+The v2.5.0 rewrite is finally complete.
 """
 
-import os
-import json
-import sys
-import asyncio
-import queue
-import subprocess
-import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser, simpledialog
-import requests
-import threading
-import msvcrt
+from __future__ import annotations
+
+import collections
 import ctypes
 from ctypes import wintypes
-import webbrowser
-import time
-import re
-import shlex
-import secrets
-import win32event
-import win32api
-import win32gui
 from datetime import datetime, timedelta, timezone
-import zipfile
-import tempfile
+import hashlib
+import os
+import re
 import shutil
-import platform
-import traceback
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+import zipfile
+
+_UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_UTILS_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
 import psutil
-import random
-import stat
-import math
+import requests
+import win32gui
 import win32process
-import tkinter.font as tkfont
-import xml.etree.ElementTree as ET
-import win32clipboard
-from PIL import Image, ImageTk
-from io import BytesIO
-from tkinter import filedialog
-from urllib.request import urlretrieve
-import autoit
+
+from PySide6.QtCore import (
+    QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal,
+)
+from PySide6.QtGui import (
+    QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
+    QPalette, QPixmap, QTextCharFormat,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
+    QComboBox, QDialog, QFileDialog, QFrame, QGroupBox,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu,
+    QMessageBox, QPushButton, QRadioButton, QScrollArea,
+    QSizePolicy, QSpinBox, QStackedWidget, QTextEdit,
+    QToolButton, QVBoxLayout, QWidget,
+)
+
+from classes import RobloxAccountManager
+from classes.encryption import EncryptionConfig, PasswordEncryption
 from classes.roblox_api import RobloxAPI
-from classes.account_manager import RobloxAccountManager
-from utils.encryption_setup import EncryptionSetupUI
-from utils.theme_manager import ThemeManager
-import websockets
 
-class AccountManagerUI:
-    def __init__(self, root, manager, icon_path=None, discord_logo_path=None):
-        self.root = root
-        self.manager = manager
-        self.icon_path = icon_path
-        self.APP_VERSION = "2.4.9"
-        self._game_name_after_id = None
-        self._save_settings_timer = None
-        
-        self.console_output = []
-        self.console_window = None
-        self.console_text_widget = None
-        self.original_stdout = sys.stdout
-        self.original_stderr = sys.stderr
-        
-        self.tooltip = None
-        self.tooltip_timer = None
-        
-        sys.stdout = self
-        sys.stderr = self
+import features.account_actions as actions
+import features.auto_rejoin as ar
+import features.avatars as avatars
+import features.cookie_validator as cookie_validator_mod
+import features.groups as groups
+import features.presence as presence_mod
+import features.updater as updater_mod
+import features.webhook as webhook
+import features.websocket_server as ws_mod
 
-        self._ui_task_queue = queue.Queue()
-        
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-            except:
-                pass
-        
-        self.data_folder = "AccountManagerData"
-        if not os.path.exists(self.data_folder):
-            os.makedirs(self.data_folder)
-        
-        self.settings_file = os.path.join(self.data_folder, "ui_settings.json")
-        self.load_settings()
-        
-        self.root.title("Roblox Account Manager - Made by evanovar")
-        
-        saved_pos = self.settings.get('main_window_position')
-        if saved_pos:
-            self.root.geometry(f"450x520+{saved_pos['x']}+{saved_pos['y']}")
-        else:
-            self.root.geometry("450x520")
-        self.root.configure(bg="#2b2b2b")
-        self.root.resizable(False, False)
-        
-        self.multi_roblox_handle = None
-        self.handle64_monitoring = False
-        self.handle64_monitor_thread = None
-        self.handle64_path = None
-        
-        self.anti_afk_thread = None
-        self.anti_afk_stop_event = threading.Event()
-        self.anti_afk_window = None
-        self.anti_afk_tooltip = None
-        self.anti_afk_tooltip_label = None
-        self.anti_afk_tooltip_timer = None
-        self.optimize_ram_thread = None
-        self.optimize_ram_stop_event = threading.Event()
-        self.optimize_ram_seen_pids = set()
-        
-        self.rename_thread = None
-        self.rename_stop_event = threading.Event()
-        self.renamed_pids = set()
-        
-        self.instances_monitor_thread = None
-        self.instances_monitor_stop = threading.Event()
-        self.instances_data = []
-        self.instances_pids = set()
-        self.instances_failed_pids = {} 
-        self.instances_data_updated = False
-        self.instances_cache = {
-            "user_id_to_username": {},
-            "user_id_to_avatar": {},
-            "user_id_to_photo": {}
-        }
-        
-        self.auto_rejoin_threads = {}
-        self.auto_rejoin_stop_events = {}
-        self.auto_rejoin_configs = self.settings.get("auto_rejoin_configs", {})
-        self.auto_rejoin_pids = {}
-        self.auto_rejoin_launch_lock = threading.Lock()
-        self.auto_rejoin_presence_lock = threading.Lock()
-        self.auto_rejoin_next_presence_time = 0.0
-        self._webhook_screenshot_thread = None
 
-        self.websocket_thread = None
-        self.websocket_stop_event = threading.Event()
-        self.websocket_loop = None
-        self.websocket_running = False
-        
-        self.cookie_status = {}
-        for _u, _d in self.manager.accounts.items():
-            if isinstance(_d, dict):
-                self.cookie_status[_u] = _d.get('cookie_valid', None)
-        self.account_tooltip = None
-        self.account_tooltip_timer = None
-        self.account_tooltip_last_index = None
-        self._active_instance_indicators = {}
-        self._active_instance_usernames = set()
-        self._active_instance_indicator_sync_after = None
+class _DragDropFilter(QObject):
+    reorder_requested = Signal(int, int) # (from_row, insert_before_row)
+    HOLD_MS = 800 # hold duration before drag starts (ms)
+    CANCEL_PX = 8 # pixel slop before hold is cancelled
 
-        self._list_row_map = []
-        self._collapsed_groups = set(self.settings.get("group_collapsed", []))
+    def __init__(self, list_widget: "QListWidget", get_avatar=None, parent=None):
+        super().__init__(parent)
+        self._list = list_widget
+        self._get_avatar = get_avatar # Callable[[str], QPixmap|None] | None
 
-        try:
-            webhook_cfg = self.settings.get("discord_webhook", {})
-            webhook_url = str(webhook_cfg.get("url", "") or "").strip()
-            if webhook_url and webhook_cfg.get("enabled"):
-                try:
-                    self._send_webhook_embed(webhook_url, "Connected to Discord!", "Roblox Account Manager started and is now connected.", 0x2ECC71)
-                except Exception:
-                    pass
-            if webhook_url and webhook_cfg.get("screenshot_enabled") and webhook_cfg.get("enabled"):
-                threading.Thread(target=self._global_screenshot_worker, daemon=True, name="WebhookScreenshot").start()
-        except Exception:
-            pass
+        self._press_pos = QPoint()
+        self._press_row = -1
+        self._username = ""
 
-        self.theme_manager = ThemeManager(os.path.join(self.data_folder, "themes"))
-        selected_theme = self.settings.get("selected_theme", "Dark")
-        current_theme_config = self._load_current_theme_config()
-        if current_theme_config:
-            source_theme = str(current_theme_config.get("source_theme", selected_theme) or selected_theme)
-            base_data = self.theme_manager.load_theme(source_theme)
-            merged_data = self.theme_manager._merge_with_defaults(base_data)
-            merged_data = self.theme_manager._merge_with_defaults(current_theme_config)
-            self.current_theme_data = merged_data
-        else:
-            self.current_theme_data = self.theme_manager.load_theme(selected_theme)
-        
-        self.BG_DARK = self.current_theme_data["colors"].get("bg_dark", "#2b2b2b")
-        self.BG_MID = self.current_theme_data["colors"].get("bg_mid", "#3a3a3a")
-        self.BG_LIGHT = self.current_theme_data["colors"].get("bg_light", "#4b4b4b")
-        self.FG_TEXT = self.current_theme_data["colors"].get("fg_text", "white")
-        self.FG_ACCENT = self.current_theme_data["colors"].get("fg_accent", "#0078D7")
-        self.FONT_FAMILY = self.current_theme_data["fonts"].get("family", "Segoe UI")
-        self.FONT_SIZE = self.current_theme_data["fonts"].get("size_base", 10)
-        self.root.configure(bg=self.BG_DARK)
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.timeout.connect(self._on_hold_confirmed)
 
-        style = ttk.Style()
-        style.theme_use("clam")
+        self._dragging = False
+        self._drag_row = -1
+        self._drop_row = -1 # insert-before index (0 = top)
 
-        style.configure("Dark.TFrame", background=self.BG_DARK)
-        style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE - 1))
-        style.map("Dark.TButton", background=[("active", self.BG_LIGHT)])
-        style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
-        style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-        style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
+        self._float_win: QFrame | None = None # floating window with username + avatar
+        self._viewport = list_widget.viewport() # avoid calling viewport() on a deleted C++ object at teardown
 
-        main_frame = ttk.Frame(self.root, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self._indicator = QFrame(self._viewport)
+        self._indicator.setFixedHeight(2)
+        self._indicator.setStyleSheet("background: #0078D7; border: none;")
+        self._indicator.hide()
 
-        left_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        left_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-
-        header_frame = ttk.Frame(left_frame, style="Dark.TFrame")
-        header_frame.pack(fill="x", anchor="w")
-        
-        ttk.Label(header_frame, text="Account List", style="Dark.TLabel").pack(side="left")
-        
-        encryption_status = ""
-        encryption_color = self.FG_TEXT
-        if self.manager.encryption_config.is_encryption_enabled():
-            method = self.manager.encryption_config.get_encryption_method()
-            if method == 'hardware':
-                encryption_status = "[HARDWARE ENCRYPTED]"
-                encryption_color = "#90EE90"
-            elif method == 'password':
-                encryption_status = "[PASSWORD ENCRYPTED]"
-                encryption_color = "#87CEEB"
-        else:
-            encryption_status = "[NOT ENCRYPTED]"
-            encryption_color = "#FFB6C1"
-            
-        self.encryption_label = tk.Label(
-            header_frame,
-            text=encryption_status,
-            bg=self.BG_DARK,
-            fg=encryption_color,
-            font=("Segoe UI", 8, "bold")
-        )
-        self.encryption_label.pack(side="right", padx=(5, 0))
-
-        list_frame = ttk.Frame(left_frame, style="Dark.TFrame")
-        list_frame.pack(fill="both", expand=True)
-
-        selectmode = tk.EXTENDED if self.settings.get("enable_multi_select", False) else tk.SINGLE
-        
-        self.account_list = tk.Listbox(
-            list_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
-            border=0,
-            font=("Segoe UI", 10),
-            width=20,
-            selectmode=selectmode,
-            activestyle="none",
-        )
-        self.account_list.pack(side="left", fill="both", expand=True)
-
-        scrollbar = ttk.Scrollbar(list_frame, command=self.account_list.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.account_list_scrollbar = scrollbar
-        self.account_list.config(yscrollcommand=self._on_account_list_scroll)
-        
-        self.drag_data = {
-            "item": None, 
-            "index": None, 
-            "start_x": 0, 
-            "start_y": 0,
-            "dragging": False,
-            "hold_timer": None
-        }
-        self.drag_indicator = None
-        
-        self.account_list.bind("<Button-1>", self.on_drag_start)
-        self.account_list.bind("<B1-Motion>", self.on_drag_motion)
-        self.account_list.bind("<ButtonRelease-1>", self.on_drag_release)
-        self.account_list.bind("<Button-3>", self.show_account_context_menu)
-        self.account_list.bind("<Motion>", self.on_account_list_hover)
-        self.account_list.bind("<Leave>", self.on_account_list_leave)
-        self.account_list.bind("<<ListboxSelect>>", lambda _event: self._schedule_active_instance_indicator_sync())
-
-        right_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        right_frame.pack(side="right", fill="y")
-        
-        self.game_name_label = ttk.Label(right_frame, text="", style="Dark.TLabel", font=("Segoe UI", 9))
-        self.game_name_label.pack(anchor="w", pady=(0, 5))
-        
-        ttk.Label(right_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.place_entry = ttk.Entry(right_frame, style="Dark.TEntry")
-        self.place_entry.pack(fill="x", pady=(0, 5))
-        self.place_entry.insert(0, self.settings.get("last_place_id", ""))
-        self.place_entry.bind("<KeyRelease>", self.on_place_id_change)
-
-        ttk.Label(right_frame, text="Private Server ID (Optional)", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.private_server_entry = ttk.Entry(right_frame, style="Dark.TEntry")
-        self.private_server_entry.pack(fill="x", pady=(0, 5))
-        self.private_server_entry.insert(0, self.settings.get("last_private_server", ""))
-        self.private_server_entry.bind("<KeyRelease>", self.on_private_server_change)
-
-        self.join_place_split_btn = ttk.Button(
-            right_frame,
-            text="Join Place ID",
-            style="Dark.TButton"
-        )
-        self.join_place_split_btn.pack(fill="x", pady=(0, 10))
-        self.join_place_split_btn.bind("<Button-1>", self.on_join_place_split_click)
-        self.join_place_split_btn.bind("<Button-3>", self.on_join_place_right_click)
-        self.join_place_split_btn.bind("<Enter>", self.on_join_place_hover)
-        self.join_place_split_btn.bind("<Leave>", self.on_join_place_leave)
-        
-        recent_games_header = ttk.Frame(right_frame, style="Dark.TFrame")
-        recent_games_header.pack(fill="x", anchor="w", pady=(10, 2))
-        
-        ttk.Label(recent_games_header, text="Recent games", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(side="left")
-        
-        self.star_btn = tk.Button(
-            recent_games_header,
-            text="⭐",
-            bg=self.BG_DARK,
-            fg="#FFD700",
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self.open_favorites_window
-        )
-        self.star_btn.pack(side="left", padx=(5, 0))
-        
-        self.auto_rejoin_btn = tk.Button(
-            recent_games_header,
-            text="🔁",
-            bg=self.BG_DARK,
-            fg="#00BFFF",
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self.open_auto_rejoin
-        )
-        self.auto_rejoin_btn.pack(side="left", padx=(5, 0))
-        
-        game_list_frame = ttk.Frame(right_frame, style="Dark.TFrame")
-        game_list_frame.pack(fill="both", expand=True)
-        
-        self.game_list = tk.Listbox(
-            game_list_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
-            border=0,
-            font=("Segoe UI", 9),
-            height=5,
-        )
-        self.game_list.pack(side="left", fill="both", expand=True)
-        self.game_list.bind("<<ListboxSelect>>", self.on_game_select)
-        
-        game_scrollbar = ttk.Scrollbar(game_list_frame, command=self.game_list.yview)
-        game_scrollbar.pack(side="right", fill="y")
-        self.game_list.config(yscrollcommand=game_scrollbar.set)
-        
-        ttk.Button(right_frame, text="Delete Selected", style="Dark.TButton", command=self.delete_game_from_list).pack(fill="x", pady=(5, 0))
-
-        quick_actions_row = ttk.Frame(right_frame, style="Dark.TFrame")
-        quick_actions_row.pack(fill="x", pady=(10, 5))
-        ttk.Label(quick_actions_row, text="Quick Actions", style="Dark.TLabel").pack(side="left")
-        self.quick_actions_row = quick_actions_row
-        self.discord_btn = None
-
-        action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
-        action_frame.pack(fill="x")
-
-        ttk.Button(action_frame, text="Donate", style="Dark.TButton", command=lambda: webbrowser.open("https://www.roblox.com/games/718090786/donation#!/store")).pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
-
-        bottom_frame = ttk.Frame(self.root, style="Dark.TFrame")
-        bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
-
-        self.add_account_split_btn = ttk.Button(
-            bottom_frame,
-            text="Add Account  ▼",
-            style="Dark.TButton",
-        )
-        self.add_account_split_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.add_account_split_btn.bind("<Button-1>", self.on_add_account_split_click)
-        
-        self.add_account_dropdown = None
-        self.add_account_dropdown_visible = False
-        
-        self.join_place_dropdown = None
-        self.join_place_dropdown_visible = False
-        
-        ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(bottom_frame, text="Launch Roblox Home", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        
-        self.root.bind("<Button-1>", self.hide_dropdown_on_click_outside)
-        self.root.bind("<Configure>", self.on_root_configure)
-        self.root.bind("<Delete>", lambda e: self.remove_account())
-
-        self.refresh_accounts()
-        self.refresh_game_list()
-        self.update_game_name_on_startup()
-        
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.root.after(50, self._process_ui_task_queue)
-        
-        threading.Thread(target=self.check_for_updates, daemon=True).start()
-        threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
-        
-        if self.settings.get("lock_roblox_settings", False):
-            self.root.after(1000, self.apply_and_lock_roblox_settings)
-
-        if self.settings.get("developer_mode", False) and self.settings.get("websocket_enabled", False):
-            self.root.after(1200, self.start_websocket_server)
-    
-    def on_closing(self):
-        """Handle application closing - restore installers and exit"""
-        
-        self.settings['main_window_position'] = {
-            'x': self.root.winfo_x(),
-            'y': self.root.winfo_y()
-        }
-        self.save_settings(force_immediate=True)
-        
-        if hasattr(self, 'anti_afk_stop_event'):
-            self.stop_anti_afk()
-
-        if hasattr(self, 'optimize_ram_stop_event'):
-            self.stop_optimize_roblox_ram()
-        
-        if hasattr(self, 'rename_stop_event'):
-            self.stop_rename_monitoring()
-        
-        if hasattr(self, 'auto_rejoin_threads'):
-            self.stop_all_auto_rejoin()
-
-        if hasattr(self, 'websocket_stop_event'):
-            self.stop_websocket_server()
-
-        RobloxAPI.restore_installers()
-        self.root.destroy()
-
-    def _deepcopy_theme_data(self, theme_data):
-        return json.loads(json.dumps(theme_data))
-
-    def _normalize_hex_color(self, value, fallback):
-        text = str(value or "").strip()
-        if re.fullmatch(r"#[0-9a-fA-F]{6}", text):
-            return text
-
-        try:
-            rgb = self.root.winfo_rgb(text)
-            return "#{:02x}{:02x}{:02x}".format(rgb[0] // 256, rgb[1] // 256, rgb[2] // 256)
-        except Exception:
-            return fallback
-
-    def _apply_theme_data(self, theme_data, selected_theme_name=None, persist_selection=False):
-        merged_theme = self.theme_manager._merge_with_defaults(theme_data)
-
-        colors = merged_theme.get("colors", {})
-        fonts = merged_theme.get("fonts", {})
-        defaults = self.theme_manager.DEFAULT_THEME
-
-        self.BG_DARK = self._normalize_hex_color(colors.get("bg_dark"), defaults["colors"]["bg_dark"])
-        self.BG_MID = self._normalize_hex_color(colors.get("bg_mid"), defaults["colors"]["bg_mid"])
-        self.BG_LIGHT = self._normalize_hex_color(colors.get("bg_light"), defaults["colors"]["bg_light"])
-        self.FG_TEXT = self._normalize_hex_color(colors.get("fg_text"), defaults["colors"]["fg_text"])
-        self.FG_ACCENT = self._normalize_hex_color(colors.get("fg_accent"), defaults["colors"]["fg_accent"])
-
-        self.FONT_FAMILY = str(fonts.get("family", defaults["fonts"]["family"]))
-        try:
-            self.FONT_SIZE = max(8, min(24, int(fonts.get("size_base", defaults["fonts"]["size_base"]))))
-        except Exception:
-            self.FONT_SIZE = defaults["fonts"]["size_base"]
-
-        self.current_theme_data = self._deepcopy_theme_data(merged_theme)
-        self.current_theme_data["colors"]["bg_dark"] = self.BG_DARK
-        self.current_theme_data["colors"]["bg_mid"] = self.BG_MID
-        self.current_theme_data["colors"]["bg_light"] = self.BG_LIGHT
-        self.current_theme_data["colors"]["fg_text"] = self.FG_TEXT
-        self.current_theme_data["colors"]["fg_accent"] = self.FG_ACCENT
-        self.current_theme_data["fonts"]["family"] = self.FONT_FAMILY
-        self.current_theme_data["fonts"]["size_base"] = self.FONT_SIZE
-
-        self.root.configure(bg=self.BG_DARK)
-
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Dark.TFrame", background=self.BG_DARK)
-        style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-        style.configure("Dark.TButton", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)))
-        style.map("Dark.TButton", background=[("active", self.BG_LIGHT)], foreground=[("active", self.FG_TEXT)])
-        style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
-        style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-        style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
-        style.configure("Dark.TRadiobutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
-        style.map("Dark.TRadiobutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
-        style.configure("TNotebook", background=self.BG_DARK, borderwidth=0)
-        style.configure("TNotebook.Tab", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor="none")
-        style.map("TNotebook.Tab", background=[("selected", self.BG_LIGHT)], focuscolor=[("!focus", "none")])
-        style.configure(
-            "ThemeEditor.TCombobox",
-            fieldbackground=self.BG_MID,
-            background=self.BG_MID,
-            foreground=self.FG_TEXT,
-            arrowcolor=self.FG_TEXT,
-            bordercolor=self.BG_LIGHT,
-            lightcolor=self.BG_LIGHT,
-            darkcolor=self.BG_LIGHT,
-            relief="flat",
-        )
-        style.map(
-            "ThemeEditor.TCombobox",
-            fieldbackground=[("readonly", self.BG_MID)],
-            foreground=[("readonly", self.FG_TEXT)],
-            selectbackground=[("readonly", self.BG_MID)],
-            selectforeground=[("readonly", self.FG_TEXT)],
-        )
-
-        if hasattr(self, "settings_window") and self.settings_window and self.settings_window.winfo_exists():
-            self.settings_window.configure(bg=self.BG_DARK)
-
-        if hasattr(self, "star_btn") and self.star_btn:
-            self.star_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
-        if hasattr(self, "auto_rejoin_btn") and self.auto_rejoin_btn:
-            self.auto_rejoin_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
-        if hasattr(self, "discord_btn") and self.discord_btn:
-            self.discord_btn.config(bg=self.BG_DARK, activebackground=self.BG_DARK)
-
-        for widget_name in (
-            "topmost_check",
-            "multi_roblox_check",
-            "confirm_check",
-            "multi_select_check",
-            "disable_launch_popup_check",
-            "auto_tile_check",
-            "start_menu_check",
-            "rename_check",
-            "anti_afk_check",
-        ):
-            widget = getattr(self, widget_name, None)
-            if widget:
-                try:
-                    widget.configure(style="Dark.TCheckbutton")
-                except Exception:
-                    pass
-
-        settings_btn = getattr(self, "settings_btn", None)
-        if settings_btn:
-            try:
-                settings_btn.configure(bg=self.BG_DARK, fg=self.FG_TEXT, activebackground=self.BG_MID, activeforeground=self.FG_TEXT)
-            except Exception:
-                pass
-
-        for widget_name in (
-            "key_button",
-            "max_games_spinner",
-            "interval_spinner",
-            "amount_spinner",
-            "optimize_ram_limit_entry",
-        ):
-            widget = getattr(self, widget_name, None)
-            if widget:
-                try:
-                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, buttonbackground=self.BG_LIGHT, readonlybackground=self.BG_MID, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT, insertbackground=self.FG_TEXT, highlightbackground=self.BG_LIGHT)
-                except Exception:
-                    pass
-
-        for widget_name in (
-            "theme_editor_shell",
-            "theme_editor_area",
-            "theme_editor_canvas",
-            "theme_editor_content",
-            "theme_color_section",
-            "theme_color_rows",
-            "theme_font_section",
-        ):
-            widget = getattr(self, widget_name, None)
-            if widget:
-                try:
-                    widget.configure(bg=self.BG_MID)
-                except Exception:
-                    pass
-
-        editor_widgets = getattr(self, "theme_editor_widgets", [])
-        color_swatch_widgets = getattr(self, "theme_color_swatch_widgets", {})
-        for widget in editor_widgets:
-            try:
-                if widget in color_swatch_widgets.values():
-                    continue
-                if isinstance(widget, tk.Entry):
-                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, insertbackground=self.FG_TEXT, highlightbackground=self.BG_LIGHT, highlightcolor=self.FG_ACCENT)
-                elif isinstance(widget, tk.Button):
-                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT)
-                elif isinstance(widget, tk.Checkbutton):
-                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectcolor=self.BG_LIGHT, activebackground=self.BG_MID, activeforeground=self.FG_TEXT)
-                elif isinstance(widget, tk.Label):
-                    widget.configure(bg=self.BG_MID, fg=self.FG_TEXT)
-                elif isinstance(widget, tk.Frame):
-                    widget.configure(bg=self.BG_MID)
-            except Exception:
-                pass
-
-        color_vars = getattr(self, "theme_color_vars", {})
-        for key, swatch in color_swatch_widgets.items():
-            try:
-                value = color_vars.get(key).get().strip() if key in color_vars else ""
-                if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-                    swatch.configure(bg=value)
-            except Exception:
-                pass
-
-        for widget_name in ("theme_family_combo",):
-            widget = getattr(self, widget_name, None)
-            if widget:
-                try:
-                    widget.configure(style="ThemeEditor.TCombobox")
-                except Exception:
-                    pass
-
-        if hasattr(self, "account_list") and self.account_list:
-            self.account_list.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT)
-        if hasattr(self, "game_list") and self.game_list:
-            self.game_list.configure(bg=self.BG_MID, fg=self.FG_TEXT, selectbackground=self.FG_ACCENT, selectforeground=self.FG_TEXT)
-        if hasattr(self, "encryption_label") and self.encryption_label:
-            self.encryption_label.configure(bg=self.BG_DARK)
-
-        if hasattr(self, "account_list"):
-            try:
-                self.refresh_accounts()
-            except Exception:
-                pass
-        if hasattr(self, "game_list"):
-            try:
-                self.refresh_game_list()
-            except Exception:
-                pass
-
-        if persist_selection and selected_theme_name:
-            self.settings["selected_theme"] = selected_theme_name
-            self.save_settings()
-
-    def _get_current_theme_config_path(self):
-        return os.path.join(self.data_folder, "themes", "current_theme.json")
-
-    def _load_current_theme_config(self):
-        path = self._get_current_theme_config_path()
-        if not os.path.exists(path):
-            return None
-
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                return json.load(handle)
-        except Exception as exc:
-            print(f"[ERROR] Failed to load current theme config: {exc}")
-            return None
-
-    def _save_current_theme_config(self, theme_data, source_theme_name="Dark"):
-        path = self._get_current_theme_config_path()
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            current_theme_data = self._deepcopy_theme_data(theme_data)
-            current_theme_data.pop("metadata", None)
-            current_theme_data["source_theme"] = source_theme_name or "Dark"
-
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(current_theme_data, handle, indent=2)
-            return True
-        except Exception as exc:
-            print(f"[ERROR] Failed to save current theme config: {exc}")
+    def eventFilter(self, obj, event):
+        if obj is not self._viewport:
             return False
-
-    def open_theme_manager(self, parent=None, on_themes_changed=None):
-        if hasattr(self, "theme_manager_window") and self.theme_manager_window and self.theme_manager_window.winfo_exists():
-            self.theme_manager_window.lift()
-            self.theme_manager_window.focus()
-            return
-
-        owner = parent if parent and parent.winfo_exists() else self.root
-        manager_window = tk.Toplevel(owner)
-        self.theme_manager_window = manager_window
-        self.apply_window_icon(manager_window)
-        manager_window.title("Theme Manager")
-        manager_window.configure(bg=self.BG_DARK)
-        manager_window.geometry("680x420")
-        manager_window.resizable(False, False)
-        manager_window.transient(owner)
-
-        if self.settings.get("enable_topmost", False):
-            manager_window.attributes("-topmost", True)
-
-        if owner is not self.root:
-            manager_window.grab_set()
-
-        container = ttk.Frame(manager_window, style="Dark.TFrame")
-        container.pack(fill="both", expand=True, padx=12, pady=12)
-
-        ttk.Label(
-            container,
-            text="Themes",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w", pady=(0, 6))
-
-        list_shell = tk.Frame(container, bg=self.BG_MID, relief="solid", borderwidth=1)
-        list_shell.pack(fill="both", expand=True)
-
-        header = tk.Frame(list_shell, bg=self.BG_LIGHT)
-        header.pack(fill="x")
-        tk.Label(header, text="Name", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w", width=18).pack(side="left", padx=(8, 4), pady=6)
-        tk.Label(header, text="Author", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w", width=16).pack(side="left", padx=4, pady=6)
-        tk.Label(header, text="Description", bg=self.BG_LIGHT, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 9, "bold"), anchor="w").pack(side="left", fill="x", expand=True, padx=4, pady=6)
-
-        list_body = tk.Frame(list_shell, bg=self.BG_MID)
-        list_body.pack(fill="both", expand=True)
-
-        theme_list_scroll = tk.Scrollbar(list_body, orient="vertical")
-        theme_list_scroll.pack(side="right", fill="y")
-
-        theme_list_canvas = tk.Canvas(list_body, bg=self.BG_MID, highlightthickness=0, yscrollcommand=theme_list_scroll.set)
-        theme_list_canvas.pack(side="left", fill="both", expand=True)
-        theme_list_scroll.config(command=theme_list_canvas.yview)
-
-        theme_list_container = tk.Frame(theme_list_canvas, bg=self.BG_MID)
-        theme_list_window = theme_list_canvas.create_window((0, 0), window=theme_list_container, anchor="nw")
-
-        def _sync_theme_list_scrollregion(_event=None):
-            theme_list_canvas.configure(scrollregion=theme_list_canvas.bbox("all"))
-
-        def _sync_theme_list_width(event):
-            theme_list_canvas.itemconfigure(theme_list_window, width=event.width)
-
-        theme_list_container.bind("<Configure>", _sync_theme_list_scrollregion)
-        theme_list_canvas.bind("<Configure>", _sync_theme_list_width)
-
-        selected_theme_name = [None]
-        row_widgets = {}
-
-        def _set_row_selected(name):
-            selected_theme_name[0] = name
-            for row_name, widgets in row_widgets.items():
-                is_selected = row_name == name
-                row_bg = self.BG_LIGHT if is_selected else self.BG_MID
-                for widget in widgets:
-                    try:
-                        widget.configure(bg=row_bg)
-                    except Exception:
-                        pass
-
-        def refresh_theme_list(select_name=None):
-            for child in theme_list_container.winfo_children():
-                child.destroy()
-            row_widgets.clear()
-
-            catalog = self.theme_manager.get_available_themes()
-            names = sorted(catalog.keys(), key=str.lower)
-
-            for name in names:
-                data = self.theme_manager.load_theme(name)
-                metadata = data.get("metadata", {})
-                author = str(metadata.get("author", ""))
-                description = str(metadata.get("description", ""))
-
-                row = tk.Frame(theme_list_container, bg=self.BG_MID)
-                row.pack(fill="x", padx=4, pady=1)
-                name_label = tk.Label(row, text=name, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", width=18, font=(self.FONT_FAMILY, 9))
-                author_label = tk.Label(row, text=author, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", width=16, font=(self.FONT_FAMILY, 9))
-                desc_label = tk.Label(row, text=description, bg=self.BG_MID, fg=self.FG_TEXT, anchor="w", font=(self.FONT_FAMILY, 9))
-                name_label.pack(side="left", padx=(8, 4), pady=5)
-                author_label.pack(side="left", padx=4, pady=5)
-                desc_label.pack(side="left", fill="x", expand=True, padx=4, pady=5)
-
-                row_widgets[name] = [row, name_label, author_label, desc_label]
-                for widget in row_widgets[name]:
-                    widget.bind("<Button-1>", lambda _event, n=name: _set_row_selected(n))
-
-            preferred = select_name
-            if not preferred and selected_theme_name[0] in names:
-                preferred = selected_theme_name[0]
-            if not preferred and names:
-                preferred = names[0]
-            if preferred:
-                for name in names:
-                    if name.lower() == str(preferred).lower():
-                        preferred = name
-                        break
-                _set_row_selected(preferred)
-
-        def get_selected_theme_name():
-            return selected_theme_name[0]
-
-        def import_theme():
-            path = filedialog.askopenfilename(
-                title="Import Theme JSON",
-                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
-                parent=manager_window,
-            )
-            if not path:
-                return
-
-            if not self.theme_manager.import_theme(path):
-                messagebox.showerror("Import Failed", "Could not import this theme file.", parent=manager_window)
-                return
-
-            imported_name = None
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    imported_name = json.load(f).get("metadata", {}).get("name")
-            except Exception:
-                imported_name = None
-
-            refresh_theme_list(select_name=imported_name)
-            if callable(on_themes_changed):
-                on_themes_changed(imported_name)
-
-        def export_theme():
-            selected_name = get_selected_theme_name()
-            if not selected_name:
-                messagebox.showwarning("Export Theme", "Select a theme to export.", parent=manager_window)
-                return
-
-            path = filedialog.asksaveasfilename(
-                title="Export Theme",
-                defaultextension=".json",
-                initialfile=f"{selected_name}.json",
-                filetypes=[("JSON Files", "*.json")],
-                parent=manager_window,
-            )
-            if not path:
-                return
-
-            if not self.theme_manager.export_theme(selected_name, path):
-                messagebox.showerror("Export Failed", "Could not export theme.", parent=manager_window)
-                return
-
-        def remove_theme():
-            selected_name = get_selected_theme_name()
-            if not selected_name:
-                messagebox.showwarning("Remove Theme", "Select a theme to remove.", parent=manager_window)
-                return
-
-            themes = self.theme_manager.get_available_themes()
-            if selected_name not in themes:
-                messagebox.showwarning("Remove Theme", "Theme not found.", parent=manager_window)
-                return
-
-            if not messagebox.askyesno("Remove Theme", f"Remove '{selected_name}'?", parent=manager_window):
-                return
-
-            if not self.theme_manager.delete_theme(selected_name):
-                messagebox.showerror("Remove Failed", "Could not remove theme.", parent=manager_window)
-                return
-
-            refresh_theme_list()
-            if callable(on_themes_changed):
-                on_themes_changed(None)
-
-        button_row = ttk.Frame(container, style="Dark.TFrame")
-        button_row.pack(fill="x", pady=(8, 0))
-
-        ttk.Button(button_row, text="Import", style="Dark.TButton", command=import_theme).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ttk.Button(button_row, text="Export", style="Dark.TButton", command=export_theme).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(button_row, text="Remove", style="Dark.TButton", command=remove_theme).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(button_row, text="Close", style="Dark.TButton", command=manager_window.destroy).pack(side="left", fill="x", expand=True, padx=(4, 0))
-
-        def on_close_manager():
-            self.theme_manager_window = None
-            manager_window.destroy()
-
-        manager_window.protocol("WM_DELETE_WINDOW", on_close_manager)
-        refresh_theme_list()
-
-    def load_settings(self):
-        """Load UI settings from file"""
-        try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r') as f:
-                    self.settings = json.load(f)
-            else:
-                self.settings = {
-                    "last_place_id": "",
-                    "last_private_server": "",
-                    "game_list": [],
-                    "favorite_games": [],
-                    "enable_topmost": False,
-                    "enable_multi_roblox": False,
-                    "confirm_before_launch": False,
-                    "custom_roblox_launcher_path": "",
-                    "max_recent_games": 10,
-                    "enable_multi_select": False,
-                    "anti_afk_enabled": False,
-                    "anti_afk_interval_minutes": 10,
-                    "anti_afk_press_time_seconds": 1,
-                    "anti_afk_key": "w",
-                    "anti_afk_tooltip_enabled": True,
-                    "optimize_roblox_ram": False,
-                    "disable_launch_popup": False,
-                    "auto_rejoin_configs": {},
-                    "multi_roblox_method": "default",
-                    "last_joined_user": "",
-                    "auto_tile_windows": False,
-                    "selected_theme": "Dark",
-                    "rejoin_webhook": {},
-                    "websocket_enabled": False,
-                    "websocket_port": 8765,
-                    "websocket_require_password": False
-                }
-        except:
-            self.settings = {
-                "last_place_id": "",
-                "last_private_server": "",
-                "game_list": [],
-                "favorite_games": [],
-                "enable_topmost": False,
-                "enable_multi_roblox": False,
-                "confirm_before_launch": False,
-                "custom_roblox_launcher_path": "",
-                "max_recent_games": 10,
-                "enable_multi_select": False,
-                "anti_afk_enabled": False,
-                "anti_afk_interval_minutes": 10,
-                "anti_afk_press_time_seconds": 1,
-                "anti_afk_key": "w",
-                "anti_afk_tooltip_enabled": True,
-                "optimize_roblox_ram": False,
-                "auto_rejoin_configs": {},
-                "disable_launch_popup": False,
-                "multi_roblox_method": "default",
-                "last_joined_user": "",
-                "auto_tile_windows": False,
-                "selected_theme": "Dark",
-                "rejoin_webhook": {},
-                "websocket_enabled": False,
-                "websocket_port": 8765,
-                "websocket_require_password": False
-            }
-
-        settings_migrated = self._ensure_discord_settings_defaults()
-        settings_migrated = self._ensure_websocket_settings_defaults() or settings_migrated
-        if "anti_afk_press_count" not in self.settings:
-            self.settings["anti_afk_press_count"] = self.settings.get("anti_afk_press_time_seconds", self.settings.get("anti_afk_key_amount", 1))
-            settings_migrated = True
-        if "anti_afk_press_time_seconds" not in self.settings:
-            self.settings["anti_afk_press_time_seconds"] = self.settings.get("anti_afk_key_amount", 1)
-            settings_migrated = True
-        if "anti_afk_tooltip_enabled" not in self.settings:
-            self.settings["anti_afk_tooltip_enabled"] = True
-            settings_migrated = True
-        if "optimize_roblox_ram" not in self.settings:
-            self.settings["optimize_roblox_ram"] = False
-            settings_migrated = True
-        if "optimize_roblox_ram_limit_mb" not in self.settings:
-            self.settings["optimize_roblox_ram_limit_mb"] = 750
-            settings_migrated = True
-        if settings_migrated:
-            try:
-                with open(self.settings_file, 'w') as f:
-                    json.dump(self.settings, f, indent=2)
-            except Exception as e:
-                print(f"[ERROR] Failed to persist migrated Discord settings: {e}")
-
-        if self.settings.get("enable_topmost", False):
-            self.root.attributes("-topmost", True)
-        
-        if self.settings.get("enable_multi_roblox", False):
-            self.root.after(100, self.initialize_multi_roblox)
-
-    def _get_roblox_launcher_config(self):
-        launcher_pref = self.settings.get("roblox_launcher", "default")
-        custom_path = str(self.settings.get("custom_roblox_launcher_path", "") or "").strip()
-        return launcher_pref, custom_path
-
-    def apply_window_icon(self, window):
-        icon_path = self.icon_path
-
-        if icon_path and os.path.exists(icon_path):
-            try:
-                window.iconbitmap(icon_path)
-            except Exception as e:
-                print(f"[ERROR] Could not set window icon: {e}")
-
-    def check_for_updates(self):
-        """Check for updates from GitHub releases"""
-        try:
-            print("[INFO] Checking for updates...")
-            response = requests.get(
-                "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                latest_release = response.json()
-                latest_version = latest_release.get("tag_name", "").lstrip("v")
-                
-                current_clean = re.sub(r'(alpha|beta).*$', '', self.APP_VERSION, flags=re.IGNORECASE)
-                latest_clean = re.sub(r'(alpha|beta).*$', '', latest_version, flags=re.IGNORECASE)
-                
-                current_parts = tuple(map(int, current_clean.split(".")))
-                latest_parts = tuple(map(int, latest_clean.split(".")))
-                
-                if latest_parts > current_parts:
-                    print(f"[WARNING] New version available: {latest_version}")
-                    self.root.after(0, lambda: self.show_update_notification(latest_version))
-                else:
-                    print(f"[SUCCESS] You are on the latest version ({self.APP_VERSION})")
-            else:
-                print(f"[ERROR] Failed to check for updates (Status: {response.status_code})")
-                
-        except Exception as e:
-            print(f"[ERROR] Error checking for updates: {str(e)}")
-
-    def show_update_notification(self, latest_version):
-        """Show update notification dialog with download options"""
-        update_window = tk.Toplevel(self.root)
-        self.apply_window_icon(update_window)
-        update_window.title("Update Available")
-        update_window.geometry("450x280")
-        update_window.configure(bg=self.BG_DARK)
-        update_window.resizable(False, False)
-        update_window.transient(self.root)
-        
-        if self.settings.get("enable_topmost", False):
-            update_window.attributes("-topmost", True)
-        
-        update_window.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (update_window.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (update_window.winfo_height() // 2)
-        update_window.geometry(f"+{x}+{y}")
-        
-        container = ttk.Frame(update_window, style="Dark.TFrame")
-        container.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            container,
-            text="🎉 New Update Available!",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 12, "bold")
-        ).pack(anchor="w", pady=(0, 15))
-        
-        info_frame = ttk.Frame(container, style="Dark.TFrame", relief="solid", borderwidth=0)
-        info_frame.pack(fill="x", pady=(0, 15))
-        
-        info_inner = ttk.Frame(info_frame, style="Dark.TFrame")
-        info_inner.pack(fill="x", padx=15, pady=12)
-        
-        ttk.Label(
-            info_inner,
-            text=f"Current Version: {self.APP_VERSION}",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        ).pack(fill="x")
-        
-        ttk.Label(
-            info_inner,
-            text=f"Latest Version: {latest_version}",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9, "bold")
-        ).pack(fill="x", pady=(5, 0))
-        
-        progress_outer = tk.Frame(container, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
-        progress_outer.pack(fill="x", pady=(0, 10))
-        
-        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
-        progress_inner.pack(fill="x", padx=1, pady=1)
-        progress_inner.pack_propagate(False)
-        
-        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
-        progress_fill.place(x=0, y=0, relheight=1)
-        
-        progress_label = tk.Label(
-            progress_inner,
-            text="0%",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 9, "bold")
-        )
-        progress_label.place(relx=0.5, rely=0.5, anchor="center")
-        
-        status_label = ttk.Label(
-            container,
-            text="Choose how to update:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        )
-        status_label.pack(anchor="w", pady=(5, 8))
-        
-        btn_frame = ttk.Frame(container, style="Dark.TFrame")
-        btn_frame.pack(side="bottom", fill="x")
-        
-        def update_progress(percent):
-            """Update the custom progress bar"""
-            progress_inner.update_idletasks()
-            total_width = progress_inner.winfo_width()
-            fill_width = int((percent / 100) * total_width)
-            progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
-            
-            label_x = total_width // 2
-            if fill_width >= label_x:
-                progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
-            else:
-                progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
-            
-            progress_label.config(text=f"{int(percent)}%")
-            update_window.update()
-        
-        def download_update():
-            """Download and replace current executable using batch script"""
-            try:
-                auto_btn.config(state="disabled")
-                manual_btn.config(state="disabled")
-                close_btn.config(state="disabled")
-                
-                status_label.config(text="Downloading update...")
-                update_progress(0)
-                
-                response = requests.get(
-                    "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
-                    timeout=10
-                )
-                
-                if response.status_code != 200:
-                    raise Exception("Failed to fetch release information")
-                
-                release_data = response.json()
-                assets = release_data.get("assets", [])
-                
-                exe_asset = None
-                for asset in assets:
-                    if asset["name"].endswith(".exe"):
-                        exe_asset = asset
-                        break
-                
-                if not exe_asset:
-                    raise Exception("No .exe file found in release")
-                
-                download_url = exe_asset["browser_download_url"]
-                file_name = exe_asset["name"]
-                
-                current_exe = sys.executable
-                if current_exe.lower().endswith("python.exe") or current_exe.lower().endswith("pythonw.exe"):
-                    current_exe = os.path.abspath(sys.argv[0])
-                
-                temp_dir = tempfile.gettempdir()
-                temp_file = os.path.join(temp_dir, file_name)
-                
-                status_label.config(text=f"Downloading {file_name}...")
-                
-                response = requests.get(download_url, stream=True, timeout=30)
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                
-                with open(temp_file, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                progress = (downloaded / total_size) * 100
-                                update_progress(progress)
-                
-                update_progress(100)
-                status_label.config(text="Preparing update...")
-                update_window.update()
-                
-                batch_file = os.path.join(temp_dir, "ram_update.bat")
-                batch_content = f'''@echo off
-setlocal enabledelayedexpansion
-
-if not exist "{temp_file}" (
-    exit /b 1
-)
-
-for /F %%A in ('dir /b "{temp_file}"') do set size=%%~zA
-if !size! LSS 1000000 (
-    exit /b 1
-)
-
-:wait_loop
-copy /Y "{temp_file}" "{current_exe}" >nul 2>&1
-if errorlevel 1 (
-    timeout /t 0 /nobreak >nul
-    goto wait_loop
-)
-
-if exist "{temp_file}" del /f /q "{temp_file}"
-
-del /f /q "%~f0"
-'''
-                with open(batch_file, 'w') as f:
-                    f.write(batch_content)
-                
-                status_label.config(text="Update complete! Please relaunch.")
-                update_window.update()
-                
-                messagebox.showinfo(
-                    "Update Complete",
-                    "Update has been installed successfully!\n\nPlease close this window and wait a second before launching the application again.",
-                    parent=update_window
-                )
-                
-                subprocess.Popen([batch_file], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                self.root.quit()
-                
-            except Exception as e:
-                status_label.config(text="Download failed. Try manual update.")
-                update_progress(0)
-                messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to update:\n{str(e)}\n\nPlease use Manual Update instead.",
-                    parent=update_window
-                )
-                auto_btn.config(state="normal")
-                manual_btn.config(state="normal")
-                close_btn.config(state="normal")
-        
-        def manual_update():
-            """Open GitHub releases page"""
-            webbrowser.open("https://github.com/evanovar/RobloxAccountManager/releases/latest")
-            update_window.destroy()
-        
-        auto_btn = ttk.Button(
-            btn_frame,
-            text="Auto Update",
-            style="Dark.TButton",
-            command=download_update
-        )
-        auto_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        manual_btn = ttk.Button(
-            btn_frame,
-            text="Manual Update",
-            style="Dark.TButton",
-            command=manual_update
-        )
-        manual_btn.pack(side="left", fill="x", expand=True, padx=(2.5, 2.5))
-        
-        close_btn = ttk.Button(
-            btn_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=update_window.destroy
-        )
-        close_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
-
-    def toggle_add_account_dropdown(self):
-        """Toggle the Add Account dropdown menu"""
-        self.add_account_dropdown_visible = not self.add_account_dropdown_visible
-        if self.add_account_dropdown_visible:
-            self.show_add_account_dropdown()
-        else:
-            self.hide_add_account_dropdown()
-    
-    def on_add_account_split_click(self, event):
-        """Handle clicks on the unified split button: left area adds account, right area opens dropdown."""
-        try:
-            width = event.widget.winfo_width()
-        except Exception:
-            width = 0
-        arrow_zone = 24
-        if event.x >= max(0, width - arrow_zone):
-            self.toggle_add_account_dropdown()
-        else:
-            self.add_account()
-        return "break"
-    
-    def show_add_account_dropdown(self):
-        """Show the Add Account dropdown menu"""
-        if self.add_account_dropdown is not None:
-            self.add_account_dropdown.destroy()
-        
-        self.add_account_dropdown = tk.Toplevel(self.root)
-        self.add_account_dropdown.overrideredirect(True)
-        self.add_account_dropdown.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
-        
-        self.position_add_account_dropdown()
-        
-        import_cookie_btn = tk.Button(
-            self.add_account_dropdown,
-            text="Import Cookie",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: [self.hide_add_account_dropdown(), self.import_cookie()]
-        )
-        import_cookie_btn.pack(fill="x", padx=2, pady=1)
-        
-        javascript_btn = tk.Button(
-            self.add_account_dropdown,
-            text="Javascript",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: [self.hide_add_account_dropdown(), self.javascript_import()]
-        )
-        javascript_btn.pack(fill="x", padx=2, pady=1)
-        
-        self.position_add_account_dropdown()
-        
-        if self.settings.get("enable_topmost", False):
-            self.add_account_dropdown.attributes("-topmost", True)
-        
-        self.add_account_dropdown.bind("<FocusOut>", lambda e: self.hide_add_account_dropdown())
-
-    def position_add_account_dropdown(self):
-        """Position the dropdown right under the split button and match its width."""
-        try:
-            if self.add_account_dropdown is None or not self.add_account_dropdown_visible:
-                return
-            self.root.update_idletasks()
-            x = self.add_account_split_btn.winfo_rootx()
-            y = self.add_account_split_btn.winfo_rooty() + self.add_account_split_btn.winfo_height()
-            width = self.add_account_split_btn.winfo_width()
-            req_h = self.add_account_dropdown.winfo_reqheight()
-            self.add_account_dropdown.geometry(f"{width}x{req_h}+{x}+{y}")
-            if self.settings.get("enable_topmost", False):
-                self.add_account_dropdown.attributes("-topmost", True)
-        except Exception:
-            pass
-
-    def on_root_configure(self, event=None):
-        """Called when the main window moves/resizes; keep dropdown attached."""
-        if self.add_account_dropdown_visible and self.add_account_dropdown is not None:
-            self.position_add_account_dropdown()
-        if self.join_place_dropdown_visible and self.join_place_dropdown is not None:
-            self.position_join_place_dropdown()
-    
-    def hide_add_account_dropdown(self):
-        """Hide the Add Account dropdown menu"""
-        if self.add_account_dropdown is not None:
-            self.add_account_dropdown.destroy()
-            self.add_account_dropdown = None
-        self.add_account_dropdown_visible = False
-    
-    def is_child_of(self, child, parent):
-        """Check if a widget is a child of another widget"""
-        while child is not None:
-            if child == parent:
-                return True
-            child = child.master
+        t = event.type()
+        if t == QEvent.Type.MouseButtonPress:
+            return self._on_press(event)
+        if t == QEvent.Type.MouseMove:
+            return self._on_move(event)
+        if t == QEvent.Type.MouseButtonRelease:
+            return self._on_release(event)
         return False
-    
-    def hide_dropdown_on_click_outside(self, event):
-        """Hide dropdown when clicking outside of it"""
-        widget = event.widget
-        if self.add_account_dropdown_visible and self.add_account_dropdown is not None:
-            if not self.is_child_of(widget, self.add_account_split_btn):
-                try:
-                    if not self.is_child_of(widget, self.add_account_dropdown):
-                        self.hide_add_account_dropdown()
-                except:
-                    self.hide_add_account_dropdown()
-        
-        if self.join_place_dropdown_visible and self.join_place_dropdown is not None:
-            if not self.is_child_of(widget, self.join_place_split_btn):
-                try:
-                    if not self.is_child_of(widget, self.join_place_dropdown):
-                        self.hide_join_place_dropdown()
-                except:
-                    self.hide_join_place_dropdown()
 
-    def toggle_join_place_dropdown(self):
-        """Toggle the Join Place dropdown menu"""
-        self.join_place_dropdown_visible = not self.join_place_dropdown_visible
-        if self.join_place_dropdown_visible:
-            self.show_join_place_dropdown()
-        else:
-            self.hide_join_place_dropdown()
-    
-    def on_join_place_split_click(self, event):
-        """Handle clicks on the button: left click launches game, right click shows dropdown."""
-        self.launch_game()
-        return "break"
-    
-    def on_join_place_right_click(self, event):
-        """Handle right click on the button: show dropdown menu."""
-        self.toggle_join_place_dropdown()
-        return "break"
-    
-    def on_join_place_hover(self, event):
-        """Show tooltip when hovering over Join Place ID button"""
-        if self.tooltip_timer:
-            self.root.after_cancel(self.tooltip_timer)
-        
-        def show_tooltip():
-            if self.tooltip:
-                return
-            
-            x = event.widget.winfo_rootx() + event.widget.winfo_width() // 2
-            y = event.widget.winfo_rooty() + event.widget.winfo_height() + 5
-            
-            self.tooltip = tk.Toplevel(self.root)
-            self.tooltip.wm_overrideredirect(True)
-            self.tooltip.wm_geometry(f"+{x}+{y}")
-            
-            label = tk.Label(
-                self.tooltip,
-                text="Right click to see more options",
-                bg="#333333",
-                fg="white",
-                font=("Segoe UI", 9),
-                padx=8,
-                pady=4,
-                relief="solid",
-                borderwidth=1
-            )
-            label.pack()
-            
-            self.tooltip.update_idletasks()
-            tooltip_width = self.tooltip.winfo_width()
-            self.tooltip.wm_geometry(f"+{x - tooltip_width // 2}+{y}")
-            
-            if self.settings.get("enable_topmost", False):
-                self.tooltip.attributes("-topmost", True)
-        
-        self.tooltip_timer = self.root.after(800, show_tooltip)
-    
-    def on_join_place_leave(self, event):
-        """Hide tooltip when leaving Join Place ID button"""
-        if self.tooltip_timer:
-            self.root.after_cancel(self.tooltip_timer)
-            self.tooltip_timer = None
-        
-        if self.tooltip:
-            self.tooltip.destroy()
-            self.tooltip = None
-    
-    def show_join_place_dropdown(self):
-        """Show the Join Place dropdown menu"""
-        if self.join_place_dropdown is not None:
-            self.join_place_dropdown.destroy()
-        
-        self.join_place_dropdown = tk.Toplevel(self.root)
-        self.join_place_dropdown.overrideredirect(True)
-        self.join_place_dropdown.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
-        
-        self.position_join_place_dropdown()
-        
-        join_user_btn = tk.Button(
-            self.join_place_dropdown,
-            text="Join User",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: [self.hide_join_place_dropdown(), self.join_user()]
-        )
-        join_user_btn.pack(fill="x", padx=2, pady=1)
-        
-        job_id_btn = tk.Button(
-            self.join_place_dropdown,
-            text="Job-ID",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: [self.hide_join_place_dropdown(), self.join_by_job_id()]
-        )
-        job_id_btn.pack(fill="x", padx=2, pady=1)
-        
-        small_server_btn = tk.Button(
-            self.join_place_dropdown,
-            text="Small Server",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: [self.hide_join_place_dropdown(), self.join_small_server()]
-        )
-        small_server_btn.pack(fill="x", padx=2, pady=1)
-        
-        self.position_join_place_dropdown()
-        
-        if self.settings.get("enable_topmost", False):
-            self.join_place_dropdown.attributes("-topmost", True)
-        
-        self.join_place_dropdown.bind("<FocusOut>", lambda e: self.hide_join_place_dropdown())
+    def _on_press(self, event) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        local_pos = event.position().toPoint()
+        item = self._list.itemAt(local_pos)
+        if item is None:
+            return False
+        username = item.data(Qt.ItemDataRole.UserRole)
+        if not username:
+            return False
+        self._press_pos = event.globalPosition().toPoint()
+        self._press_row = self._list.row(item)
+        self._username = username
+        self._hold_timer.start(self.HOLD_MS)
+        return False
 
-    def position_join_place_dropdown(self):
-        """Position the dropdown right under the split button and match its width."""
-        try:
-            if self.join_place_dropdown is None or not self.join_place_dropdown_visible:
-                return
-            self.root.update_idletasks()
-            x = self.join_place_split_btn.winfo_rootx()
-            y = self.join_place_split_btn.winfo_rooty() + self.join_place_split_btn.winfo_height()
-            width = self.join_place_split_btn.winfo_width()
-            req_h = self.join_place_dropdown.winfo_reqheight()
-            self.join_place_dropdown.geometry(f"{width}x{req_h}+{x}+{y}")
-            if self.settings.get("enable_topmost", False):
-                self.join_place_dropdown.attributes("-topmost", True)
-        except Exception:
-            pass
-    
-    def hide_join_place_dropdown(self):
-        """Hide the Join Place dropdown menu"""
-        if self.join_place_dropdown is not None:
-            self.join_place_dropdown.destroy()
-            self.join_place_dropdown = None
-        self.join_place_dropdown_visible = False
+    def _on_hold_confirmed(self):
+        self._dragging = True
+        self._drag_row = self._press_row
+        self._drop_row = self._press_row
 
-    def save_settings(self, force_immediate=False):
-        """Save UI settings to file with debouncing"""
-        if self._save_settings_timer is not None:
-            try:
-                self.root.after_cancel(self._save_settings_timer)
-            except:
-                pass
-            self._save_settings_timer = None
-        
-        def do_save():
-            try:
-                with open(self.settings_file, 'w') as f:
-                    json.dump(self.settings, f, indent=2)
-            except Exception as e:
-                print(f"[ERROR] Failed to save settings: {e}")
-            self._save_settings_timer = None
-        
-        if force_immediate:
-            do_save()
-        else:
-            self._save_settings_timer = self.root.after(500, do_save)
+        cursor_pos = QCursor.pos()
+        self._create_float(self._username, cursor_pos)
 
-    def _default_discord_integration_settings(self, mode):
-        base = {
-            "enabled": False,
-            "enable_ping": False,
-            "ping_user_id": "",
-            "ping_on_error": True,
-            "log_everything": False,
-            "log_errors": True,
-            "log_success": True,
-            "log_warnings": True,
-            "log_info": False,
-            "log_auto_rejoin": True,
-            "log_auto_rejoin_console": False,
-            "screenshot_interval_minutes": 60,
-            "screenshot_enabled": False,
-        }
-        if mode == "bot":
-            base.update({
-                "channel_id": None,
-            })
-        else:
-            base.update({
-                "url": "",
-            })
-        return base
+        if self._get_avatar:
+            pix = self._get_avatar(self._username)
+            if pix and not pix.isNull():
+                self.update_float_avatar(pix)
 
-    def _default_websocket_settings(self):
-        return {
-            "websocket_enabled": False,
-            "websocket_port": 8765,
-            "websocket_require_password": False,
-            "websocket_max_message_length": 4096,
-            "websocket_max_add_cookies": 25,
-        }
+        self._list.setCursor(Qt.CursorShape.ClosedHandCursor)
 
-    def _ensure_websocket_settings_defaults(self):
-        changed = False
-        for key, value in self._default_websocket_settings().items():
-            if key not in self.settings:
-                self.settings[key] = value
-                changed = True
-        return changed
+    def _on_move(self, event) -> bool:
+        gpos = event.globalPosition().toPoint()
 
-    def _ensure_discord_settings_defaults(self):
-        changed = False
-        old_mode = self.settings.get("discord_webhook", {}).pop("mode", None)
-        if old_mode in ("webhook", "bot") and "discord_ui_mode" not in self.settings:
-            self.settings["discord_ui_mode"] = old_mode
-            changed = True
-        elif old_mode is not None:
-            changed = True
-
-        self.settings.setdefault("discord_ui_mode", "webhook")
-        default_console_filters = [
-            "Got authentication ticket!",
-            "You are on the latest version",
-        ]
-        console_filters = self.settings.get("console_filters")
-        if not isinstance(console_filters, list):
-            self.settings["console_filters"] = default_console_filters.copy()
-            changed = True
-        else:
-            for value in default_console_filters:
-                if value not in console_filters:
-                    console_filters.append(value)
-                    changed = True
-
-        webhook_cfg = self.settings.setdefault("discord_webhook", {})
-
-        for key, value in self._default_discord_integration_settings("webhook").items():
-            webhook_cfg.setdefault(key, value)
-
-        self.settings["discord_webhook"] = webhook_cfg
-        return changed
-
-    def _process_ui_task_queue(self):
-        try:
-            while True:
-                func, args, kwargs, done_event, result_box = self._ui_task_queue.get_nowait()
-                try:
-                    result_box["value"] = func(*args, **kwargs)
-                except Exception as exc:
-                    result_box["error"] = exc
-                finally:
-                    if done_event is not None:
-                        done_event.set()
-        except queue.Empty:
-            pass
-
-        try:
-            if self.root.winfo_exists():
-                self.root.after(50, self._process_ui_task_queue)
-        except Exception:
-            pass
-
-    def _run_on_ui_thread(self, func, *args, wait=True, timeout=30, **kwargs):
-        if threading.current_thread() is threading.main_thread():
-            return func(*args, **kwargs)
-
-        done_event = threading.Event() if wait else None
-        result_box = {"value": None, "error": None}
-        self._ui_task_queue.put((func, args, kwargs, done_event, result_box))
-
-        if not wait:
-            return None
-
-        if not done_event.wait(timeout):
-            raise TimeoutError("UI task timed out")
-        if result_box["error"] is not None:
-            raise result_box["error"]
-        return result_box["value"]
-
-    def _get_websocket_password(self):
-        try:
-            return str(self.manager.get_secure_setting("websocket_password", "") or "")
-        except Exception:
-            return ""
-
-    def _set_websocket_password(self, password):
-        try:
-            self.manager.set_secure_setting("websocket_password", str(password or ""))
-            return True
-        except Exception as exc:
-            print(f"[ERROR] Failed to save websocket password: {exc}")
+        if not self._dragging:
+            if self._hold_timer.isActive() and not self._press_pos.isNull():
+                if (gpos - self._press_pos).manhattanLength() > self.CANCEL_PX:
+                    self._hold_timer.stop()
             return False
 
-    def _get_websocket_port(self):
-        try:
-            return int(self.settings.get("websocket_port", 8765))
-        except Exception:
-            return 8765
+        if self._float_win: # Move floating window
+            self._float_win.move(gpos.x() + 4, gpos.y() + 4)
 
-    def _get_websocket_max_message_length(self):
-        try:
-            return max(0, int(self.settings.get("websocket_max_message_length", 4096)))
-        except Exception:
-            return 4096
+        self._drop_row = self._compute_drop_row(event.position().toPoint()) # compute drop-before row from local pos
+        self._show_indicator(self._drop_row)
+        return True # consume during drag
 
-    def _get_websocket_max_add_cookies(self):
-        try:
-            return max(1, int(self.settings.get("websocket_max_add_cookies", 25)))
-        except Exception:
-            return 25
+    def _on_release(self, event) -> bool:
+        self._hold_timer.stop()
 
-    def _set_last_joined_user(self, username):
-        self.settings["last_joined_user"] = username
-        self.save_settings()
-
-    def start_websocket_server(self):
-        if self.websocket_thread and self.websocket_thread.is_alive():
-            return
-
-        if not self.settings.get("developer_mode", False):
-            print("[WARNING] WebSocket server blocked: Developer Mode is disabled")
-            return
-
-        self.websocket_stop_event.clear()
-        self.websocket_thread = threading.Thread(
-            target=self._websocket_server_thread_main,
-            daemon=True,
-            name="WebSocketServer",
-        )
-        self.websocket_thread.start()
-
-    def stop_websocket_server(self):
-        self.websocket_stop_event.set()
-        loop = self.websocket_loop
-        if loop is not None:
-            try:
-                loop.call_soon_threadsafe(lambda: None)
-            except Exception:
-                pass
-
-        thread = self.websocket_thread
-        if thread and thread.is_alive():
-            thread.join(timeout=2)
-
-        self.websocket_thread = None
-        self.websocket_loop = None
-        self.websocket_running = False
-
-    def restart_websocket_server(self):
-        self.stop_websocket_server()
-        if self.settings.get("websocket_enabled", False):
-            self.start_websocket_server()
-
-    def _websocket_server_thread_main(self):
-        loop = asyncio.new_event_loop()
-        self.websocket_loop = loop
-        asyncio.set_event_loop(loop)
-
-        try:
-            loop.run_until_complete(self._websocket_server_main())
-        except Exception as exc:
-            print(f"[ERROR] WebSocket server crashed: {exc}")
-        finally:
-            self.websocket_running = False
-            self.websocket_loop = None
-            try:
-                loop.close()
-            except Exception:
-                pass
-
-    async def _websocket_server_main(self):
-        host = "localhost"
-        port = self._get_websocket_port()
-
-        try:
-            async with websockets.serve(self._websocket_client_handler, host, port):
-                self.websocket_running = True
-                print(f"[INFO] WebSocket server started at ws://{host}:{port}")
-                while not self.websocket_stop_event.is_set():
-                    await asyncio.sleep(0.2)
-        except OSError as exc:
-            self.websocket_running = False
-            print(f"[ERROR] Failed to start WebSocket server on port {port}: {exc}")
-        finally:
-            if self.websocket_running:
-                print("[INFO] WebSocket server stopped")
-            self.websocket_running = False
-
-    async def _websocket_client_handler(self, websocket):
-        try:
-            async for raw_message in websocket:
-                message = str(raw_message or "")
-                max_length = self._get_websocket_max_message_length()
-                if max_length > 0 and len(message) > max_length:
-                    response = {
-                        "ok": False,
-                        "error": f"Message too long (max {max_length} characters)",
-                    }
-                else:
-                    response = self._websocket_execute_command(message)
-                await websocket.send(json.dumps(response, ensure_ascii=False))
-        except Exception as exc:
-            print(f"[ERROR] WebSocket client handler error: {exc}")
-
-    def _websocket_extract_command_with_auth(self, raw_message):
-        message = str(raw_message or "").strip()
-        require_password = bool(self.settings.get("websocket_require_password", False))
-
-        if not require_password:
-            return True, message, None
-
-        stored_password = self._get_websocket_password()
-        if not stored_password:
-            return False, "", "Password is required but not set"
-
-        if "|" not in message:
-            return False, "", "Missing auth format. Use: AUTH <password> | <command>"
-
-        auth_segment, command_segment = message.split("|", 1)
-        auth_segment = auth_segment.strip()
-        command_segment = command_segment.strip()
-
-        try:
-            auth_parts = shlex.split(auth_segment)
-        except Exception:
-            auth_parts = auth_segment.split()
-
-        if len(auth_parts) < 2 or auth_parts[0].lower() != "auth":
-            return False, "", "Missing auth format. Use: AUTH <password> | <command>"
-
-        provided_password = " ".join(auth_parts[1:])
-        if not secrets.compare_digest(provided_password, stored_password):
-            return False, "", "Authentication failed"
-
-        return True, command_segment, None
-
-    def _websocket_execute_command(self, raw_message):
-        ok, command_text, auth_error = self._websocket_extract_command_with_auth(raw_message)
-        if not ok:
-            return {"ok": False, "error": auth_error}
-
-        if not command_text:
-            return {"ok": False, "error": "Empty command"}
-
-        try:
-            parts = shlex.split(command_text)
-        except Exception:
-            parts = command_text.split()
-
-        if not parts:
-            return {"ok": False, "error": "Empty command"}
-
-        action = parts[0].lower()
-
-        try:
-            handlers = {
-                "ping": lambda: {"ok": True, "result": "Pong"},
-                "getstatus": self._websocket_command_get_status,
-                "launch": lambda: self._websocket_command_launch(parts),
-                "joinuser": lambda: self._websocket_command_join_user(parts),
-                "autorejoin": lambda: self._websocket_command_auto_rejoin(parts),
-                "add": lambda: self._websocket_command_add(command_text),
-                "accountlist": self._websocket_command_account_list,
-            }
-
-            handler = handlers.get(action)
-            if handler is not None:
-                return handler()
-
-            return {
-                "ok": False,
-                "error": "Unknown command",
-                "supported": self._websocket_supported_commands(),
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
-    def _websocket_supported_commands(self):
-        return [
-            "Add",
-            "AccountList",
-            "AutoRejoin",
-            "GetStatus",
-            "JoinUser",
-            "Launch",
-            "Ping",
-        ]
-
-    def _websocket_parse_cookie_payloads(self, payload):
-        text = str(payload or "").strip()
-        if not text:
-            return []
-
-        if "_|WARNING:-" in text:
-            parts = text.split("_|WARNING:-")
-            return ["_|WARNING:-" + part.strip() for part in parts if part.strip()]
-
-        return [chunk.strip() for chunk in re.split(r"\s+", text) if chunk.strip()]
-
-    def _websocket_command_add(self, command_text):
-        payload = str(command_text or "").strip()
-        if len(payload) <= 3:
-            return {"ok": False, "error": "Usage: Add <cookie> [cookie2 ...]"}
-
-        cookie_payload = payload[3:].strip()
-        cookies = self._websocket_parse_cookie_payloads(cookie_payload)
-        if not cookies:
-            return {"ok": False, "error": "No cookies provided"}
-
-        imported = []
-        failed = []
-
-        max_cookies = self._get_websocket_max_add_cookies()
-        if len(cookies) > max_cookies:
-            return {
-                "ok": False,
-                "error": f"Too many cookies provided (max {max_cookies})",
-            }
-
-        for cookie in cookies:
-            if not cookie:
-                failed.append({"cookie": cookie, "error": "Empty cookie"})
-                continue
-            if len(cookie) > 4096:
-                failed.append({"cookie": cookie[:64], "error": "Cookie payload too long"})
-                continue
-            try:
-                success, username = self.manager.import_cookie_account(cookie)
-                if success and username:
-                    imported.append(username)
-                else:
-                    failed.append({"cookie": cookie, "error": "Import failed"})
-            except Exception as exc:
-                failed.append({"cookie": cookie, "error": str(exc)})
-
-        if imported:
-            try:
-                self._run_on_ui_thread(self.refresh_accounts, wait=False)
-            except Exception:
-                pass
-
-        if not imported:
-            return {
-                "ok": False,
-                "error": "Failed to import any accounts",
-                "failed": failed,
-            }
-
-        return {
-            "ok": True,
-            "result": {
-                "action": "Add",
-                "imported": imported,
-                "imported_count": len(imported),
-                "failed_count": len(failed),
-            },
-            "failed": failed,
-        }
-
-    def _websocket_command_account_list(self):
-        try:
-            account_names = sorted(str(name) for name in self.manager.accounts.keys())
-        except Exception:
-            account_names = []
-
-        return {
-            "ok": True,
-            "result": {
-                "action": "AccountList",
-                "accounts": account_names,
-                "count": len(account_names),
-            },
-        }
-
-    def _websocket_command_launch(self, parts):
-        if len(parts) < 3:
-            return {"ok": False, "error": "Usage: Launch <account_name> <place_id> [private_server_id] [job_id]"}
-
-        account_name = parts[1]
-        place_id = str(parts[2]).strip()
-        private_server_id = str(parts[3]).strip() if len(parts) >= 4 else ""
-        job_id = str(parts[4]).strip() if len(parts) >= 5 else ""
-
-        if account_name not in self.manager.accounts:
-            return {"ok": False, "error": f"Account not found: {account_name}"}
-        if not place_id.isdigit():
-            return {"ok": False, "error": "Place ID must be numeric"}
-
-        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-        launched = self.manager.launch_roblox(
-            account_name,
-            place_id,
-            private_server_id,
-            launcher_pref,
-            job_id,
-            custom_launcher_path,
-        )
-
-        if launched:
-            try:
-                self._run_on_ui_thread(self._set_last_joined_user, account_name, wait=False)
-            except Exception:
-                pass
-            return {
-                "ok": True,
-                "result": {
-                    "action": "Launch",
-                    "account": account_name,
-                    "place_id": place_id,
-                    "private_server_id": private_server_id,
-                    "job_id": job_id,
-                },
-            }
-        return {"ok": False, "error": f"Failed to launch account: {account_name}"}
-
-    def _websocket_command_join_user(self, parts):
-        if len(parts) < 3:
-            return {"ok": False, "error": "Usage: JoinUser <account_name> <user_to_join>"}
-
-        account_name = parts[1]
-        user_to_join = parts[2]
-
-        if account_name not in self.manager.accounts:
-            return {"ok": False, "error": f"Account not found: {account_name}"}
-
-        user_id = RobloxAPI.get_user_id_from_username(user_to_join)
-        if not user_id:
-            return {"ok": False, "error": f"User not found: {user_to_join}"}
-
-        account_data = self.manager.accounts.get(account_name)
-        account_cookie = account_data.get("cookie") if isinstance(account_data, dict) else None
-        if not account_cookie:
-            return {"ok": False, "error": f"Missing cookie for account: {account_name}"}
-
-        presence = RobloxAPI.get_player_presence(user_id, account_cookie)
-        if not presence:
-            return {"ok": False, "error": "Failed to fetch user presence"}
-        if not presence.get("in_game"):
-            return {
-                "ok": False,
-                "error": f"{user_to_join} is not currently in-game",
-                "status": presence.get("last_location", "Unknown"),
-            }
-
-        place_id = str(presence.get("place_id", "") or "")
-        game_id = str(presence.get("game_id", "") or "")
-        if not place_id:
-            return {"ok": False, "error": "Missing place_id in presence response"}
-
-        launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-        launched = self.manager.launch_roblox(
-            account_name,
-            place_id,
-            "",
-            launcher_pref,
-            game_id,
-            custom_launcher_path,
-        )
-
-        if launched:
-            try:
-                self._run_on_ui_thread(self._set_last_joined_user, account_name, wait=False)
-            except Exception:
-                pass
-            return {
-                "ok": True,
-                "result": {
-                    "action": "JoinUser",
-                    "account": account_name,
-                    "target_user": user_to_join,
-                    "place_id": place_id,
-                    "job_id": game_id,
-                },
-            }
-        return {"ok": False, "error": f"Failed to join user {user_to_join} with account {account_name}"}
-
-    def _websocket_command_get_status(self):
-        try:
-            if not (self.instances_monitor_thread and self.instances_monitor_thread.is_alive()):
-                self.start_instances_monitoring()
-        except Exception:
-            pass
-
-        data = []
-        try:
-            for entry in list(self.instances_data):
-                data.append({
-                    "pid": entry.get("pid"),
-                    "username": entry.get("username"),
-                })
-        except Exception:
-            data = []
-
-        return {
-            "ok": True,
-            "result": data,
-            "action": "GetStatus",
-        }
-
-    def _websocket_command_auto_rejoin(self, parts):
-        if len(parts) < 3:
-            return {"ok": False, "error": "Usage: AutoRejoin <start|stop> <account_name>"}
-
-        mode = parts[1].lower()
-        account_name = parts[2]
-
-        if account_name not in self.manager.accounts:
-            return {"ok": False, "error": f"Account not found: {account_name}"}
-
-        if mode == "start":
-            if account_name not in self.auto_rejoin_configs:
-                return {"ok": False, "error": f"No auto-rejoin config for account: {account_name}"}
-            self._match_pids_to_accounts([account_name])
-            self.start_auto_rejoin_for_account(account_name)
-            return {"ok": True, "result": {"action": "AutoRejoin", "mode": "start", "account": account_name}}
-
-        if mode == "stop":
-            self.stop_auto_rejoin_for_account(account_name)
-            return {"ok": True, "result": {"action": "AutoRejoin", "mode": "stop", "account": account_name}}
-
-        return {"ok": False, "error": "AutoRejoin mode must be 'start' or 'stop'"}
-
-    def is_chrome_installed(self):
-        try:
-            candidates = []
-            pf = os.environ.get('ProgramFiles')
-            pfx86 = os.environ.get('ProgramFiles(x86)')
-            localapp = os.environ.get('LOCALAPPDATA')
-            if pf:
-                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if pfx86:
-                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if localapp:
-                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-
-            return any(path and os.path.exists(path) for path in candidates)
-        except Exception:
+        if not self._dragging:
             return False
 
-    def get_browser_path(self):
-        """Get path to the selected browser (Chrome or Chromium)."""
-        browser_type = self.settings.get("browser_type", "chrome")
-        
-        if browser_type == "chromium":
-            chromium_path = os.path.join(self.data_folder, "Chromium", "chrome-win64", "chrome.exe")
-            if os.path.exists(chromium_path):
-                return chromium_path, "Chromium"
-            browser_type = "chrome"
-        
-        if browser_type == "chrome":
-            candidates = []
-            pf = os.environ.get('ProgramFiles')
-            pfx86 = os.environ.get('ProgramFiles(x86)')
-            localapp = os.environ.get('LOCALAPPDATA')
-            if pf:
-                candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if pfx86:
-                candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            if localapp:
-                candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-            for path in candidates:
-                if path and os.path.exists(path):
-                    return path, "Google Chrome"
-        
-        return None, None
+        self._dragging = False
+        self._list.unsetCursor()
 
-    def update_game_name_on_startup(self):
-        """Check both Place ID and Private Server fields to update game name on startup"""
-        place_id = self.place_entry.get().strip()
-        private_server = self.private_server_entry.get().strip()
+        if self._float_win:
+            self._float_win.hide()
+        self._indicator.hide()
 
-        if place_id:
-            self.update_game_name()
-        elif private_server:
-            vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
-            if vip_match:
-                self.update_game_name_from_id(vip_match.group(1))
-            else:
-                share_match = re.search(r'roblox\.com/share\?[^#]*code=([A-Za-z0-9]+)', private_server)
-                if share_match:
-                    def _resolve_startup(ps=private_server):
-                        ck = next((d.get('cookie') for d in self.manager.accounts.values() if isinstance(d, dict) and d.get('cookie')), None)
-                        resolved_pid, _ = RobloxAPI.resolve_share_url(ps, cookie=ck)
-                        if resolved_pid:
-                            self.root.after(0, lambda: self.update_game_name_from_id(resolved_pid))
-                    threading.Thread(target=_resolve_startup, daemon=True).start()
+        from_row = self._drag_row
+        to_row = self._drop_row
 
-    def on_place_id_change(self, event=None):
-        place_id = self.place_entry.get().strip()
-        self.settings["last_place_id"] = place_id
-        self.save_settings()
-        self.update_game_name()
+        self._drag_row = -1
+        self._drop_row = -1
 
-    def on_private_server_change(self, event=None):        
-        private_server = self.private_server_entry.get().strip()
-        place_id_input = self.place_entry.get().strip()
+        if to_row >= 0 and from_row >= 0 and from_row != to_row:
+            self.reorder_requested.emit(from_row, to_row)
 
-        self.settings["last_private_server"] = private_server
-        self.save_settings()
+        return True
 
-        if not place_id_input and private_server:
-            vip_match = re.search(r'roblox\.com/games/(\d+)', private_server)
-            if vip_match:
-                self.update_game_name_from_id(vip_match.group(1))
-            else:
-                share_match = re.search(r'roblox\.com/share\?[^#]*code=([A-Za-z0-9]+)', private_server)
-                if share_match:
-                    def _resolve_and_update(ps=private_server):
-                        ck = next((d.get('cookie') for d in self.manager.accounts.values() if isinstance(d, dict) and d.get('cookie')), None)
-                        resolved_pid, _ = RobloxAPI.resolve_share_url(ps, cookie=ck)
-                        if resolved_pid:
-                            self.root.after(0, lambda: self.update_game_name_from_id(resolved_pid))
-                    threading.Thread(target=_resolve_and_update, daemon=True).start()
-    
-    def update_game_name_from_id(self, place_id):
-        """Update game name label from a specific place ID (without reading from text box)"""
-        if self._game_name_after_id is not None:
-            try:
-                self.root.after_cancel(self._game_name_after_id)
-            except Exception:
-                pass
-            self._game_name_after_id = None
+    def _create_float(self, username: str, initial_pos: "QPoint | None" = None):
+        if self._float_win:
+            self._float_win.hide()
+            self._float_win.deleteLater()
 
-        def schedule_fetch():
-            if not place_id or not place_id.isdigit():
-                self.game_name_label.config(text="")
-                return
+        win = QFrame(
+            None,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        win.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        win.setStyleSheet("""
+            QFrame {
+                background: #1E1E1E;
+                border: 1px solid #3A3A3A;
+                border-radius: 6px;
+            }
+            QLabel { background: transparent; color: #EDEDED; }
+        """)
 
-            def worker(pid):
-                name = RobloxAPI.get_game_name(pid)
-                if name:
-                    max_name_length = 20
-                    if len(name) > max_name_length:
-                        name = name[:max_name_length-2] + ".."
-                    display_text = f"Current: {name}"
-                else:
-                    display_text = ""
-                
-                def update_label(text=display_text):
-                    try:
-                        self.game_name_label.config(text=text)
-                    except:
-                        pass
-                
-                self.root.after(0, update_label)
+        h = QHBoxLayout(win)
+        h.setContentsMargins(8, 6, 12, 6)
+        h.setSpacing(8)
 
-            threading.Thread(target=worker, args=(place_id,), daemon=True).start()
+        # Avatar slot
+        av_lbl = QLabel()
+        av_lbl.setFixedSize(22, 22)
+        av_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+        )
+        av_lbl.setStyleSheet(
+            "background: #2A2A2A; border-radius: 11px;"
+        )
+        h.addWidget(av_lbl)
+        self._float_av = av_lbl
 
-        self._game_name_after_id = self.root.after(350, schedule_fetch)
-    
+        name = QLabel(username)
+        name.setStyleSheet("font-size: 12px; font-weight: 600;")
+        h.addWidget(name)
 
-    def update_game_name(self):
-        """Debounced, non-blocking update of the game name label"""
-        if self._game_name_after_id is not None:
-            try:
-                self.root.after_cancel(self._game_name_after_id)
-            except Exception:
-                pass
-            self._game_name_after_id = None
+        win.adjustSize()
+        if initial_pos is not None:
+            win.move(initial_pos.x() + 4, initial_pos.y() + 4)
+        self._float_win = win
+        win.show()
 
-        def schedule_fetch():
-            place_id = self.place_entry.get().strip()
-            if not place_id or not place_id.isdigit():
-                self.game_name_label.config(text="")
-                return
+    def update_float_avatar(self, pixmap: "QPixmap"):
+        if self._float_win and self._float_av:
+            scaled = pixmap.scaled(
+                22, 22,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._float_av.setPixmap(scaled)
+            self._float_av.setStyleSheet("background: transparent;")
 
-            def worker(pid):
-                name = RobloxAPI.get_game_name(pid)
-                if name:
-                    max_name_length = 20
-                    if len(name) > max_name_length:
-                        name = name[:max_name_length-2] + ".."
-                    display_text = f"Current: {name}"
-                else:
-                    display_text = ""
-                
-                def update_label(text=display_text):
-                    try:
-                        self.game_name_label.config(text=text)
-                    except:
-                        pass
-                
-                self.root.after(0, update_label)
 
-            threading.Thread(target=worker, args=(place_id,), daemon=True).start()
+    def _compute_drop_row(self, local_pos) -> int:
+        count = self._list.count()
+        if count == 0:
+            return 0
 
-        self._game_name_after_id = self.root.after(350, schedule_fetch)
+        for row in range(count):
+            item = self._list.item(row)
+            if item is None:
+                continue
+            rect = self._list.visualItemRect(item)
+            mid = rect.top() + rect.height() // 2
+            if local_pos.y() < mid:
+                return row
 
-    def add_game_to_list(self, place_id, game_name, private_server=""):
-        """Add a game to the saved list (max based on settings)"""
-        for game in self.settings["game_list"]:
-            if game["place_id"] == place_id and game.get("private_server", "") == private_server:
-                return
-        
-        self.settings["game_list"].insert(0, {
-            "place_id": place_id,
-            "name": game_name,
-            "private_server": private_server
-        })
-        
-        max_games = self.settings.get("max_recent_games", 10)
-        if len(self.settings["game_list"]) > max_games:
-            self.settings["game_list"] = self.settings["game_list"][:max_games]
-        
-        self.save_settings()
-        self.refresh_game_list()
+        return count # below last item
 
-    def refresh_game_list(self):
-        """Refresh the game list display"""
-        self.game_list.delete(0, tk.END)
-        for game in self.settings["game_list"]:
-            private_server = game.get("private_server", "")
-            prefix = "[P] " if private_server else ""
-            display_text = f"{prefix}{game['name']} ({game['place_id']})"
-            self.game_list.insert(tk.END, display_text)
-
-    def on_game_select(self, event=None):
-        """Called when a game is selected from the list"""
-        selection = self.game_list.curselection()
-        if selection:
-            index = selection[0]
-            game = self.settings["game_list"][index]
-            self.place_entry.delete(0, tk.END)
-            self.place_entry.insert(0, game["place_id"])
-            self.settings["last_place_id"] = game["place_id"]
-            
-            private_server = game.get("private_server", "")
-            self.private_server_entry.delete(0, tk.END)
-            self.private_server_entry.insert(0, private_server)
-            self.settings["last_private_server"] = private_server
-            
-            self.save_settings()
-            self.update_game_name()
-
-    def delete_game_from_list(self):
-        """Delete selected game from the list"""
-        selection = self.game_list.curselection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a game to delete.")
+    def _show_indicator(self, insert_before: int):
+        count = self._list.count()
+        if count == 0:
+            self._indicator.hide()
             return
-        
-        index = selection[0]
-        game = self.settings["game_list"][index]
-        confirm = messagebox.askyesno("Confirm Delete", f"Delete '{game['name']}' from list?")
-        if confirm:
-            self.settings["game_list"].pop(index)
-            self.save_settings()
-            self.refresh_game_list()
-            messagebox.showinfo("Success", "Game removed from list!")
 
-    def _get_groups(self):
-        return self.settings.get("groups", {})
-
-    def _save_groups(self, groups):
-        self.settings["groups"] = groups
-        self.settings["group_collapsed"] = list(self._collapsed_groups)
-        self.save_settings()
-
-    def _get_username_group(self, username):
-        for gname, members in self._get_groups().items():
-            if username in members:
-                return gname
-        return None
-
-    def _add_account_to_group(self, username, group_name):
-        groups = self._get_groups()
-        if group_name not in groups:
-            groups[group_name] = []
-        for gn in list(groups):
-            if gn != group_name and username in groups[gn]:
-                groups[gn].remove(username)
-        if username not in groups[group_name]:
-            groups[group_name].append(username)
-        self._save_groups(groups)
-        self.refresh_accounts()
-
-    def _remove_account_from_group(self, username):
-        groups = self._get_groups()
-        for gn in list(groups):
-            if username in groups[gn]:
-                groups[gn].remove(username)
-        self._save_groups(groups)
-        self.refresh_accounts()
-
-    def _handle_group_header_click(self, index):
-        if index < 0 or index >= len(self._list_row_map):
-            return
-        kind, name = self._list_row_map[index]
-        if kind != "group_header":
-            return
-        if name in self._collapsed_groups:
-            self._collapsed_groups.discard(name)
+        if insert_before <= 0:
+            rect = self._list.visualItemRect(self._list.item(0))
+            y = rect.top()
+        elif insert_before >= count:
+            rect = self._list.visualItemRect(self._list.item(count - 1))
+            y = rect.bottom()
         else:
-            self._collapsed_groups.add(name)
-        self._save_groups(self._get_groups())
-        self.refresh_accounts()
+            rect = self._list.visualItemRect(self._list.item(insert_before))
+            y = rect.top()
 
-    def _build_group_header_text(self, group_name, member_count, collapsed):
-        arrow = "v" if collapsed else "^"
-        prefix = f" {group_name} ({member_count}) "
+        w = self._list.viewport().width()
+        self._indicator.setGeometry(0, y - 1, w, 2)
+        self._indicator.raise_()
+        self._indicator.show()
 
+    def abort(self):
+        self._hold_timer.stop()
+        self._dragging = False
+        self._drag_row = -1
+        self._drop_row = -1
+        self._list.unsetCursor()
+        if self._float_win:
+            self._float_win.hide()
+            self._float_win.deleteLater()
+            self._float_win = None
+        self._indicator.hide()
+
+    def cleanup(self):
+        self.abort()
+
+
+# Thread to Qt signal bridge
+class _Bridge(QObject):
+    account_added = Signal(bool, str) # (success, message) from add-account worker
+    game_name_ready = Signal(str) # display text for current-place label
+    launch_done = Signal(bool, str) # (success, message) from any join/launch worker
+    avatar_ready = Signal(str, object) # (username, image_bytes) from avatar worker
+    rejoin_status = Signal(str, str) # (account, status_str) from rejoin worker
+    afk_tooltip = Signal(str, int, int) # (message, x, y) pass None to hide
+    mr_download_done = Signal(bool) # (success) from download_handle64 worker
+    chromium_progress = Signal(int, str) # (percent 0-100, label text) from chromium download
+    chromium_done = Signal(bool, str) # (success, error_msg) from chromium download
+    presence_update = Signal(object) # set[str] of online usernames
+    cookie_validated = Signal(str, bool) # (username, is_valid) from validator worker
+    update_available = Signal(str) # (latest_version) from update check worker
+    update_progress = Signal(int) # (pct 0-100) from auto download worker
+    update_done = Signal(bool, str) # (success, error_msg) from auto download worker
+
+BG = "#0E0E0E"
+PANEL = "#151515"
+INPUT = "#1A1A1A"
+TEXT = "#EDEDED"
+MUTED = "#AAAAAA"
+LINE = "#242424"
+SELECT = "#2A2A2A"
+NOTE = "#D6BB7D"
+FG_ACCENT = "#0078D7"
+
+APP_VERSION = "2.5.0"
+
+class _FloatingTooltip(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.WindowType.ToolTip |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        self._label = QLabel("", self)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT};
+                background-color: {PANEL};
+                border: 1px solid {LINE};
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._label)
+
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(150)
+        self._update_timer.timeout.connect(self._follow_cursor)
+
+        self.hide()
+
+    def show_message(self, message: str, x: int, y: int):
+        if not message:
+            self._update_timer.stop()
+            super().hide()
+            return
+        self._label.setText(message)
+        self.adjustSize()
+        self._place_at(x, y)
+        super().show()
+        self._update_timer.start()
+
+    def hide(self):
+        self._update_timer.stop()
+        super().hide()
+
+    def _place_at(self, x: int, y: int):
+        sx, sy = x + 20, y + 20
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            sx = min(sx, geo.right()  - self.width()  - 8)
+            sy = min(sy, geo.bottom() - self.height() - 8)
+            sx = max(sx, geo.left() + 8)
+            sy = max(sy, geo.top()  + 8)
+        self.move(sx, sy)
+
+    def _follow_cursor(self):
+        if not self.isVisible():
+            self._update_timer.stop()
+            return
         try:
-            lb_font = tkfont.Font(font=self.account_list.cget("font"))
-            list_width = self.account_list.winfo_width()
-            if list_width <= 1:
-                list_width = 220
-            usable = list_width - 4
-            prefix_px = lb_font.measure(prefix)
-            suffix_reserved = max(lb_font.measure(" v "), lb_font.measure(" ^ "))
-            dash_px = lb_font.measure("\u2500")
-            remaining = usable - prefix_px - suffix_reserved
-            if remaining > 0 and dash_px > 0:
-                n_dashes = remaining // dash_px
-            else:
-                n_dashes = 3
-        except Exception:
-            n_dashes = 10
 
-        dash_char = "\u2500"
-        dashes = dash_char * max(3, n_dashes)
-        return f"{prefix}{dashes} {arrow} "
-
-    def _show_group_context_menu(self, event, group_name):
-        """Right-click menu on a group header."""
-        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
-            try: self.account_context_menu.destroy()
-            except: pass
-
-        menu = tk.Toplevel(self.root)
-        menu.overrideredirect(True)
-        menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
-        self.account_context_menu = menu
-
-        def _btn(text, cmd):
-            b = tk.Button(menu, text=text, anchor="w", relief="flat",
-                          bg=self.BG_MID, fg=self.FG_TEXT,
-                          activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
-                          font=("Segoe UI", 9), bd=0, highlightthickness=0,
-                          command=lambda: [self.hide_account_context_menu(), cmd()])
-            b.pack(fill="x", padx=2, pady=1)
-
-        _btn("Rename Group", lambda: self._rename_group_dialog(group_name))
-        _btn("Delete Group", lambda: self._delete_group(group_name))
-
-        menu.geometry(f"+{event.x_root}+{event.y_root}")
-        menu.update_idletasks()
-        if self.settings.get("enable_topmost", False):
-            menu.attributes("-topmost", True)
-        menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
-        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
-
-    def _create_group_dialog(self):
-        """Dialog to create a new group."""
-        dlg = tk.Toplevel(self.root)
-        self.apply_window_icon(dlg)
-        dlg.title("Create Group")
-        dlg.geometry("300x120")
-        dlg.configure(bg=self.BG_DARK)
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-
-        dlg.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
-        dlg.geometry(f"+{x}+{y}")
-
-        if self.settings.get("enable_topmost", False):
-            dlg.attributes("-topmost", True)
-
-        ttk.Label(dlg, text="Group Name:", style="Dark.TLabel").pack(padx=10, pady=(10, 2), anchor="w")
-        entry = ttk.Entry(dlg, style="Dark.TEntry")
-        entry.pack(fill="x", padx=10)
-        entry.focus_set()
-
-        def do_create(e=None):
-            name = entry.get().strip()
-            if not name:
-                return
-            groups = self._get_groups()
-            if name in groups:
-                messagebox.showwarning("Exists", f"Group '{name}' already exists.", parent=dlg)
-                return
-            groups[name] = []
-            self._save_groups(groups)
-            dlg.destroy()
-            self.refresh_accounts()
-
-        entry.bind("<Return>", do_create)
-        ttk.Button(dlg, text="Create", style="Dark.TButton", command=do_create).pack(pady=10)
-
-    def _rename_group_dialog(self, old_name):
-        """Dialog to rename a group."""
-        dlg = tk.Toplevel(self.root)
-        self.apply_window_icon(dlg)
-        dlg.title("Rename Group")
-        dlg.geometry("300x120")
-        dlg.configure(bg=self.BG_DARK)
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-
-        dlg.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
-        dlg.geometry(f"+{x}+{y}")
-
-        if self.settings.get("enable_topmost", False):
-            dlg.attributes("-topmost", True)
-
-        ttk.Label(dlg, text="New Name:", style="Dark.TLabel").pack(padx=10, pady=(10, 2), anchor="w")
-        entry = ttk.Entry(dlg, style="Dark.TEntry")
-        entry.pack(fill="x", padx=10)
-        entry.insert(0, old_name)
-        entry.select_range(0, tk.END)
-        entry.focus_set()
-
-        def do_rename(e=None):
-            new_name = entry.get().strip()
-            if not new_name or new_name == old_name:
-                dlg.destroy()
-                return
-            groups = self._get_groups()
-            if new_name in groups:
-                messagebox.showwarning("Exists", f"Group '{new_name}' already exists.", parent=dlg)
-                return
-            members = groups.pop(old_name, [])
-            groups[new_name] = members
-            if old_name in self._collapsed_groups:
-                self._collapsed_groups.discard(old_name)
-                self._collapsed_groups.add(new_name)
-            self._save_groups(groups)
-            dlg.destroy()
-            self.refresh_accounts()
-
-        entry.bind("<Return>", do_rename)
-        ttk.Button(dlg, text="Rename", style="Dark.TButton", command=do_rename).pack(pady=10)
-
-    def _delete_group(self, group_name):
-        """Delete a group"""
-        if not messagebox.askyesno("Delete Group", f"Delete group '{group_name}'?\nAccounts will be ungrouped."):
-            return
-        groups = self._get_groups()
-        groups.pop(group_name, None)
-        self._collapsed_groups.discard(group_name)
-        self._save_groups(groups)
-        self.refresh_accounts()
-
-    def _on_account_list_scroll(self, first, last):
-        if hasattr(self, "account_list_scrollbar") and self.account_list_scrollbar:
-            try:
-                self.account_list_scrollbar.set(first, last)
-            except Exception:
-                pass
-        self._schedule_active_instance_indicator_sync()
-
-    def _schedule_active_instance_indicator_sync(self):
-        if self._active_instance_indicator_sync_after is not None:
-            try:
-                self.root.after_cancel(self._active_instance_indicator_sync_after)
-            except Exception:
-                pass
-        self._active_instance_indicator_sync_after = self.root.after(0, self._sync_active_instance_indicators)
-
-    def _clear_active_instance_indicators(self):
-        if self._active_instance_indicator_sync_after is not None:
-            try:
-                self.root.after_cancel(self._active_instance_indicator_sync_after)
-            except Exception:
-                pass
-            self._active_instance_indicator_sync_after = None
-
-        for widget in list(self._active_instance_indicators.values()):
-            try:
-                widget.destroy()
-            except Exception:
-                pass
-        self._active_instance_indicators = {}
-
-    def _sync_active_instance_indicators(self):
-        self._active_instance_indicator_sync_after = None
-
-        if not hasattr(self, "account_list") or not self.account_list.winfo_exists():
-            return
-
-        self._clear_active_instance_indicators()
-
-        if not self.settings.get("active_instances_monitoring", False):
-            return
-
-        active_usernames = getattr(self, "_active_instance_usernames", set()) or set()
-        if not active_usernames:
-            return
-
-        try:
-            self.account_list.update_idletasks()
+            pt = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            self._place_at(pt.x, pt.y)
         except Exception:
             pass
 
-        dot_color = "#3DDC84"
-        dot_outline = "#2FAF67"
-        normal_bg = self.account_list.cget("bg")
-        selected_bg = self.account_list.cget("selectbackground")
+class _StderrToConsole:
+    def __init__(self, orig_stderr, stdout_interceptor):
+        self._orig = orig_stderr
+        self._stdout = stdout_interceptor # WebhookStdoutInterceptor
+        self._buf = ""
 
-        for index, (kind, username) in enumerate(self._list_row_map):
-            if kind != "account" or username.lower() not in active_usernames:
-                continue
+    def write(self, text: str) -> None:
+        if self._orig is not None:
+            self._orig.write(text)
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.rstrip("\r")
+            if line.strip():
+                if not any(line.startswith(p) for p in
+                           ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
+                    line = f"[ERROR] {line}"
+                self._stdout.write(line + "\n")
 
-            bbox = self.account_list.bbox(index)
-            if not bbox:
-                continue
+    def flush(self) -> None:
+        if self._orig is not None:
+            self._orig.flush()
 
-            x, y, width, height = bbox
-            row_bg = selected_bg if self.account_list.selection_includes(index) else normal_bg
-            dot = tk.Canvas(
-                self.account_list,
-                width=8,
-                height=8,
-                bg=row_bg,
-                highlightthickness=0,
-                bd=0,
-            )
-            dot.create_oval(0, 0, 7, 7, fill=dot_color, outline=dot_outline)
-            dot.place(x=4, y=y + max(0, (height - 8) // 2))
-            self._active_instance_indicators[username] = dot
-
-    def refresh_accounts(self):
-        """Refresh the account list"""
-        needs_rerender = self.account_list.winfo_width() <= 1
-
-        self._clear_active_instance_indicators()
-
-        self.account_list.delete(0, tk.END)
-        self._list_row_map = []
-        groups = self._get_groups()
-
-        if self.settings.get("active_instances_monitoring", False):
-            try:
-                self._active_instance_usernames = set([u.lower() for u in self._get_active_instance_usernames()])
-            except Exception:
-                self._active_instance_usernames = set()
-        else:
-            self._active_instance_usernames = set()
-
-        grouped_usernames = set()
-        for members in groups.values():
-            grouped_usernames.update(members)
-
-        for username, data in self.manager.accounts.items():
-            if username in grouped_usernames:
-                continue
-            self._insert_account_row(username, data)
-
-        for gname, members in groups.items():
-            collapsed = gname in self._collapsed_groups
-            visible_members = [u for u in members if u in self.manager.accounts]
-            header_text = self._build_group_header_text(gname, len(visible_members), collapsed)
-            idx = self.account_list.size()
-            self.account_list.insert(tk.END, header_text)
-            self._list_row_map.append(("group_header", gname))
-            self.account_list.itemconfig(
-                idx,
-                fg=self.FG_ACCENT,
-                bg=self.BG_MID,
-                selectbackground=self.BG_MID,
-                selectforeground=self.FG_ACCENT,
-            )
-            if not collapsed:
-                for uname in visible_members:
-                    self._insert_account_row(uname, self.manager.accounts[uname])
-
-        last_joined = self.settings.get("last_joined_user", "")
-        if last_joined:
-            for i, (kind, val) in enumerate(self._list_row_map):
-                if kind == "account" and val == last_joined:
-                    self.account_list.selection_clear(0, tk.END)
-                    self.account_list.selection_set(i)
-                    self.account_list.see(i)
-                    break
-
-        self._schedule_active_instance_indicator_sync()
-
-        if needs_rerender:
-            self.root.after(50, self.refresh_accounts)
-
-    def _insert_account_row(self, username, data):
-        """Insert a single account row into the Listbox and _list_row_map."""
-        note = data.get('note', '') if isinstance(data, dict) else ''
-        cookie_valid = self.cookie_status.get(username)
-        
-        is_active = (self.settings.get("active_instances_monitoring", False) and
-                    getattr(self, '_active_instance_usernames', set()) and 
-                    username.lower() in self._active_instance_usernames)
-        
-        if cookie_valid is False:
-            base_text = f"\u26a0 {username}"
-        else:
-            base_text = f"{username}"
-        if note:
-            base_text += f" \u2022 {note}"
-        
-        if is_active:
-            display_text = f"    {base_text}"
-        else:
-            display_text = base_text
-        
-        idx = self.account_list.size()
-        self.account_list.insert(tk.END, display_text)
-        self._list_row_map.append(("account", username))
-        if cookie_valid is False:
-            self.account_list.itemconfig(idx, fg="#FFB347")
-
-    def on_account_list_hover(self, event):
-        """Show tooltip when hovering over an expired account row"""
-        index = self.account_list.nearest(event.y)
-        
-        if index < 0 or index >= self.account_list.size():
-            self.hide_account_tooltip()
-            return
-        
-        if index == self.account_tooltip_last_index:
-            return
-        
-        self.hide_account_tooltip()
-        self.account_tooltip_last_index = index
-        
-        display_text = self.account_list.get(index)
-        if not display_text.startswith('\u26a0 '):
-            return
-        
-        username = self.extract_username_from_display(display_text)
-        
-        def create_tooltip():
-            if self.account_tooltip:
-                return
-            
-            x_pos = event.x_root + 15
-            y_pos = event.y_root + 15
-            
-            self.account_tooltip = tk.Toplevel(self.root)
-            self.account_tooltip.wm_overrideredirect(True)
-            self.account_tooltip.wm_geometry(f"+{x_pos}+{y_pos}")
-            
-            label = tk.Label(
-                self.account_tooltip,
-                text=f"Cookie expired for '{username}'.\nPlease remove this account and add it again.",
-                bg=self.BG_DARK,
-                fg=self.FG_TEXT,
-                font=(self.FONT_FAMILY, 9),
-                padx=8,
-                pady=4,
-                relief="solid",
-                borderwidth=1
-            )
-            label.pack()
-            
-            if self.settings.get("enable_topmost", False):
-                self.account_tooltip.attributes("-topmost", True)
-        
-        self.account_tooltip_timer = self.root.after(500, create_tooltip)
-    
-    def on_account_list_leave(self, event):
-        """Hide tooltip when leaving the account list"""
-        self.hide_account_tooltip()
-    
-    def hide_account_tooltip(self):
-        """Hide the account list tooltip"""
-        if self.account_tooltip_timer:
-            self.root.after_cancel(self.account_tooltip_timer)
-            self.account_tooltip_timer = None
-        
-        if self.account_tooltip:
-            self.account_tooltip.destroy()
-            self.account_tooltip = None
-        
-        self.account_tooltip_last_index = None
-    
-    def extract_username_from_display(self, display_text):
-        """Extract username from display text (handles indicators like ⚠ and ●)"""
-        username_part = display_text.split(' • ')[0]
-        
-        username_part = username_part.strip()
-        if username_part.startswith('● '):
-            username_part = username_part[2:]
-        if username_part.startswith('⚠ '):
-            username_part = username_part[2:]
-        
-        return username_part.strip()
-    
-    def _send_webhook(self, url, content):
-        def _post():
-            try:
-                requests.post(url, json={"content": content}, timeout=5)
-            except Exception as e:
-                print(f"[ERROR] Failed to send webhook: {e}")
-        threading.Thread(target=_post, daemon=True).start()
-
-    def _send_webhook_embed(self, url, title, description, color, ping_user_id=None):
-        def _post():
-            try:
-                payload = {
-                    "content": f"<@{ping_user_id}>" if ping_user_id else "",
-                    "embeds": [{
-                        "title": title,
-                        "description": description,
-                        "color": color,
-                        "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                    }],
-                    "attachments": []
-                }
-                requests.post(url, json=payload, timeout=5)
-            except Exception as e:
-                print(f"[ERROR] Failed to send webhook embed: {e}")
-        threading.Thread(target=_post, daemon=True).start()
-
-    def _maybe_send_webhook_embed(self, title, description, color, ping_user_id=None):
+    def fileno(self) -> int:
         try:
-            webhook_cfg = self.settings.get("discord_webhook", {})
-            url = str(webhook_cfg.get("url", "") or "").strip()
-            if webhook_cfg.get("enabled") and url:
-                self._send_webhook_embed(url, title, description, color, ping_user_id=ping_user_id)
+            return self._orig.fileno()
         except Exception:
-            pass
+            return -1
 
-    def _get_webhook_cfg(self):
-        return self.settings.get("discord_webhook", {})
+class AccountManagerUIQt(QMainWindow): # Main Window
+    def __init__(self, manager, icon_path: str | None = None):
+        super().__init__()
+        self.manager = manager
 
-    def _webhook_enabled(self):
-        cfg = self._get_webhook_cfg()
-        return bool(cfg.get("enabled") and str(cfg.get("url", "") or "").strip())
-
-    def _webhook_screenshot_enabled(self):
-        cfg = self._get_webhook_cfg()
-        return bool(cfg.get("screenshot_enabled"))
-
-    def _webhook_screenshot_interval_minutes(self):
-        cfg = self._get_webhook_cfg()
-        try:
-            return max(1, int(cfg.get("screenshot_interval_minutes", 60)))
-        except Exception:
-            return 60
-
-    def _maybe_log_message(self, message: str):
-        try:
-            if not self._webhook_enabled():
-                return
-            url = str(self._get_webhook_cfg().get("url", "") or "").strip()
-            if not url:
-                return
-            self._send_webhook_embed(url, "Log", f"```{message}```", 0x5865F2)
-        except Exception:
-            pass
-
-    def _capture_screenshot_png(self):
-        tmp_path = None
-        try:
-            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            tmp_path = tmp.name
-            tmp.close()
-
-            ps = (
-                "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
-                "$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
-                "$b=New-Object System.Drawing.Bitmap($s.Width,$s.Height); "
-                "$g=[System.Drawing.Graphics]::FromImage($b); "
-                "$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size); "
-                f"$b.Save('{tmp_path}',[System.Drawing.Imaging.ImageFormat]::Png); "
-                "$g.Dispose();$b.Dispose()"
-            )
-            result = subprocess.run(
-                ["powershell", "-NonInteractive", "-Command", ps],
-                capture_output=True, timeout=15,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr.decode("utf-8", errors="ignore") if isinstance(result.stderr, bytes) else result.stderr)
-            with open(tmp_path, 'rb') as f:
-                return f.read()
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-
-    def _send_webhook_screenshot(self, url, caption=""):
-        try:
-            image_bytes = self._capture_screenshot_png()
-            if not image_bytes:
-                return
-
-            def _post():
-                try:
-                    with BytesIO(image_bytes) as image_stream:
-                        image_stream.seek(0)
-                        requests.post(
-                            url,
-                            data={"content": caption},
-                            files={"file": ("screenshot.png", image_stream, "image/png")},
-                            timeout=10,
-                        )
-                except Exception as e:
-                    print(f"[ERROR] Webhook screenshot send failed: {e}")
-
-            threading.Thread(target=_post, daemon=True).start()
-        except Exception as e:
-            print(f"[ERROR] Screenshot send failed: {e}")
-
-    def _get_roblox_hwnds_from_pids(self, pids):
-        hwnds = []
-        def _cb(hwnd, _):
-            try:
-                if win32gui.IsWindowVisible(hwnd):
-                    _, wpid = win32process.GetWindowThreadProcessId(hwnd)
-                    if wpid in pids:
-                        title = win32gui.GetWindowText(hwnd)
-                        if title:
-                            hwnds.append(hwnd)
-            except Exception:
-                pass
-            return True
-        win32gui.EnumWindows(_cb, None)
-        return hwnds
-
-    def _get_active_instance_usernames(self):
-        """Return a list of usernames that correspond to currently running Roblox instances.
-
-        Uses existing PID -> user id helpers and RobloxAPI username lookup. Results are
-        de-duplicated and returned as a list of lowercase usernames for comparison.
-        """
-        res = []
-        try:
-            pids = sorted(self._get_roblox_pids())
-            used = set()
-            for pid in pids:
-                try:
-                    user_id, _ = self._get_user_id_from_pid(pid, used)
-                    if user_id:
-                        uid = int(user_id)
-                        uname = self.instances_cache.get("user_id_to_username", {}).get(uid)
-                        if not uname:
-                            try:
-                                uname = RobloxAPI.get_username_from_user_id(uid) or None
-                            except Exception:
-                                uname = None
-                            if uname:
-                                self.instances_cache.setdefault("user_id_to_username", {})[uid] = uname
-                        if uname:
-                            res.append(str(uname))
-                except Exception:
-                    continue
-        except Exception:
-            return []
-        seen = set()
-        out = []
-        for u in res:
-            key = u.lower()
-            if key not in seen:
-                seen.add(key)
-                out.append(u)
-        return out
-
-    def _tile_roblox_windows(self):
-        pids = self._get_roblox_pids()
-        if not pids:
-            return
-        hwnds = self._get_roblox_hwnds_from_pids(pids)
-        n = len(hwnds)
-        if n == 0:
-            return
-        try:
-            screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-            screen_h = ctypes.windll.user32.GetSystemMetrics(1)
-            cols = math.ceil(math.sqrt(n))
-            rows = math.ceil(n / cols)
-            win_w = screen_w // cols
-            win_h = screen_h // rows
-            for i, hwnd in enumerate(hwnds):
-                col = i % cols
-                row = i // cols
-                x = col * win_w
-                y = row * win_h
-                try:
-                    win32gui.ShowWindow(hwnd, 9)
-                    win32gui.MoveWindow(hwnd, x, y, win_w, win_h, True)
-                except Exception as e:
-                    print(f"[ERROR] Could not move window {hwnd}: {e}")
-            print(f"[INFO] Tiled {n} Roblox window(s) in a {cols}×{rows} grid.")
-        except Exception as e:
-            print(f"[ERROR] Error tiling windows: {e}")
-
-    def _tile_roblox_windows_after_launch(self):
-        prev_count = len(self._get_roblox_pids())
-        deadline = time.time() + 45
-        while time.time() < deadline:
-            time.sleep(3)
-            curr_count = len(self._get_roblox_pids())
-            if curr_count > prev_count:
-                time.sleep(6)
+        for candidate in [
+            icon_path,
+            os.path.join(_ROOT_DIR, "icon.ico"),
+            os.path.join(_ROOT_DIR, "AccountManagerData", "icon.ico"),
+        ]:
+            if candidate and os.path.exists(candidate):
+                self._icon_path = candidate
                 break
-        self._tile_roblox_windows()
+        else:
+            self._icon_path = None
 
-    def _save_cookie_status(self, username, is_valid):
-        """Update cookie status in memory and persist to accounts file"""
-        self.cookie_status[username] = is_valid
-        if username in self.manager.accounts and isinstance(self.manager.accounts[username], dict):
-            self.manager.accounts[username]['cookie_valid'] = is_valid
+        self._drag_pos = QPoint()
+        self._game_name_timer = QTimer(self)
+        self._game_name_timer.setSingleShot(True)
+        self._game_name_timer.timeout.connect(self._do_fetch_game_name)
 
-    def _silent_check_cookies(self):
-        """Trigger a background silent cookie check. Safe to call from any thread."""
-        if getattr(self, '_cookie_check_running', False):
-            return
-        threading.Thread(target=self._silent_check_cookies_worker, daemon=True).start()
-
-    def _silent_check_cookies_worker(self):
-        """Check all accounts not already known invalid."""
-        if getattr(self, '_cookie_check_running', False):
-            return
-        self._cookie_check_running = True
-        try:
-            accounts = [u for u in self.manager.accounts
-                        if self.cookie_status.get(u) is not False]
-            if not accounts:
-                return
-            changed = False
-            for username in accounts:
-                try:
-                    is_valid = self.manager.validate_account(username)
-                    self._save_cookie_status(username, is_valid)
-                    changed = True
-                except Exception as e:
-                    print(f"[ERROR] Cookie check failed for {username}: {e}")
-            if changed:
-                self.manager.save_accounts()
-                self.root.after(0, self.refresh_accounts)
-        finally:
-            self._cookie_check_running = False
-    
-    def on_drag_start(self, event):
-        """Initiate drag - store position and wait for hold"""
-        widget = event.widget
-        index = widget.nearest(event.y)
-        
-        if self.drag_data["hold_timer"]:
-            self.root.after_cancel(self.drag_data["hold_timer"])
-        
-        if index >= 0:
-            if index < len(self._list_row_map) and self._list_row_map[index][0] == "group_header":
-                widget.selection_clear(0, tk.END)
-                try:
-                    lb_font = tkfont.Font(font=widget.cget("font"))
-                    arrow_zone = max(lb_font.measure(" v "), lb_font.measure(" ^ ")) + 4
-                    list_width = widget.winfo_width()
-                    if event.x >= list_width - arrow_zone - 4:
-                        self._handle_group_header_click(index)
-                    else:
-                        group_name = self._list_row_map[index][1]
-                        for i, (kind, val) in enumerate(self._list_row_map):
-                            if kind == "account" and self._get_username_group(val) == group_name:
-                                widget.selection_set(i)
-                except Exception:
-                    self._handle_group_header_click(index)
-                return
-
-            self.drag_data["index"] = index
-            self.drag_data["item"] = widget.get(index)
-            self.drag_data["start_x"] = event.x
-            self.drag_data["start_y"] = event.y
-            self.drag_data["dragging"] = False
-            
-            if not self.settings.get("enable_multi_select", False):
-                widget.selection_clear(0, tk.END)
-                widget.selection_set(index)
-            
-            self.drag_data["hold_timer"] = self.root.after(500, lambda: self.activate_drag(event))
-    
-    def activate_drag(self, event):
-        """Activate dragging after hold timer"""
-        self.drag_data["dragging"] = True
-        self.drag_data["hold_timer"] = None
-        
-        if not self.drag_indicator:
-            self.drag_indicator = tk.Toplevel(self.root)
-            self.drag_indicator.overrideredirect(True)
-            self.drag_indicator.attributes("-alpha", 0.7)
-            self.drag_indicator.attributes("-topmost", True)
-            
-            label = tk.Label(
-                self.drag_indicator,
-                text=self.drag_data["item"],
-                bg=self.BG_LIGHT,
-                fg=self.FG_TEXT,
-                font=("Segoe UI", 10),
-                padx=10,
-                pady=5,
-                relief="raised",
-                borderwidth=2
+        if sys.stdout is not None and not isinstance(sys.stdout, webhook.WebhookStdoutInterceptor):
+            sys.stdout = webhook.WebhookStdoutInterceptor(
+                sys.stdout,
+                get_cfg=lambda: actions.load_ui_settings().get("discord_webhook", {}),
             )
-            label.pack()
-            
-            x = self.root.winfo_pointerx() + 10
-            y = self.root.winfo_pointery() + 10
-            self.drag_indicator.geometry(f"+{x}+{y}")
-    
-    def on_drag_motion(self, event):
-        """Handle drag motion, show indicator and highlight drop position"""
-        if self.drag_data["hold_timer"] and self.drag_data["index"] is not None:
-            dx = abs(event.x - self.drag_data["start_x"])
-            dy = abs(event.y - self.drag_data["start_y"])
-            if dx > 5 or dy > 5:
-                self.root.after_cancel(self.drag_data["hold_timer"])
-                self.drag_data["hold_timer"] = None
-        
-        if not self.drag_data["dragging"] or self.drag_data["index"] is None:
-            return
-        
-        widget = event.widget
-        
-        if self.drag_indicator:
-            x = event.x_root + 10
-            y = event.y_root + 10
-            self.drag_indicator.geometry(f"+{x}+{y}")
-        
-        index = widget.nearest(event.y)
-        if index >= 0:
-            if not self.settings.get("enable_multi_select", False):
-                widget.selection_clear(0, tk.END)
-            widget.selection_set(index)
-    
-    def on_drag_release(self, event):
-        """Release drag and reorder accounts"""
-        try:
-            if self.drag_data["hold_timer"]:
-                self.root.after_cancel(self.drag_data["hold_timer"])
-                self.drag_data["hold_timer"] = None
-            
-            if not self.drag_data["dragging"] or self.drag_data["index"] is None:
-                return
-            
-            widget = event.widget
-            drop_index = widget.nearest(event.y)
-            drag_index = self.drag_data["index"]
-            
-            if drop_index >= 0 and drag_index != drop_index:
-                if drop_index < len(self._list_row_map) and self._list_row_map[drop_index][0] == "group_header":
-                    group_name = self._list_row_map[drop_index][1]
-                    if drag_index < len(self._list_row_map) and self._list_row_map[drag_index][0] == "account":
-                        username = self._list_row_map[drag_index][1]
-                        self._add_account_to_group(username, group_name)
-                    return
+        if sys.stderr is not None and not isinstance(sys.stderr, _StderrToConsole):
+            sys.stderr = _StderrToConsole(sys.stderr, sys.stdout)
 
-                ordered_usernames = list(self.manager.accounts.keys())
-                
-                if drag_index < len(self._list_row_map) and self._list_row_map[drag_index][0] == "account":
-                    drag_username = self._list_row_map[drag_index][1]
-                else:
-                    return
-                
-                if drag_username not in ordered_usernames:
-                    return
-                old_pos = ordered_usernames.index(drag_username)
-                ordered_usernames.pop(old_pos)
-                
-                if drop_index < len(self._list_row_map) and self._list_row_map[drop_index][0] == "account":
-                    drop_username = self._list_row_map[drop_index][1]
-                    if drop_username in ordered_usernames:
-                        new_pos = ordered_usernames.index(drop_username)
-                        ordered_usernames.insert(new_pos, drag_username)
-                    else:
-                        ordered_usernames.append(drag_username)
-                else:
-                    ordered_usernames.append(drag_username)
-                
-                new_accounts = {}
-                for uname in ordered_usernames:
-                    new_accounts[uname] = self.manager.accounts[uname]
-                
-                self.manager.accounts = new_accounts
-                self.manager.save_accounts()
-                
-                self.refresh_accounts()
-                
-                if not self.settings.get("enable_multi_select", False):
-                    widget.selection_clear(0, tk.END)
-                    widget.selection_set(drop_index)
-        finally:
-            if self.drag_indicator:
-                self.drag_indicator.destroy()
-                self.drag_indicator = None
-            
-            self.drag_data = {
-                "item": None, 
-                "index": None, 
-                "start_x": 0, 
-                "start_y": 0,
-                "dragging": False,
-                "hold_timer": None
-            }
-    
-    def get_selected_username(self):
-        """Get the currently selected username"""
-        selection = self.account_list.curselection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select an account first.")
-            return None
-        
-        idx = selection[0]
-        if idx < len(self._list_row_map) and self._list_row_map[idx][0] == "group_header":
-            group_name = self._list_row_map[idx][1]
-            for kind, val in self._list_row_map:
-                if kind == "account" and self._get_username_group(val) == group_name:
-                    return val
-            messagebox.showwarning("Empty Group", f"Group '{group_name}' has no accounts.")
-            return None
-        
-        display_text = self.account_list.get(idx)
-        username = self.extract_username_from_display(display_text)
-        return username
-    
-    def get_selected_usernames(self):
-        """Get all selected usernames (for multi-select mode)"""
-        selections = self.account_list.curselection()
-        if not selections:
-            messagebox.showwarning("No Selection", "Please select at least one account first.")
-            return []
-        
-        usernames = []
-        seen = set()
-        for index in selections:
-            if index >= len(self._list_row_map):
-                continue
-            kind, val = self._list_row_map[index]
-            if kind == "group_header":
-                group_name = val
-                for k2, v2 in self._list_row_map:
-                    if k2 == "account" and self._get_username_group(v2) == group_name and v2 not in seen:
-                        usernames.append(v2)
-                        seen.add(v2)
-            else:
-                if val not in seen:
-                    display_text = self.account_list.get(index)
-                    username = self.extract_username_from_display(display_text)
-                    usernames.append(username)
-                    seen.add(username)
-        return usernames
-
-    def _copy_text_to_clipboard(self, text):
-        try:
-            win32clipboard.OpenClipboard()
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardText(str(text), win32clipboard.CF_UNICODETEXT)
-            win32clipboard.CloseClipboard()
-        except Exception:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(str(text))
-            self.root.update()
-
-    def _build_copy_export_lines(self, usernames, mode):
-        lines = []
-
-        for username in usernames:
-            account = self.manager.accounts.get(username)
-            if not isinstance(account, dict):
-                continue
-
-            account_username = str(account.get("username") or username).strip() or username
-            user_id = account.get("user_id", 0)
-            password = str(account.get("password") or "").strip()
-            cookie = str(account.get("cookie") or "").strip()
-
-            if mode == "username":
-                value = account_username
-            elif mode == "userid":
-                value = str(user_id).strip() if user_id else ""
-            elif mode == "password":
-                value = password
-            elif mode == "cookie":
-                value = cookie
-            elif mode == "userpass":
-                if not account_username or not password:
-                    continue
-                value = f"{account_username}:{password}"
-            else:
-                value = ""
-
-            if value:
-                lines.append(value)
-
-        return lines
-
-    def _export_copy_text_file(self, action_name, text):
-        export_folder = os.path.join(self.data_folder, "exports")
-        os.makedirs(export_folder, exist_ok=True)
-
-        safe_action = re.sub(r"[^A-Za-z0-9._-]+", "_", str(action_name).strip()).strip("_") or "export"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_path = os.path.join(export_folder, f"{safe_action}_{timestamp}.txt")
-
-        with open(export_path, "w", encoding="utf-8", newline="\n") as export_file:
-            export_file.write(text)
-
-        return export_path
-
-    def _copy_or_export_accounts(self, usernames, mode, action_name, export_label):
-        lines = self._build_copy_export_lines(usernames, mode)
-        if not lines:
-            messagebox.showwarning("Copy", f"No {export_label.lower()} data found for the selected account(s).")
-            return
-
-        text = "\n".join(lines)
-        self._copy_text_to_clipboard(text)
-
-        if len(usernames) > 1:
-            try:
-                export_path = self._export_copy_text_file(action_name, text)
-                messagebox.showinfo("Exported", f"{export_label} exported to:\n{export_path}")
-            except Exception as exc:
-                messagebox.showerror("Export Failed", f"Could not export {export_label.lower()}:\n{exc}")
-
-    def add_account(self):
-        """
-        Add a new account using browser automation
-        """
-        browser_path, browser_name = self.get_browser_path()
-        
-        if not browser_path:
-            messagebox.showwarning(
-                "Browser Required",
-                "Add Account requires a browser.\n\n"
-                "Please either:\n"
-                "• Install Google Chrome, or\n"
-                "• Download Chromium in Settings → Tools → Browser Engine"
-            )
-            return
-
-        messagebox.showinfo("Add Account", f"Browser ({browser_name}) will open for account login.\nPlease log in and wait for the process to complete.")
-        
-        def add_account_thread():
-            """
-            Thread function to add account without blocking UI
-            """
-            try:
-                success = self.manager.add_account(1, "https://www.roblox.com/login", "", browser_path)
-                self.root.after(0, lambda: self._add_account_complete(success))
-            except Exception as e:
-                self.root.after(0, lambda: self._add_account_error(str(e)))
-        
-        thread = threading.Thread(target=add_account_thread, daemon=True)
-        thread.start()
-    
-    def _add_account_complete(self, success):
-        """
-        Called when account addition completes (on main thread)
-        """
-        if success:
-            self.refresh_accounts()
-            messagebox.showinfo("Success", "Account added successfully!")
-        else:
-            messagebox.showerror("Error", "Failed to add account.\nPlease make sure you completed the login process.")
-    
-    def _add_account_error(self, error_msg):
-        """
-        Called when account addition encounters an error (on main thread)
-        """
-        messagebox.showerror("Error", f"Failed to add account: {error_msg}")
-    
-    def import_cookie(self):
-        """
-        Import an account using a .ROBLOSECURITY cookie
-        """
-        import_window = tk.Toplevel(self.root)
-        self.apply_window_icon(import_window)
-        import_window.title("Import Cookie")
-        import_window.geometry("450x250")
-        import_window.configure(bg=self.BG_DARK)
-        import_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 250) // 2
-        import_window.geometry(f"450x250+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            import_window.attributes("-topmost", True)
-        
-        import_window.transient(self.root)
-        import_window.grab_set()
-        
-        main_frame = ttk.Frame(import_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Import Account from Cookie",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 15))
-        
-        ttk.Label(main_frame, text="Cookie(s)", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        cookie_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        cookie_frame.pack(fill="both", expand=True, pady=(0, 15))
-        
-        cookie_text = tk.Text(
-            cookie_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            height=5,
-            wrap="word"
+        self._console_queue = (
+            sys.stdout._console_queue
+            if isinstance(sys.stdout, webhook.WebhookStdoutInterceptor)
+            else collections.deque(maxlen=2000)
         )
-        cookie_text.pack(side="left", fill="both", expand=True)
-        
-        cookie_scrollbar = ttk.Scrollbar(cookie_frame, command=cookie_text.yview)
-        cookie_scrollbar.pack(side="right", fill="y")
-        cookie_text.config(yscrollcommand=cookie_scrollbar.set)
-        
-        def do_import():
-            cookie_input = cookie_text.get("1.0", "end-1c").strip()
-            
-            if not cookie_input:
-                messagebox.showwarning("Missing Information", "Please enter the cookie(s).")
-                return
-            
-            cookies = []
-            if "_|WARNING:-" in cookie_input:
-                parts = cookie_input.split("_|WARNING:-")
-                for part in parts:
-                    if part.strip():
-                        cookies.append("_|WARNING:-" + part.strip())
-            else:
-                cookies = [cookie_input]
-            
-            imported_count = 0
-            failed_count = 0
-            imported_accounts = []
-            
-            for cookie in cookies:
-                try:
-                    success, username = self.manager.import_cookie_account(cookie)
-                    if success:
-                        imported_count += 1
-                        imported_accounts.append(username)
-                    else:
-                        failed_count += 1
-                except Exception as e:
-                    failed_count += 1
-                    print(f"[ERROR] Failed to import cookie: {e}")
-            
-            self.refresh_accounts()
-            
-            if imported_count > 0:
-                if imported_count == 1:
-                    messagebox.showinfo("Success", f"Account '{imported_accounts[0]}' imported successfully!")
-                else:
-                    messagebox.showinfo("Success", f"Successfully imported {imported_count} account(s)!\n\n{', '.join(imported_accounts)}")
-                import_window.destroy()
-            
-            if failed_count > 0:
-                if imported_count == 0:
-                    messagebox.showerror("Error", f"Failed to import {failed_count} cookie(s). Please check the cookies.")
-                else:
-                    messagebox.showwarning("Partial Success", f"Imported {imported_count} account(s), but {failed_count} failed.")
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Import",
-            style="Dark.TButton",
-            command=do_import
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=import_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
-    def javascript_import(self):
-        """
-        Launch multiple Chrome instances with custom Javascript execution
-        """
-        amount_window = tk.Toplevel(self.root)
-        self.apply_window_icon(amount_window)
-        amount_window.title("Javascript Import - Amount")
-        amount_window.geometry("350x150")
-        amount_window.configure(bg=self.BG_DARK)
-        amount_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 350) // 2
-        y = main_y + (main_height - 150) // 2
-        amount_window.geometry(f"350x150+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            amount_window.attributes("-topmost", True)
-        
-        amount_window.transient(self.root)
-        
-        main_frame = ttk.Frame(amount_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Amount to open (max 10):",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        amount_entry = ttk.Entry(main_frame, style="Dark.TEntry")
-        amount_entry.pack(fill="x", pady=(0, 15))
-        amount_entry.insert(0, "1")
-        amount_entry.focus_set()
-        
-        def proceed_to_website():
-            try:
-                amount = int(amount_entry.get().strip())
-                if amount < 1 or amount > 10:
-                    messagebox.showwarning("Invalid Amount", "Please enter a number between 1 and 10.")
-                    return
-                amount_window.destroy()
-                self.javascript_import_website(amount)
-            except ValueError:
-                messagebox.showwarning("Invalid Input", "Please enter a valid number.")
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Yes",
-            style="Dark.TButton",
-            command=proceed_to_website
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=amount_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-    
-    def javascript_import_website(self, amount):
-        """
-        Get website URL for Javascript import
-        """
-        website_window = tk.Toplevel(self.root)
-        self.apply_window_icon(website_window)
-        website_window.title("Javascript Import - Website")
-        website_window.geometry("450x150")
-        website_window.configure(bg=self.BG_DARK)
-        website_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 150) // 2
-        website_window.geometry(f"450x150+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            website_window.attributes("-topmost", True)
-        
-        website_window.transient(self.root)
-        
-        main_frame = ttk.Frame(website_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Website link to launch:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        website_entry = ttk.Entry(main_frame, style="Dark.TEntry")
-        website_entry.pack(fill="x", pady=(0, 15))
-        website_entry.insert(0, "https://www.roblox.com/CreateAccount")
-        website_entry.focus_set()
-        
-        def proceed_to_javascript():
-            website = website_entry.get().strip()
-            if not website:
-                messagebox.showwarning("Missing Information", "Please enter a website URL.")
-                return
-            if not website.startswith(('http://', 'https://')):
-                messagebox.showwarning("Invalid URL", "Please enter a valid URL starting with http:// or https://")
-                return
-            website_window.destroy()
-            self.javascript_import_code(amount, website)
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Yes",
-            style="Dark.TButton",
-            command=proceed_to_javascript
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=website_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-    
-    def javascript_import_code(self, amount, website):
-        """
-        Get Javascript code to execute and launch Chrome instances
-        """
-        js_window = tk.Toplevel(self.root)
-        self.apply_window_icon(js_window)
-        js_window.title("Javascript Import - Code")
-        js_window.geometry("500x300")
-        js_window.configure(bg=self.BG_DARK)
-        js_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 500) // 2
-        y = main_y + (main_height - 300) // 2
-        js_window.geometry(f"500x300+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            js_window.attributes("-topmost", True)
-        
-        js_window.transient(self.root)
-        
-        main_frame = ttk.Frame(js_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Javascript:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        js_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        js_frame.pack(fill="both", expand=True, pady=(0, 15))
-        
-        js_text = tk.Text(
-            js_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=("Consolas", 9),
-            height=10,
-            wrap="word"
+        # Thread to Qt signal bridge
+        self._bridge = _Bridge()
+        self._bridge.account_added.connect(self._on_add_done_main)
+        self._bridge.launch_done.connect(self._on_launch_and_refresh)
+        self._bridge.avatar_ready.connect(self._on_avatar_ready)
+        self._bridge.rejoin_status.connect(self._on_rejoin_status)
+        self._bridge.afk_tooltip.connect(self._on_afk_tooltip_signal)
+        self._bridge.mr_download_done.connect(self._update_mr_h64_status)
+        self._bridge.presence_update.connect(self._on_presence_update)
+        self._bridge.cookie_validated.connect(self._on_cookie_validated)
+        self._bridge.update_available.connect(self._on_update_available)
+
+        # Presence Indicator
+        self._presence_mod = presence_mod
+        self._presence_scanner = None
+        self._presence_dots: dict[str, QLabel] = {}
+        self._online_usernames: set[str] = set()
+
+        # Cookie Validator
+        self._cv_mod = cookie_validator_mod
+        self._cv_validator = None
+        self._invalid_badges: dict[str, QLabel] = {}
+
+        self._avatar_labels: dict[str, QLabel] = {}
+        self._current_group: str | None = None
+        self._group_bar_lay: QHBoxLayout | None = None
+
+        self._ar_configs: dict = ar.load_configs() # {username: config_dict}
+        self._ar_workers: dict[str, ar.AutoRejoinWorker] = {} # {username: worker}
+        self._ar_list: QListWidget | None = None
+
+        # WebSocket server
+        self._ws_server: ws_mod.WebSocketServer | None = ws_mod.WebSocketServer(
+            manager=self.manager,
+            ar_workers=self._ar_workers,
+            ar_configs=self._ar_configs,
+            get_settings=actions.load_ui_settings,
+            refresh_ui_callback=lambda: self._bridge.account_added.emit(True, ""),
         )
-        js_text.pack(side="left", fill="both", expand=True)
-        
-        js_scrollbar = ttk.Scrollbar(js_frame, command=js_text.yview)
-        js_scrollbar.pack(side="right", fill="y")
-        js_text.config(yscrollcommand=js_scrollbar.set)
-        js_text.focus_set()
-        
-        def execute_javascript():
-            javascript = js_text.get("1.0", "end-1c").strip()
-            if not javascript:
-                messagebox.showwarning("Missing Information", "Please enter Javascript code.")
-                return
-            js_window.destroy()
-            self.launch_javascript_browsers(amount, website, javascript)
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Yes",
-            style="Dark.TButton",
-            command=execute_javascript
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=js_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-    
-    def launch_javascript_browsers(self, amount, website, javascript):
-        """
-        Launch account addition with Javascript execution
-        """
-        browser_path, browser_name = self.get_browser_path()
-        
-        if not browser_path:
-            messagebox.showwarning(
-                "Browser Required",
-                "Javascript Import requires a browser.\n\n"
-                "Please either:\n"
-                "• Install Google Chrome, or\n"
-                "• Download Chromium in Settings → Tools → Browser Engine"
-            )
-            return
 
-        def launch_thread():
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setWindowTitle("Evanovar's Roblox Account Manager")
+        self.setFixedSize(640, 520)
+        if self._icon_path:
             try:
-                success = self.manager.add_account(amount, website, javascript, browser_path)
-                
-                if success:
-                    self.root.after(0, lambda: [
-                        self.refresh_accounts(),
-                        messagebox.showinfo(
-                            "Success",
-                            f"Account(s) added successfully with Javascript execution!"
-                        )
-                    ])
-                else:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        "Failed to add accounts. Please check the console for details."
-                    ))
-                
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Error",
-                    f"Failed to launch browsers: {str(e)}"
-                ))
-        
-        thread = threading.Thread(target=launch_thread, daemon=True)
-        thread.start()
-
-    def remove_account(self):
-        """Remove the selected account(s)"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-            
-            if len(usernames) == 1:
-                confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{usernames[0]}'?")
-            else:
-                confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete {len(usernames)} accounts?\n\n" + "\n".join(usernames))
-            
-            if confirm:
-                for username in usernames:
-                    self.manager.delete_account(username)
-                self.refresh_accounts()
-                messagebox.showinfo("Success", f"{len(usernames)} account(s) deleted successfully!")
-        else:
-            username = self.get_selected_username()
-            if username:
-                confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{username}'?")
-                if confirm:
-                    self.manager.delete_account(username)
-                    self.refresh_accounts()
-                    messagebox.showinfo("Success", f"Account '{username}' deleted successfully!")
-
-    def validate_account(self):
-        """Validate the selected account"""
-        username = self.get_selected_username()
-        if username:
-            is_valid = self.manager.validate_account(username)
-            if is_valid:
-                messagebox.showinfo("Validation", f"Account '{username}' is valid! ✓")
-            else:
-                messagebox.showwarning("Validation", f"Account '{username}' is invalid or expired.")
-    
-    def edit_account_note(self):
-        """Edit note for the selected account(s)"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-            
-            if len(usernames) == 1:
-                username = usernames[0]
-                current_note = self.manager.get_account_note(username)
-                title_text = f"Edit Note - {username}"
-            else:
-                username = None
-                current_note = ""
-                title_text = f"Edit Note - {len(usernames)} accounts"
-        else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
-            current_note = self.manager.get_account_note(username)
-            title_text = f"Edit Note - {username}"
-        
-        note_window = tk.Toplevel(self.root)
-        self.apply_window_icon(note_window)
-        note_window.title(title_text)
-        note_window.geometry("450x220")
-        note_window.configure(bg=self.BG_DARK)
-        note_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 220) // 2
-        note_window.geometry(f"450x220+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            note_window.attributes("-topmost", True)
-        
-        note_window.transient(self.root)
-        note_window.grab_set()
-        
-        main_frame = ttk.Frame(note_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        if len(usernames) == 1:
-            label_text = f"Edit note for '{usernames[0]}'"
-        else:
-            label_text = f"Edit note for {len(usernames)} accounts"
-        
-        ttk.Label(
-            main_frame,
-            text=label_text,
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        ttk.Label(main_frame, text="Note:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        note_text = tk.Text(
-            main_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            height=3,
-            wrap="word"
-        )
-        note_text.pack(fill="both", expand=True, pady=(0, 15))
-        note_text.insert("1.0", current_note)
-        note_text.focus_set()
-        
-        def save_note():
-            new_note = note_text.get("1.0", "end-1c").strip()
-            for uname in usernames:
-                self.manager.set_account_note(uname, new_note)
-            self.refresh_accounts()
-            if len(usernames) == 1:
-                messagebox.showinfo("Success", f"Note updated for '{usernames[0]}'!")
-            else:
-                messagebox.showinfo("Success", f"Note updated for {len(usernames)} accounts!")
-            note_window.destroy()
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Save",
-            style="Dark.TButton",
-            command=save_note
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=note_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-
-    def show_account_context_menu(self, event):
-        """Show context menu on right-click"""
-        index = self.account_list.nearest(event.y)
-
-        if index >= 0:
-            bbox = self.account_list.bbox(index)
-            if bbox is None or event.y > bbox[1] + bbox[3]:
-                index = -1
-
-        if index < 0 or index >= len(self._list_row_map):
-            self._show_empty_context_menu(event)
-            return
-
-        kind, val = self._list_row_map[index]
-
-        if kind == "group_header":
-            self._show_group_context_menu(event, val)
-            return
-
-        if self.settings.get("enable_multi_select", False):
-            current_selection = set(self.account_list.curselection())
-            if index not in current_selection:
-                self.account_list.selection_clear(0, tk.END)
-                self.account_list.selection_set(index)
-        else:
-            self.account_list.selection_clear(0, tk.END)
-            self.account_list.selection_set(index)
-        self.account_list.activate(index)
-        
-        username = val
-        account = self.manager.accounts.get(username)
-        
-        if not account:
-            return
-        
-        if not isinstance(account, dict):
-            return
-        
-        user_id = account.get('user_id', 0)
-        password = account.get('password', '')
-        
-        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
-            try:
-                self.account_context_menu.destroy()
-            except:
+                self.setWindowIcon(QIcon(self._icon_path))
+            except Exception:
                 pass
-        
-        self.account_context_menu = tk.Toplevel(self.root)
-        self.account_context_menu.overrideredirect(True)
-        self.account_context_menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
-        
-        def copy_to_clipboard(text):
-            self._copy_text_to_clipboard(text)
-            self.hide_account_context_menu()
 
-        def selected_usernames_for_copy():
-            if self.settings.get("enable_multi_select", False):
-                usernames = self.get_selected_usernames()
-                if usernames:
-                    return usernames
-            return [username]
+        self._apply_stylesheet()
+        self._build_ui()
 
-        selected_for_actions = selected_usernames_for_copy()
-        has_username_lines = bool(self._build_copy_export_lines(selected_for_actions, "username"))
-        has_userid_lines = bool(self._build_copy_export_lines(selected_for_actions, "userid"))
-        has_password_lines = bool(self._build_copy_export_lines(selected_for_actions, "password"))
-        has_cookie_lines = bool(self._build_copy_export_lines(selected_for_actions, "cookie"))
-        has_userpass_lines = bool(self._build_copy_export_lines(selected_for_actions, "userpass"))
+        _data_folder = "AccountManagerData"
+        _enc_cfg = EncryptionConfig(os.path.join(_data_folder, "encryption_config.json"))
+        self._setup_needed = not _enc_cfg.is_setup_complete()
+        if self._setup_needed:
+            for b in self._normal_nav_btns:
+                b.hide()
+            self._setup_nav_btn.show()
+            self._setup_nav_btn.setChecked(True)
+            self._page_stack.setCurrentIndex(7)
 
-        def copy_selected(mode, action_name, export_label):
-            self._copy_or_export_accounts(selected_for_actions, mode, action_name, export_label)
-            self.hide_account_context_menu()
-        
-        def hide_menu():
-            self.hide_account_context_menu()
-        
-        username_btn = tk.Button(
-            self.account_context_menu,
-            text=f"Copy Username",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: copy_selected("username", "copy_username", "Usernames") if has_username_lines else None
+        self._bridge.game_name_ready.connect(self._game_name_label.setText)
+
+        self._console_poll_timer = QTimer(self)
+        self._console_poll_timer.timeout.connect(self._drain_console_queue)
+        self._console_poll_timer.start(50)
+
+        webhook.start_screenshot_loop(
+            lambda: actions.load_ui_settings().get("discord_webhook", {})
         )
-        username_btn.pack(fill="x", padx=2, pady=1)
 
-        userpass_btn = tk.Button(
-            self.account_context_menu,
-            text=f"Copy User:Pass",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=lambda: copy_selected("userpass", "copy_userpass", "User:Pass") if has_userpass_lines else None
-        )
-        userpass_btn.pack(fill="x", padx=2, pady=1)
-        if not has_userpass_lines:
-            userpass_btn.config(state="disabled", fg="#666666")
-        
-        if has_userid_lines:
-            userid_btn = tk.Button(
-                self.account_context_menu,
-                text=f"Copy User ID",
-                anchor="w",
-                relief="flat",
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                activebackground=self.BG_LIGHT,
-                activeforeground=self.FG_TEXT,
-                font=("Segoe UI", 9),
-                bd=0,
-                highlightthickness=0,
-                command=lambda: copy_selected("userid", "copy_userid", "User IDs")
-            )
-        else:
-            userid_btn = tk.Button(
-                self.account_context_menu,
-                text=f"Copy User ID",
-                anchor="w",
-                relief="flat",
-                bg=self.BG_MID,
-                fg="#666666",
-                font=("Segoe UI", 9),
-                bd=0,
-                highlightthickness=0,
-                state="disabled"
-            )
-        userid_btn.pack(fill="x", padx=2, pady=1)
-        
-        if has_password_lines:
-            password_btn = tk.Button(
-                self.account_context_menu,
-                text=f"Copy Password",
-                anchor="w",
-                relief="flat",
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                activebackground=self.BG_LIGHT,
-                activeforeground=self.FG_TEXT,
-                font=("Segoe UI", 9),
-                bd=0,
-                highlightthickness=0,
-                command=lambda: copy_selected("password", "copy_password", "Passwords")
-            )
-        else:
-            password_btn = tk.Button(
-                self.account_context_menu,
-                text=f"Copy Password",
-                anchor="w",
-                relief="flat",
-                bg=self.BG_MID,
-                fg="#666666",
-                font=("Segoe UI", 9),
-                bd=0,
-                highlightthickness=0,
-                state="disabled"
-            )
-        password_btn.pack(fill="x", padx=2, pady=1)
-        
-        try:
-            if self.settings.get("developer_mode", False) and self.settings.get("enable_copy_cookie", False):
-                if has_cookie_lines:
-                    cookie_btn = tk.Button(
-                        self.account_context_menu,
-                        text=f"Copy Cookie",
-                        anchor="w",
-                        relief="flat",
-                        bg=self.BG_MID,
-                        fg=self.FG_TEXT,
-                        activebackground=self.BG_LIGHT,
-                        activeforeground=self.FG_TEXT,
-                        font=("Segoe UI", 9),
-                        bd=0,
-                        highlightthickness=0,
-                        command=lambda: copy_selected("cookie", "copy_cookie", "Cookies")
-                    )
-                else:
-                    cookie_btn = tk.Button(
-                        self.account_context_menu,
-                        text=f"Copy Cookie",
-                        anchor="w",
-                        relief="flat",
-                        bg=self.BG_MID,
-                        fg="#666666",
-                        font=("Segoe UI", 9),
-                        bd=0,
-                        highlightthickness=0,
-                        state="disabled"
-                    )
-                cookie_btn.pack(fill="x", padx=2, pady=1)
-        except Exception:
-            pass
+        self._refresh_account_list()
+        self._refresh_recent_games()
+        self._update_encryption_badge()
 
-        separator = tk.Frame(self.account_context_menu, height=1, bg="#666666")
-        separator.pack(fill="x", padx=2, pady=2)
-        
-        def check_single_cookie():
-            self.hide_account_context_menu()
-            print(f"[INFO] Checking cookie for {username}...")
+        # Apply persisted settings that affect widgets built in _build_ui
+        S = actions.load_ui_settings()
+        self._place_id_edit.setText(S.get("last_place_id", ""))
+        self._private_server_edit.setText(S.get("last_private_server", ""))
+
+        if S.get("last_place_id"):
+            self._schedule_game_name_fetch()
             
-            def check_thread():
-                try:
-                    is_valid = self.manager.validate_account(username)
-                    self._save_cookie_status(username, is_valid)
-                    self.manager.save_accounts()
-                    self.root.after(0, lambda: self.refresh_accounts())
-                    
-                    if is_valid:
-                        self.root.after(0, lambda: messagebox.showinfo(
-                            "Cookie Valid",
-                            f"Cookie for '{username}' is valid!"
-                        ))
-                    else:
-                        self.root.after(0, lambda: messagebox.showwarning(
-                            "Cookie Expired",
-                            f"⚠ Cookie for '{username}' is expired or invalid!"
-                        ))
-                except Exception as e:
-                    print(f"[ERROR] Failed to check cookie: {e}")
-                    self._save_cookie_status(username, None)
-                    self.manager.save_accounts()
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Check Failed",
-                        f"Failed to check cookie for '{username}':\\n{str(e)}"
-                    ))
-            
-            thread = threading.Thread(target=check_thread, daemon=True)
-            thread.start()
-        
-        check_cookie_btn = tk.Button(
-            self.account_context_menu,
-            text="Check Cookie",
-            anchor="w",
-            relief="flat",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT,
-            activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9),
-            bd=0,
-            highlightthickness=0,
-            command=check_single_cookie
+        if S.get("enable_multi_select", False):
+            self._account_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+
+        if S.get("always_on_top", False):
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.show()
+
+        if S.get("optimize_roblox_ram", False):
+            self._start_ram_boost()
+
+        if S.get("rename_roblox_windows", False):
+            self._start_rename_windows()
+
+        if S.get("websocket_enabled") and S.get("developer_mode"):
+            self._ws_server.start()
+
+        QTimer.singleShot(2000, self._start_cookie_validator)
+        QTimer.singleShot(500, self._start_update_check)
+        print("[INFO] UI ready")
+
+    def _apply_stylesheet(self):
+        self.setStyleSheet(f"""
+            QMainWindow {{ background: {BG}; }}
+            QWidget {{ color: {TEXT}; font-family: 'Segoe UI'; }}
+
+            QFrame#navPanel, QFrame#rightPanel {{ background: {PANEL}; border: 0; }}
+            QFrame#centerPanel {{ background: {BG};    border: 0; }}
+            QFrame#titleBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
+
+            QLabel#sectionTitle {{ font-size: 13px; font-weight: 700; }}
+            QLabel#titleText {{ font-size: 12px; font-weight: 700; color: {TEXT}; }}
+
+            QPushButton#titleButton {{
+                background: transparent; border: 0;
+                min-height: 24px; min-width: 30px; padding: 0;
+                text-align: center; color: {MUTED}; font-size: 12px;
+            }}
+            QPushButton#titleButton:hover {{ background: {SELECT}; color: {TEXT}; }}
+
+            QPushButton#closeButton {{
+                background: transparent; border: 0;
+                min-height: 24px; min-width: 30px; padding: 0;
+                text-align: center; color: {MUTED}; font-size: 12px;
+            }}
+            QPushButton#closeButton:hover {{ background: #5A2A2A; color: #FFFFFF; }}
+
+            QPushButton#navTab {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: 0; text-align: left; min-height: 28px;
+                padding: 2px 8px; color: {MUTED}; font-size: 12px;
+            }}
+            QPushButton#navTab:checked {{
+                background: #2E2E2E; border: 1px solid #3A3A3A;
+                color: {TEXT}; font-weight: 700;
+            }}
+
+            QListWidget {{
+                background: {INPUT}; border: 1px solid {LINE};
+                outline: none; padding: 2px; font-size: 11px;
+            }}
+            QListWidget::item {{ height: 22px; padding-left: 6px; }}
+            QListWidget::item:selected {{ background: {SELECT}; color: {TEXT}; }}
+
+            QLabel#accountName {{ color: {TEXT};  font-size: 11px; }}
+            QLabel#noteSep {{ color: #7A7A7A; font-size: 11px; }}
+            QLabel#noteText {{ color: {NOTE};  font-size: 11px; font-weight: 600; }}
+
+            QLineEdit {{
+                background: {INPUT}; border: 1px solid {LINE};
+                padding: 4px 6px; min-height: 24px; color: {TEXT};
+            }}
+
+            QPushButton {{
+                background: {INPUT}; border: 1px solid {LINE};
+                min-height: 26px; padding: 2px 8px;
+                text-align: left; font-size: 11px; color: {TEXT};
+            }}
+            QPushButton:hover {{ background: {SELECT}; }}
+            QPushButton:pressed {{ background: {SELECT}; }}
+
+            QToolButton#splitArrow {{
+                background: {INPUT}; border: 1px solid {LINE};
+                min-width: 26px; max-width: 26px; min-height: 26px;
+                padding: 0; color: {TEXT};
+            }}
+            QToolButton#splitArrow:hover {{ background: {SELECT}; }}
+            QToolButton#splitArrow:pressed {{ background: {SELECT}; }}
+            QToolButton#splitArrow::menu-indicator {{ image: none; }}
+
+            QMenu {{
+                background: {PANEL}; border: 1px solid {LINE};
+                color: {TEXT}; font-size: 11px;
+                border-radius: 0px;
+                padding: 2px 0px;
+            }}
+            QMenu::item {{
+                padding: 4px 20px 4px 12px;
+                border-radius: 0px;
+            }}
+            QMenu::item:selected {{ background: {SELECT}; border-radius: 0px; }}
+            QMenu::separator {{ height: 1px; background: {LINE}; margin: 2px 0px; }}
+
+            QScrollArea#groupScroll {{
+                background: transparent; border: 0;
+                max-height: 30px;
+            }}
+            QScrollArea#groupScroll > QWidget > QWidget {{
+                background: transparent;
+            }}
+            QPushButton#groupTab {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: 3px; min-height: 20px; max-height: 20px;
+                padding: 0px 8px; font-size: 10px; color: {MUTED};
+            }}
+            QPushButton#groupTab:checked {{
+                background: #2E2E2E; border: 1px solid #3A3A3A; color: {TEXT};
+            }}
+            QPushButton#groupTab:hover {{ background: #232323; border-color: #333333; }}
+
+            QDialog {{ background: {BG}; }}
+            QTextEdit {{ background: {INPUT}; border: 1px solid {LINE}; color: {TEXT}; font-size: 11px; }}
+
+            QCheckBox {{ color: {TEXT}; font-size: 11px; spacing: 6px; }}
+            QCheckBox::indicator {{
+                width: 13px; height: 13px;
+                border: 1px solid {LINE}; background: {INPUT};
+            }}
+            QCheckBox::indicator:checked {{
+                background: #3A7BD5; border: 1px solid #3A7BD5;
+                image: url(none);
+            }}
+            QCheckBox::indicator:disabled {{
+                background: {SELECT}; border: 1px solid {LINE};
+                opacity: 0.5;
+            }}
+            QCheckBox:disabled {{ color: {MUTED}; }}
+
+            QRadioButton {{ color: {TEXT}; font-size: 11px; spacing: 6px; }}
+            QRadioButton::indicator {{
+                width: 13px; height: 13px; border-radius: 7px;
+                border: 1px solid {LINE}; background: {INPUT};
+            }}
+            QRadioButton::indicator:checked {{
+                background: #3A7BD5; border: 2px solid {INPUT};
+                outline: 1px solid #3A7BD5;
+            }}
+            QRadioButton:disabled {{ color: {MUTED}; }}
+
+            QGroupBox {{
+                border: 1px solid {LINE}; border-radius: 3px;
+                margin-top: 10px; padding-top: 4px;
+                font-size: 10px; font-weight: 700; color: {MUTED};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin; subcontrol-position: top left;
+                padding: 0 6px 0 6px; left: 8px;
+            }}
+        """)
+
+    def _build_ui(self): # build the main window UI structure
+        central = QWidget(self)
+        self.setCentralWidget(central)
+
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_title_bar())
+
+        self._page_stack = QStackedWidget()
+
+        _accounts_page = QWidget()
+        _acc_lay = QHBoxLayout(_accounts_page)
+        _acc_lay.setContentsMargins(0, 0, 0, 0)
+        _acc_lay.setSpacing(0)
+        _acc_lay.addWidget(self._build_center_panel(), 1)
+        _acc_lay.addWidget(self._build_right_panel())
+
+        self._page_stack.addWidget(_accounts_page) # idx 0
+        self._page_stack.addWidget(self._build_auto_rejoin_panel()) # idx 1
+        self._page_stack.addWidget(self._build_anti_afk_panel()) # idx 2
+        self._page_stack.addWidget(self._build_multi_roblox_panel()) # idx 3
+        self._page_stack.addWidget(self._build_settings_panel()) # idx 4
+        self._page_stack.addWidget(self._build_console_panel()) # idx 5
+        self._page_stack.addWidget(self._build_donations_panel()) # idx 6
+        self._page_stack.addWidget(self._build_setup_panel()) # idx 7
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self._build_nav_panel())
+        body.addWidget(self._page_stack, 1)
+        outer.addLayout(body, 1)
+
+    # Title bar
+    def _build_title_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("titleBar")
+        bar.setFixedHeight(32)
+
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(10, 0, 0, 0)
+        lay.setSpacing(0)
+
+        if self._icon_path:
+            pix = QPixmap(self._icon_path)
+            if not pix.isNull():
+                pm = pix.scaled(16, 16,
+                                Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation)
+                ico_lbl = QLabel()
+                ico_lbl.setPixmap(pm)
+                ico_lbl.setContentsMargins(0, 6, 8, 6)
+                lay.addWidget(ico_lbl)
+
+        title = QLabel("Evanovar's Roblox Account Manager")
+        title.setObjectName("titleText")
+        lay.addWidget(title)
+        lay.addStretch(1)
+
+        min_btn = QPushButton("-")
+        min_btn.setObjectName("titleButton")
+        min_btn.clicked.connect(self.showMinimized)
+        lay.addWidget(min_btn)
+
+        close_btn = QPushButton("x")
+        close_btn.setObjectName("closeButton")
+        close_btn.clicked.connect(self.close)
+        lay.addWidget(close_btn)
+
+        return bar
+
+    # Drag window
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 32:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton and not self._drag_pos.isNull():
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = QPoint()
+        super().mouseReleaseEvent(event)
+
+    # Left nav panel
+    def _build_nav_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("navPanel")
+        panel.setFixedWidth(122)
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(8, 12, 8, 12)
+        lay.setSpacing(10)
+
+        _NAV_PAGES = {
+            "Accounts":    0,
+            "Auto-Rejoin": 1,
+            "Anti AFK":    2,
+            "Multi Roblox":3,
+            "Settings":    4,
+            "Console":     5,
+            "Donations":   6,
+        }
+
+        self._normal_nav_btns: list[QPushButton] = []
+
+        for label, checked in [
+            ("Accounts", True),
+            ("Auto-Rejoin", False),
+            ("Anti AFK", False),
+            ("Multi Roblox", False),
+            ("Settings", False),
+            ("Console", False),
+            ("Donations", False),
+        ]:
+            btn = QPushButton(label)
+            btn.setObjectName("navTab")
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setChecked(checked)
+            if label in _NAV_PAGES:
+                page_idx = _NAV_PAGES[label]
+                btn.clicked.connect(
+                    lambda _=False, idx=page_idx: self._page_stack.setCurrentIndex(idx)
+                )
+            lay.addWidget(btn)
+            self._normal_nav_btns.append(btn)
+
+        # Setup nav button
+        self._setup_nav_btn = QPushButton("Setup")
+        self._setup_nav_btn.setObjectName("navTab")
+        self._setup_nav_btn.setCheckable(True)
+        self._setup_nav_btn.setAutoExclusive(True)
+        self._setup_nav_btn.setChecked(False)
+        self._setup_nav_btn.clicked.connect(
+            lambda: self._page_stack.setCurrentIndex(7)
         )
-        check_cookie_btn.pack(fill="x", padx=2, pady=1)
-        
-        group_sep = tk.Frame(self.account_context_menu, height=1, bg="#666666")
-        group_sep.pack(fill="x", padx=2, pady=2)
+        self._setup_nav_btn.hide() # shown when setup needed (hidden by default)
+        lay.addWidget(self._setup_nav_btn)
 
-        current_group = self._get_username_group(username)
+        lay.addStretch(1)
 
-        if current_group:
-            remove_grp_btn = tk.Button(
-                self.account_context_menu,
-                text=f"Remove from \"{current_group}\"",
-                anchor="w", relief="flat",
-                bg=self.BG_MID, fg=self.FG_TEXT,
-                activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
-                font=("Segoe UI", 9), bd=0, highlightthickness=0,
-                command=lambda: [self.hide_account_context_menu(), self._remove_account_from_group(username)]
+        ver_lbl = QLabel(f"Version : {APP_VERSION}")
+        ver_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        ver_lbl.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; background: transparent;"
+        )
+        lay.addWidget(ver_lbl)
+        return panel
+
+    def _build_setup_panel(self) -> QWidget: # Encryption setup panel
+        panel = QWidget()
+        panel.setObjectName("centerPanel")
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(28, 22, 28, 20)
+        root.setSpacing(14)
+
+        hdr = QLabel("Choose your encryption method")
+        hdr.setStyleSheet("font-size: 14px; font-weight: 700;")
+        sub = QLabel(
+            "Your account cookies will be stored locally. "
+            "Choose how they are protected."
+        )
+        sub.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        sub.setWordWrap(True)
+        root.addWidget(hdr)
+        root.addWidget(sub)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {LINE};")
+        root.addWidget(sep)
+
+        self._setup_stack = QStackedWidget()
+        root.addWidget(self._setup_stack, 1)
+
+        choice_w = QWidget()
+        choice_lay = QVBoxLayout(choice_w)
+        choice_lay.setContentsMargins(0, 0, 0, 0)
+        choice_lay.setSpacing(10)
+
+        _btn_style = (
+            f"QPushButton {{ background: {INPUT}; color: {TEXT};"
+            f"  border: 1px solid {LINE}; border-radius: 0;"
+            f"  padding: 10px 16px; font-size: 12px; text-align: left; }}"
+            f"QPushButton:hover {{ background: {SELECT}; border-color: #3A3A3A; }}"
+            f"QPushButton:checked {{ background: #0A1A2A; border-color: #0078D7; color: {TEXT}; }}"
+        )
+
+        btn_group = QButtonGroup(self)
+        btn_group.setExclusive(True)
+
+        self._setup_hw_btn = QPushButton(
+            "Hardware Encryption\n"
+            "   Tied to this PC. No password needed. Not portable."
+        )
+        self._setup_hw_btn.setCheckable(True)
+        self._setup_hw_btn.setStyleSheet(_btn_style)
+
+        self._setup_pw_btn = QPushButton(
+            "Password Encryption\n"
+            "   Portable across PCs. No recovery if password is lost."
+        )
+        self._setup_pw_btn.setCheckable(True)
+        self._setup_pw_btn.setChecked(True)
+        self._setup_pw_btn.setStyleSheet(_btn_style)
+
+        self._setup_none_btn = QPushButton(
+            "No Encryption\n"
+            "   Cookies stored in plain text. Not secure."
+        )
+        self._setup_none_btn.setCheckable(True)
+        self._setup_none_btn.setStyleSheet(_btn_style)
+
+        for b in (self._setup_hw_btn, self._setup_pw_btn, self._setup_none_btn):
+            btn_group.addButton(b)
+            choice_lay.addWidget(b)
+
+        choice_lay.addStretch()
+
+        cont_row = QHBoxLayout()
+        cont_row.addStretch()
+        self._setup_continue_btn = QPushButton("Continue")
+        self._setup_continue_btn.setStyleSheet(
+            f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
+            f"  min-height: 30px; min-width: 120px; font-weight: 700;"
+            f"  text-align: center; color: {TEXT}; border-radius: 0; }}"
+            f"QPushButton:hover   {{ background: #3A3A3A; }}"
+            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+        )
+        cont_row.addWidget(self._setup_continue_btn)
+        choice_lay.addLayout(cont_row)
+
+        self._setup_stack.addWidget(choice_w) # idx 0
+
+        pw_w = QWidget()
+        pw_lay = QVBoxLayout(pw_w)
+        pw_lay.setContentsMargins(0, 0, 0, 0)
+        pw_lay.setSpacing(10)
+
+        warn = QLabel(
+            "IMPORTANT: There is NO password recovery.\n"
+            "A lost password means permanent data loss."
+        )
+        warn.setStyleSheet(f"color: {NOTE}; font-size: 11px;")
+        pw_lay.addWidget(warn)
+
+        pw_lay.addWidget(QLabel("Enter your password (min. 8 characters):"))
+        self._setup_pw_entry1 = QLineEdit()
+        self._setup_pw_entry1.setEchoMode(QLineEdit.EchoMode.Password)
+        self._setup_pw_entry1.setPlaceholderText("Password")
+        pw_lay.addWidget(self._setup_pw_entry1)
+
+        pw_lay.addWidget(QLabel("Confirm password:"))
+        self._setup_pw_entry2 = QLineEdit()
+        self._setup_pw_entry2.setEchoMode(QLineEdit.EchoMode.Password)
+        self._setup_pw_entry2.setPlaceholderText("Confirm password")
+        pw_lay.addWidget(self._setup_pw_entry2)
+
+        self._setup_pw_err = QLabel("")
+        self._setup_pw_err.setStyleSheet("color: #C0392B; font-size: 11px;")
+        pw_lay.addWidget(self._setup_pw_err)
+
+        pw_lay.addStretch()
+
+        pw_btn_row = QHBoxLayout()
+        pw_btn_row.setSpacing(8)
+        pw_back = QPushButton("Back")
+        self._setup_pw_confirm_btn = QPushButton("Confirm")
+        self._setup_pw_confirm_btn.setStyleSheet(
+            f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
+            f"  min-height: 30px; min-width: 120px; font-weight: 700;"
+            f"  text-align: center; color: {TEXT}; border-radius: 0; }}"
+            f"QPushButton:hover   {{ background: #3A3A3A; }}"
+            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+        )
+        pw_btn_row.addWidget(pw_back)
+        pw_btn_row.addStretch()
+        pw_btn_row.addWidget(self._setup_pw_confirm_btn)
+        pw_lay.addLayout(pw_btn_row)
+
+        self._setup_stack.addWidget(pw_w)       # idx 1
+
+        def _on_continue():
+            if self._setup_hw_btn.isChecked():
+                _do_hardware()
+            elif self._setup_none_btn.isChecked():
+                _do_none()
+            else:
+                self._setup_pw_entry1.clear()
+                self._setup_pw_entry2.clear()
+                self._setup_pw_err.setText("")
+                self._setup_stack.setCurrentIndex(1)
+
+        def _do_hardware():
+            data_folder = "AccountManagerData"
+            enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
+            enc.enable_hardware_encryption()
+            _show_info(self, "Hardware Encryption Enabled",
+                       "Hardware-based encryption is now active.\n"
+                       "Your accounts will be encrypted automatically.")
+            self._on_setup_complete()
+
+        def _do_none():
+            res = QMessageBox.warning(
+                self, "No Encryption",
+                "Your account data will be stored in plain text.\n"
+                "Anyone with access to your files can read your cookies.\n\n"
+                "Are you sure you want to continue without encryption?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            remove_grp_btn.pack(fill="x", padx=2, pady=1)
+            if res == QMessageBox.StandardButton.Yes:
+                data_folder = "AccountManagerData"
+                enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
+                enc.disable_encryption()
+                self._on_setup_complete()
 
-        create_grp_btn = tk.Button(
-            self.account_context_menu,
-            text="Create Group",
-            anchor="w", relief="flat",
-            bg=self.BG_MID, fg=self.FG_TEXT,
-            activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
-            font=("Segoe UI", 9), bd=0, highlightthickness=0,
-            command=lambda: [self.hide_account_context_menu(), self._create_group_dialog()]
+        def _on_confirm_pw():
+            pw1 = self._setup_pw_entry1.text()
+            pw2 = self._setup_pw_entry2.text()
+            if len(pw1) < 8:
+                self._setup_pw_err.setText("Password must be at least 8 characters.")
+                return
+            if pw1 != pw2:
+                self._setup_pw_err.setText("Passwords do not match.")
+                return
+            data_folder = "AccountManagerData"
+            enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
+            temp = PasswordEncryption(pw1)
+            enc.enable_password_encryption(
+                temp.get_salt_b64(),
+                hashlib.sha256(pw1.encode()).hexdigest(),
+            )
+            _show_info(self, "Password Encryption Enabled",
+                       "Password encryption is now active.\n"
+                       "Keep your password safe, there is no recovery method.")
+            self._on_setup_complete()
+
+        self._setup_continue_btn.clicked.connect(_on_continue)
+        pw_back.clicked.connect(lambda: self._setup_stack.setCurrentIndex(0))
+        self._setup_pw_confirm_btn.clicked.connect(_on_confirm_pw)
+
+        return panel
+
+    def _on_setup_complete(self):
+        self._setup_nav_btn.hide()
+        for b in self._normal_nav_btns:
+            b.show()
+        self._normal_nav_btns[0].setChecked(True) # Accounts
+        self._page_stack.setCurrentIndex(0)
+        self._setup_needed = False
+
+    def _build_center_panel(self) -> QFrame: # Main account list
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(0)
+
+        section_title = QLabel("Account List")
+        section_title.setObjectName("sectionTitle")
+        header_row.addWidget(section_title)
+
+        header_row.addStretch(1)
+
+        # encryption label
+        self._enc_label = QLabel()
+        self._enc_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        header_row.addWidget(self._enc_label)
+
+        lay.addLayout(header_row)
+
+        # group section
+        self._group_scroll = QScrollArea()
+        self._group_scroll.setObjectName("groupScroll")
+        self._group_scroll.setWidgetResizable(True)
+        self._group_scroll.setFixedHeight(28)
+        self._group_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._group_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        _group_bar_widget = QWidget()
+        _group_bar_widget.setStyleSheet("background: transparent;")
+        self._group_bar_lay = QHBoxLayout(_group_bar_widget)
+        self._group_bar_lay.setContentsMargins(0, 0, 0, 0)
+        self._group_bar_lay.setSpacing(4)
+        self._group_scroll.setWidget(_group_bar_widget)
+        lay.addWidget(self._group_scroll)
+
+        # account list widget
+        self._account_list = QListWidget()
+        self._account_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._account_list.customContextMenuRequested.connect(self._on_account_context_menu)
+
+        self._drag_filter = _DragDropFilter(
+            self._account_list,
+            get_avatar=lambda u: self._avatar_labels[u].pixmap() if u in self._avatar_labels else None,
+            parent=self,
         )
-        create_grp_btn.pack(fill="x", padx=2, pady=1)
+        self._account_list.viewport().installEventFilter(self._drag_filter)
+        self._drag_filter.reorder_requested.connect(self._on_account_reorder)
 
-        self.account_context_menu.geometry(f"+{event.x_root}+{event.y_root}")
-        self.account_context_menu.update_idletasks()
+        lay.addWidget(self._account_list, 1)
+
+       # Add and Remove buttons row
+        bottom = QHBoxLayout()
+        bottom.setSpacing(6)
+
+        # Add account button
+        self._add_btn = QToolButton()
+        self._add_btn.setText("Add Account")
+        self._add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._add_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._add_btn.setFixedHeight(26)
+        self._add_btn.setStyleSheet(
+            f"QToolButton {{"
+            f"  background: {INPUT}; border: 1px solid {LINE}; font-size: 11px;"
+            f"  min-height: 26px; padding: 2px 28px 2px 8px; text-align: center; color: {TEXT};"
+            f"}}"
+            f"QToolButton:hover {{ background: {SELECT}; }}"
+            f"QToolButton:pressed {{ background: {SELECT}; }}"
+            f"QToolButton::menu-button {{ width: 24px; border-left: 1px solid {LINE}; }}"
+            f"QToolButton::menu-arrow {{ width: 9px; height: 9px; }}"
+        )
+
+        # Dropdown menu for add button
+        add_menu = QMenu(self._add_btn)
+        act_cookie = add_menu.addAction("Import Cookie")
+        act_js = add_menu.addAction("Javascript")
+        act_cookie.triggered.connect(self._on_import_cookie)
+        act_js.triggered.connect(self._on_add_javascript)
+        self._add_btn.setMenu(add_menu)
+        self._add_btn.clicked.connect(self._on_add_account_browser)
+
+        # Remove Button
+        remove_btn = QPushButton("Remove")
+        remove_btn.setFixedWidth(86)
+        remove_btn.setFixedHeight(26)
+        remove_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        remove_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f"  font-size: 11px; min-height: 26px; padding: 2px 8px;"
+            f"  text-align: center; color: {TEXT}; }}"
+            f"QPushButton:hover   {{ background: {SELECT}; }}"
+            f"QPushButton:pressed {{ background: {SELECT}; }}"
+        )
+        remove_btn.clicked.connect(self._on_remove_account)
+
+        bottom.addWidget(self._add_btn, 1)
+        bottom.addWidget(remove_btn)
+        bottom.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        lay.addLayout(bottom)
+
+        return panel
+
+    def _build_auto_rejoin_panel(self) -> QFrame: # Auto Rejoin
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        # Header
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        ttl = QLabel("Auto-Rejoin")
+        ttl.setObjectName("sectionTitle")
+        hdr.addWidget(ttl)
+        hdr.addStretch(1)
+        hint = QLabel("Right-click for actions")
+        hint.setStyleSheet(f"color: {MUTED}; font-size: 9px;")
+        hdr.addWidget(hint)
+        lay.addLayout(hdr)
+
+        # Account list for auto rejoin
+        self._ar_list = QListWidget()
+        self._ar_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._ar_list.customContextMenuRequested.connect(self._ar_on_context_menu)
+        lay.addWidget(self._ar_list, 1)
+        QTimer.singleShot(0, self._ar_refresh_list) # defer
+
+        bottom = QHBoxLayout() # Add / Start All / Stop All buttons
+        bottom.setSpacing(6)
+        _BTN_SS = f"QPushButton {{ text-align: center; color: {TEXT}; }}"
+        add_btn = QPushButton("Add Account")
+        add_btn.setStyleSheet(_BTN_SS)
+        add_btn.clicked.connect(self._ar_on_add)
+        start_all_btn = QPushButton("Start All")
+        start_all_btn.setStyleSheet(_BTN_SS)
+        start_all_btn.clicked.connect(self._ar_on_start_all)
+        stop_all_btn = QPushButton("Stop All")
+        stop_all_btn.setStyleSheet(_BTN_SS)
+        stop_all_btn.clicked.connect(self._ar_on_stop_all)
+        bottom.addWidget(add_btn, 1)
+        bottom.addWidget(start_all_btn)
+        bottom.addWidget(stop_all_btn)
+        lay.addLayout(bottom)
+        return panel
+
+    def _build_anti_afk_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        ttl = QLabel("Anti-AFK")
+        ttl.setObjectName("sectionTitle")
+        hdr.addWidget(ttl)
+        hdr.addStretch(1)
+        self._afk_status_lbl = QLabel("Status: Stopped")
+        self._afk_status_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        hdr.addWidget(self._afk_status_lbl)
+        lay.addLayout(hdr)
+
+        desc = QLabel(
+            "Automatically sends key presses to all Roblox windows at set intervals to prevent AFK kicks."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        lay.addWidget(desc)
+
+        # Enable checkbox
+        self._afk_enabled_chk = QCheckBox("Enable Anti-AFK")
+        self._afk_enabled_chk.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; font-weight: 700; }}")
+        self._afk_enabled_chk.stateChanged.connect(self._on_afk_enabled_changed)
+        lay.addWidget(self._afk_enabled_chk)
+
+        # Settings form
+        form = QVBoxLayout()
+        form.setContentsMargins(0, 8, 0, 0)
+        form.setSpacing(10)
+
+        # Action Key row
+        row_key = QHBoxLayout()
+        row_key.setSpacing(8)
+        lbl_key = QLabel("Action Key:")
+        lbl_key.setStyleSheet(f"color: {MUTED}; font-size: 11px; min-width: 80px;")
+        row_key.addWidget(lbl_key)
         
-        if self.settings.get("enable_topmost", False):
-            self.account_context_menu.attributes("-topmost", True)
+        self._afk_key_btn = QPushButton("W")
+        self._afk_key_btn.setFixedWidth(100)
+        self._afk_key_btn.setFixedHeight(24)
+        self._afk_key_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._afk_key_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; font-size: 11px; font-weight: 700; min-height: 24px; border-radius: 3px; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+            f"QPushButton:focus {{ border: 1px solid {FG_ACCENT}; }}"
+        )
+        self._afk_key_btn.clicked.connect(self._on_afk_record_key)
+        row_key.addWidget(self._afk_key_btn)
         
-        self.account_context_menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
-        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
+        self._afk_key_hint = QLabel("Click to record")
+        self._afk_key_hint.setStyleSheet(f"color: {NOTE}; font-size: 10px;")
+        self._afk_key_hint.hide()
+        row_key.addWidget(self._afk_key_hint)
+        row_key.addStretch(1)
+        form.addLayout(row_key)
+
+        # Press Count row
+        row_press = QHBoxLayout()
+        row_press.setSpacing(8)
+        lbl_press = QLabel("Press Count:")
+        lbl_press.setStyleSheet(f"color: {MUTED}; font-size: 11px; min-width: 80px;")
+        row_press.addWidget(lbl_press)
+        self._afk_press_spin = QSpinBox()
+        self._afk_press_spin.setRange(1, 10)
+        self._afk_press_spin.setValue(1)
+        self._afk_press_spin.setFixedWidth(60)
+        self._afk_press_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._afk_press_spin.setStyleSheet(
+            f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px; border-radius: 3px; }}"
+        )
+        self._afk_press_spin.valueChanged.connect(self._on_afk_setting_changed)
+        row_press.addWidget(self._afk_press_spin)
+        row_press.addStretch(1)
+        form.addLayout(row_press)
+
+        # Interval row
+        row_interval = QHBoxLayout()
+        row_interval.setSpacing(8)
+        lbl_interval = QLabel("Interval (min):")
+        lbl_interval.setStyleSheet(f"color: {MUTED}; font-size: 11px; min-width: 80px;")
+        row_interval.addWidget(lbl_interval)
+        self._afk_interval_spin = QSpinBox()
+        self._afk_interval_spin.setRange(1, 120)
+        self._afk_interval_spin.setValue(10)
+        self._afk_interval_spin.setFixedWidth(60)
+        self._afk_interval_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._afk_interval_spin.setStyleSheet(
+            f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px; border-radius: 3px; }}"
+        )
+        self._afk_interval_spin.valueChanged.connect(self._on_afk_setting_changed)
+        row_interval.addWidget(self._afk_interval_spin)
+        row_interval.addStretch(1)
+        form.addLayout(row_interval)
+
+        # Tooltip checkbox
+        self._afk_tooltip_chk = QCheckBox("Show countdown tooltip")
+        self._afk_tooltip_chk.setChecked(True)
+        self._afk_tooltip_chk.setStyleSheet(f"QCheckBox {{ color: {MUTED}; font-size: 11px; }}")
+        self._afk_tooltip_chk.stateChanged.connect(self._on_afk_setting_changed)
+        form.addWidget(self._afk_tooltip_chk)
+
+        lay.addLayout(form)
+        lay.addStretch(1)
+
+        self._load_afk_settings()
+        
+        # Install event filter for key recording
+        self._key_grab_active = False
+        self._afk_key_btn.installEventFilter(self)
+        
+        self._afk_tooltip = _FloatingTooltip()
+        self._afk_tooltip.hide()
+        
+        actions.set_afk_tooltip_callback(self._on_afk_tooltip_emit)
+        
+        return panel
+
+    def _load_afk_settings(self):
+        saved = actions.load_ui_settings()
+        self._afk_key = saved.get("anti_afk_key", "w")
+        self._afk_press_count = saved.get("anti_afk_press_count", 1)
+        self._afk_interval = saved.get("anti_afk_interval", 10)
+        self._afk_tooltip_enabled = saved.get("anti_afk_tooltip_enabled", True)
+        self._afk_enabled = saved.get("anti_afk_enabled", False)
+
+        self._afk_key_btn.setText(self._afk_key.upper())
+        self._afk_press_spin.setValue(int(self._afk_press_count))
+        self._afk_interval_spin.setValue(int(self._afk_interval))
+        self._afk_tooltip_chk.setChecked(bool(self._afk_tooltip_enabled))
+        self._afk_enabled_chk.setChecked(bool(self._afk_enabled))
+        self._update_afk_status()
+
+    def _on_afk_setting_changed(self):
+        self._afk_key = self._afk_key_btn.text().lower()
+        self._afk_press_count = self._afk_press_spin.value()
+        self._afk_interval = self._afk_interval_spin.value()
+        self._afk_tooltip_enabled = self._afk_tooltip_chk.isChecked()
+        self._save_afk_settings()
+
+    def _on_afk_record_key(self):
+        self._afk_key_btn.setText("...")
+        self._afk_key_hint.show()
+        self._afk_key_btn.setFocus()
+        self._key_grab_active = True
     
-    def hide_account_context_menu(self):
-        """Hide the account context menu"""
-        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
-            try:
-                self.account_context_menu.destroy()
-            except:
-                pass
-            self.account_context_menu = None
-
-    def _show_empty_context_menu(self, event):
-        if hasattr(self, 'account_context_menu') and self.account_context_menu is not None:
-            try: self.account_context_menu.destroy()
-            except: pass
-
-        menu = tk.Toplevel(self.root)
-        menu.overrideredirect(True)
-        menu.configure(bg=self.BG_MID, highlightthickness=1, highlightbackground="white")
-        self.account_context_menu = menu
-
-        btn = tk.Button(menu, text="Create Group", anchor="w", relief="flat",
-                        bg=self.BG_MID, fg=self.FG_TEXT,
-                        activebackground=self.BG_LIGHT, activeforeground=self.FG_TEXT,
-                        font=("Segoe UI", 9), bd=0, highlightthickness=0,
-                        command=lambda: [self.hide_account_context_menu(), self._create_group_dialog()])
-        btn.pack(fill="x", padx=2, pady=1)
-
-        menu.geometry(f"+{event.x_root}+{event.y_root}")
-        menu.update_idletasks()
-        if self.settings.get("enable_topmost", False):
-            menu.attributes("-topmost", True)
-        menu.bind("<FocusOut>", lambda e: self.hide_account_context_menu())
-        self.root.bind("<Button-1>", lambda e: self.hide_account_context_menu(), add="+")
-
-    def launch_home(self):
-        """Launch Roblox application to home page with the selected account(s) logged in (non-blocking)"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-            if len(usernames) >= 3:
-                confirm = messagebox.askyesno(
-                    "Confirm Launch",
-                    f"Are you sure you want to launch {len(usernames)} Roblox instances to home?\n\nThis will open multiple Roblox windows."
-                )
-                if not confirm:
-                    return
+    def _on_afk_tooltip_emit(self, message, x, y):
+        self._bridge.afk_tooltip.emit(message, x, y)
+    
+    def _on_afk_tooltip_signal(self, message, x, y):
+        if message is None:
+            self._afk_tooltip.hide()
         else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
+            self._afk_tooltip.show_message(message, x, y)
 
-        def worker(selected_usernames):
-            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-            success_count = 0
-            failed_launch = False
-            for uname in selected_usernames:
-                try:
-                    if self.manager.launch_roblox(uname, "", "", launcher_pref, "", custom_launcher_path):
-                        success_count += 1
-                    else:
-                        failed_launch = True
-                except Exception as e:
-                    print(f"[ERROR] Failed to launch Roblox home for {uname}: {e}")
-            if failed_launch:
-                self._silent_check_cookies()
-            
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
-
-            def on_done():
-                if success_count > 0:
-                    self.settings["last_joined_user"] = selected_usernames[-1]
-                    self.save_settings()
-                    if not self.settings.get("disable_launch_popup", False):
-                        if len(selected_usernames) == 1:
-                            messagebox.showinfo("Success", "Roblox is launching to home! Check your desktop.")
-                        else:
-                            messagebox.showinfo("Success", f"Roblox is launching to home for {success_count} account(s)! Check your desktop.")
-                else:
-                    messagebox.showerror("Error", "Failed to launch Roblox.")
-            
-            self.root.after(0, on_done)
-
-        threading.Thread(target=worker, args=(usernames,), daemon=True).start()
-
-    def launch_game(self):
-        """Launch Roblox game with the selected account(s)"""
-        
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-        else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
-
-        game_id_input = self.place_entry.get().strip()
-        private_server_input = self.private_server_entry.get().strip()
-
-        if game_id_input:
-            if not game_id_input.isdigit():
-                messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
-                return
-            game_id = game_id_input
-        elif private_server_input:
-            vip_pid = re.search(r'roblox\.com/games/(\d+)', private_server_input)
-            game_id = vip_pid.group(1) if vip_pid else ""
-        else:
-            messagebox.showwarning("Missing Info", "Please enter a Place ID or paste a VIP server / share link in the Private Server field.")
-            return
-
-        private_server = private_server_input 
-
-        if self.settings.get("confirm_before_launch", False):
-            game_name = RobloxAPI.get_game_name(game_id)
-            if not game_name:
-                game_name = f"Place {game_id}"
-            if len(usernames) == 1:
-                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join {game_name}?")
-            else:
-                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join {game_name} with {len(usernames)} accounts?")
-            if not confirm:
-                return
-
-        def worker(selected_usernames, pid, psid):
-            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-            success_count = 0
-            failed_launch = False
-            for i, uname in enumerate(selected_usernames):
-                try:
-                    if self.manager.launch_roblox(uname, pid, psid, launcher_pref, "", custom_launcher_path):
-                        success_count += 1
-                    else:
-                        failed_launch = True
-                except Exception as e:
-                    print(f"[ERROR] Failed to launch game for {uname}: {e}")
-                if i < len(selected_usernames) - 1:
-                    time.sleep(2)
-            if failed_launch:
-                self._silent_check_cookies()
-
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
-
-            def on_done():
-                if success_count > 0:
-                    self.settings["last_joined_user"] = selected_usernames[-1]
-                    self.save_settings()
-                    gname = RobloxAPI.get_game_name(pid)
-                    if gname:
-                        self.add_game_to_list(pid, gname, psid)
-                    else:
-                        self.add_game_to_list(pid, f"Place {pid}", psid)
-                    if not self.settings.get("disable_launch_popup", False):
-                        if len(selected_usernames) == 1:
-                            messagebox.showinfo("Success", "Roblox is launching! Check your desktop.")
-                        else:
-                            messagebox.showinfo("Success", f"Roblox is launching for {success_count} account(s)! Check your desktop.")
-                else:
-                    messagebox.showerror("Error", "Failed to launch Roblox.")
-
-            self.root.after(0, on_done)
-
-        threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
-
-    def open_auto_rejoin(self):
-        """Open the auto-rejoin management window (like favorites window)"""
-        auto_rejoin_window = tk.Toplevel(self.root)
-        self.apply_window_icon(auto_rejoin_window)
-        auto_rejoin_window.title("Auto-Rejoin")
-        auto_rejoin_window.configure(bg=self.BG_DARK)
-        auto_rejoin_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        
-        saved_pos = self.settings.get('auto_rejoin_window_position')
-        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
-            x = saved_pos['x']
-            y = saved_pos['y']
-        else:
-            x = self.root.winfo_x() + 50
-            y = self.root.winfo_y() + 50
-        auto_rejoin_window.geometry(f"450x400+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            auto_rejoin_window.attributes("-topmost", True)
-        
-        auto_rejoin_window.transient(self.root)
-        auto_rejoin_window.focus_force()
-        
-        main_frame = ttk.Frame(auto_rejoin_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
-        
-        header_row = ttk.Frame(main_frame, style="Dark.TFrame")
-        header_row.pack(fill="x", pady=(0, 10))
-        ttk.Label(
-            header_row,
-            text="Auto-Rejoin Accounts",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(side="left")
-
-        list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        list_frame.pack(fill="both", expand=True, pady=(0, 10))
-        
-        list_frame.grid_rowconfigure(0, weight=1)
-        list_frame.grid_columnconfigure(0, weight=1)
-        
-        rejoin_list = tk.Listbox(
-            list_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
-            border=0,
-            font=("Segoe UI", 9),
-            selectmode=tk.EXTENDED
-        )
-        rejoin_list.grid(row=0, column=0, sticky="nsew")
-        
-        v_scrollbar = ttk.Scrollbar(list_frame, command=rejoin_list.yview, orient="vertical")
-        v_scrollbar.grid(row=0, column=1, sticky="ns")
-        rejoin_list.config(yscrollcommand=v_scrollbar.set)
-        
-        def refresh_rejoin_list():
-            rejoin_list.delete(0, tk.END)
-            for account, config in self.auto_rejoin_configs.items():
-                is_active = account in self.auto_rejoin_threads and self.auto_rejoin_threads[account].is_alive()
-                status = "[ACTIVE]" if is_active else "[INACTIVE]"
-                place_id = config.get('place_id', 'Unknown')
-                display = f"{account} - {status} - Place: {place_id}"
-                rejoin_list.insert(tk.END, display)
-        refresh_rejoin_list()
-
-        ttk.Label(
-            main_frame,
-            text="Tip: Hold Ctrl/Shift to select multiple accounts",
-            style="Dark.TLabel",
-            font=("Segoe UI", 8)
-        ).pack(anchor="w", pady=(0, 8))
-
-        def _get_selected_rejoin_accounts():
-            selected_indices = rejoin_list.curselection()
-            if not selected_indices:
-                return []
-            accounts_list = list(self.auto_rejoin_configs.keys())
-            selected_accounts = []
-            for idx in selected_indices:
-                if 0 <= idx < len(accounts_list):
-                    selected_accounts.append(accounts_list[idx])
-            return selected_accounts
-        
-        btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        btn_frame.pack(fill="x")
-        
-        def add_auto_rejoin():
-            """Open dialog to add a new auto-rejoin account"""
-            add_window = tk.Toplevel(auto_rejoin_window)
-            self.apply_window_icon(add_window)
-            add_window.title("Add Auto-Rejoin")
-            add_window.configure(bg=self.BG_DARK)
-            add_window.resizable(False, False)
-            
-            auto_rejoin_window.update_idletasks()
-            x = auto_rejoin_window.winfo_x() + 50
-            y = auto_rejoin_window.winfo_y() + 50
-            add_window.geometry(f"400x500+{x}+{y}")
-            
-            if self.settings.get("enable_topmost", False):
-                add_window.attributes("-topmost", True)
-            
-            add_window.transient(auto_rejoin_window)
-            add_window.focus_force()
-            
-            form_frame = ttk.Frame(add_window, style="Dark.TFrame")
-            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            checkbox_style = ttk.Style()
-            checkbox_style.configure(
-                "Dark.TCheckbutton",
-                background=self.BG_DARK,
-                foreground=self.FG_TEXT,
-                font=("Segoe UI", 10)
-            )
-            
-            ttk.Label(form_frame, text="Account(s) - Hold Ctrl to select multiple:", style="Dark.TLabel").pack(anchor="w")
-            
-            account_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            account_frame.pack(fill="both", expand=True, pady=(0, 10))
-            
-            account_listbox = tk.Listbox(
-                account_frame,
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                selectbackground=self.FG_ACCENT,
-                highlightthickness=0,
-                border=1,
-                font=("Segoe UI", 9),
-                selectmode=tk.EXTENDED,
-                height=6
-            )
-            account_listbox.pack(side="left", fill="both", expand=True)
-            
-            account_scrollbar = ttk.Scrollbar(account_frame, command=account_listbox.yview)
-            account_scrollbar.pack(side="right", fill="y")
-            account_listbox.config(yscrollcommand=account_scrollbar.set)
-            
-            for account in sorted(self.manager.accounts.keys()):
-                account_listbox.insert(tk.END, account)
-            
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
-            place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            place_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            private_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            private_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Job ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            job_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            job_entry.pack(fill="x", pady=(0, 10))
-            
-            interval_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            interval_frame.pack(fill="x", pady=(0, 10))
-            ttk.Label(interval_frame, text="Check Interval (seconds):", style="Dark.TLabel").pack(side="left")
-            interval_spinbox = ttk.Spinbox(interval_frame, from_=5, to=300, increment=5, width=8)
-            interval_spinbox.set(10)
-            interval_spinbox.pack(side="left", padx=(10, 0))
-            
-            retry_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            retry_frame.pack(fill="x", pady=(0, 10))
-            ttk.Label(retry_frame, text="Max Rejoin Attempts:", style="Dark.TLabel").pack(side="left")
-            retry_spinbox = ttk.Spinbox(retry_frame, from_=1, to=50, increment=1, width=8)
-            retry_spinbox.set(5)
-            retry_spinbox.pack(side="left", padx=(10, 0))
-            
-            check_presence_var = tk.BooleanVar(value=True)
-            check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
-            check_presence_check.pack(anchor="w", pady=(0, 10))
-
-            check_internet_var = tk.BooleanVar(value=True)
-            check_internet_check = ttk.Checkbutton(
-                form_frame,
-                text="Check internet connection before launching",
-                style="Dark.TCheckbutton",
-                variable=check_internet_var,
-            )
-            check_internet_check.pack(anchor="w", pady=(0, 10))
-            
-            def save_and_add():
-                selected_indices = account_listbox.curselection()
-                if not selected_indices:
-                    messagebox.showwarning("Missing Info", "Please select at least one account.")
-                    return
+    def eventFilter(self, obj, event): # Handle key recording via event filter on the key button
+        if obj == self._afk_key_btn and self._key_grab_active:
+            if event.type() == event.Type.KeyPress:
+                key_code = event.key()
+                modifiers = event.modifiers()
                 
-                selected_accounts = [account_listbox.get(i) for i in selected_indices]
+                if key_code == Qt.Key_Escape:
+                    self._key_grab_active = False
+                    self._afk_key_hint.hide()
+                    self._afk_key_btn.setText(self._afk_key.upper())
+                    return True
                 
-                place_id = place_entry.get().strip()
-                if not place_id:
-                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
-                    return
-                if not place_id.isdigit():
-                    messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
-                    return
+                key_text = ""
                 
-                job_id = job_entry.get().strip()
+                char_text = event.text().upper()
+                if char_text and len(char_text) == 1 and char_text.isalpha():
+                    key_text = char_text
+                elif char_text and len(char_text) == 1 and char_text.isdigit():
+                    key_text = char_text
                 
-                config = {
-                    'place_id': place_id,
-                    'private_server': private_entry.get().strip(),
-                    'job_id': job_id,
-                    'check_interval': int(interval_spinbox.get()),
-                    'max_retries': int(retry_spinbox.get()),
-                    'check_presence': check_presence_var.get(),
-                    'check_internet_before_launch': check_internet_var.get()
-                }
-                
-                for account in selected_accounts:
-                    self.auto_rejoin_configs[account] = config.copy()
-                
-                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
-                self.save_settings()
-                
-                add_window.destroy()
-                refresh_rejoin_list()
-                
-                if len(selected_accounts) == 1:
-                    messagebox.showinfo("Success", f"Added auto-rejoin for {selected_accounts[0]}!")
-                else:
-                    messagebox.showinfo("Success", f"Added auto-rejoin for {len(selected_accounts)} accounts:\n{', '.join(selected_accounts)}")
-                
-                auto_rejoin_window.lift()
-                auto_rejoin_window.focus_force()
-            
-            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            button_frame.pack(fill="x", pady=(10, 0))
-            
-            ttk.Button(button_frame, text="Save", style="Dark.TButton", command=save_and_add).pack(side="left", fill="x", expand=True, padx=(0, 5))
-            ttk.Button(button_frame, text="Cancel", style="Dark.TButton", command=add_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-        def edit_auto_rejoin():
-            """Edit selected auto-rejoin config"""
-            selected_accounts = _get_selected_rejoin_accounts()
-            if not selected_accounts:
-                messagebox.showwarning("No Selection", "Please select an account to edit.")
-                return
-            if len(selected_accounts) > 1:
-                messagebox.showwarning("Multiple Selected", "Please select only one account to edit.")
-                return
-            
-            account = selected_accounts[0]
-            config = self.auto_rejoin_configs[account]
-            
-            edit_window = tk.Toplevel(auto_rejoin_window)
-            self.apply_window_icon(edit_window)
-            edit_window.title("Edit Auto-Rejoin")
-            edit_window.configure(bg=self.BG_DARK)
-            edit_window.resizable(False, False)
-            
-            auto_rejoin_window.update_idletasks()
-            x = auto_rejoin_window.winfo_x() + 50
-            y = auto_rejoin_window.winfo_y() + 50
-            edit_window.geometry(f"400x430+{x}+{y}")
-            
-            if self.settings.get("enable_topmost", False):
-                edit_window.attributes("-topmost", True)
-            
-            edit_window.transient(auto_rejoin_window)
-            edit_window.focus_force()
-            
-            form_frame = ttk.Frame(edit_window, style="Dark.TFrame")
-            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            checkbox_style = ttk.Style()
-            checkbox_style.configure(
-                "Dark.TCheckbutton",
-                background=self.BG_DARK,
-                foreground=self.FG_TEXT,
-                font=("Segoe UI", 10)
-            )
-            
-            ttk.Label(form_frame, text=f"Account: {account}", style="Dark.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
-            place_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            place_entry.insert(0, config.get('place_id', ''))
-            place_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            private_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            private_entry.insert(0, config.get('private_server', ''))
-            private_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Job ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            job_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            job_entry.insert(0, config.get('job_id', ''))
-            job_entry.pack(fill="x", pady=(0, 10))
-            
-            interval_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            interval_frame.pack(fill="x", pady=(0, 10))
-            ttk.Label(interval_frame, text="Check Interval (seconds):", style="Dark.TLabel").pack(side="left")
-            interval_spinbox = ttk.Spinbox(interval_frame, from_=5, to=300, increment=5, width=8)
-            interval_spinbox.set(config.get('check_interval', 10))
-            interval_spinbox.pack(side="left", padx=(10, 0))
-            
-            retry_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            retry_frame.pack(fill="x", pady=(0, 10))
-            ttk.Label(retry_frame, text="Max Rejoin Attempts:", style="Dark.TLabel").pack(side="left")
-            retry_spinbox = ttk.Spinbox(retry_frame, from_=1, to=50, increment=1, width=8)
-            retry_spinbox.set(config.get('max_retries', 5))
-            retry_spinbox.pack(side="left", padx=(10, 0))
-            
-            check_presence_var = tk.BooleanVar(value=config.get('check_presence', True))
-            check_presence_check = ttk.Checkbutton(form_frame, text="Check if player is in target PlaceID", style="Dark.TCheckbutton", variable=check_presence_var)
-            check_presence_check.pack(anchor="w", pady=(0, 10))
+                if not key_text:
+                    key_map = {
+                        Qt.Key_Space: "SPACE",
+                        Qt.Key_Tab: "TAB",
+                        Qt.Key_Backspace: "BACKSPACE",
+                        Qt.Key_Return: "ENTER",
+                        Qt.Key_Enter: "NUMPADENTER",
+                        Qt.Key_Delete: "DELETE",
+                        Qt.Key_Insert: "INSERT",
+                        Qt.Key_Home: "HOME",
+                        Qt.Key_End: "END",
+                        Qt.Key_PageUp: "PGUP",
+                        Qt.Key_PageDown: "PGDOWN",
+                        Qt.Key_Down: "DOWN",
+                        Qt.Key_Left: "LEFT",
+                        Qt.Key_Right: "RIGHT",
+                        Qt.Key_Up: "UP",
 
-            check_internet_var = tk.BooleanVar(value=config.get('check_internet_before_launch', True))
-            check_internet_check = ttk.Checkbutton(
-                form_frame,
-                text="Check internet connection before launching",
-                style="Dark.TCheckbutton",
-                variable=check_internet_var,
-            )
-            check_internet_check.pack(anchor="w", pady=(0, 10))
-            
-            def save_edit():
-                place_id = place_entry.get().strip()
-                if not place_id:
-                    messagebox.showwarning("Missing Info", "Please enter a Place ID.")
-                    return
-                if not place_id.isdigit():
-                    messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
-                    return
-                
-                job_id = job_entry.get().strip()
-                
-                self.auto_rejoin_configs[account] = {
-                    'place_id': place_id,
-                    'private_server': private_entry.get().strip(),
-                    'job_id': job_id,
-                    'check_interval': int(interval_spinbox.get()),
-                    'max_retries': int(retry_spinbox.get()),
-                    'check_presence': check_presence_var.get(),
-                    'check_internet_before_launch': check_internet_var.get()
-                }
-                
-                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
-                self.save_settings()
-                
-                edit_window.destroy()
-                refresh_rejoin_list()
-                auto_rejoin_window.lift()
-                auto_rejoin_window.focus_force()
-            
-            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            button_frame.pack(fill="x", pady=(10, 0))
-            
-            ttk.Button(button_frame, text="Save", style="Dark.TButton", command=save_edit).pack(side="left", fill="x", expand=True, padx=(0, 5))
-            ttk.Button(button_frame, text="Cancel", style="Dark.TButton", command=edit_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-        def remove_auto_rejoin():
-            """Remove selected auto-rejoin config(s)"""
-            selected_accounts = _get_selected_rejoin_accounts()
-            if not selected_accounts:
-                messagebox.showwarning("No Selection", "Please select account(s) to remove.")
-                return
+                        Qt.Key_F1: "F1", Qt.Key_F2: "F2", Qt.Key_F3: "F3",
+                        Qt.Key_F4: "F4", Qt.Key_F5: "F5", Qt.Key_F6: "F6",
+                        Qt.Key_F7: "F7", Qt.Key_F8: "F8", Qt.Key_F9: "F9",
+                        Qt.Key_F10: "F10", Qt.Key_F11: "F11", Qt.Key_F12: "F12",
 
-            if len(selected_accounts) == 1:
-                confirm_msg = f"Remove auto-rejoin for {selected_accounts[0]}?"
-            else:
-                confirm_msg = f"Remove auto-rejoin for {len(selected_accounts)} selected accounts?"
+                        Qt.Key_Shift: "SHIFT",
+                        Qt.Key_Control: "CTRL",
+                        Qt.Key_Alt: "ALT",
+                        Qt.Key_Meta: "WIN",
+                        Qt.Key_AltGr: "ALTGR",
 
-            if messagebox.askyesno("Confirm", confirm_msg):
-                for account in selected_accounts:
-                    self.stop_auto_rejoin_for_account(account)
-                    if account in self.auto_rejoin_configs:
-                        del self.auto_rejoin_configs[account]
-                self.settings['auto_rejoin_configs'] = self.auto_rejoin_configs
-                self.save_settings()
-                refresh_rejoin_list()
-        
-        def start_selected():
-            """Start auto-rejoin for selected account(s)"""
-            selected_accounts = _get_selected_rejoin_accounts()
-            if not selected_accounts:
-                messagebox.showwarning("No Selection", "Please select account(s) to start.")
-                return
+                        Qt.Key_CapsLock: "CAPSLOCK",
+                        Qt.Key_NumLock: "NUMLOCK",
+                        Qt.Key_ScrollLock: "SCROLLLOCK",
 
-            self._match_pids_to_accounts(selected_accounts)
+                        Qt.Key_Minus: "-",
+                        Qt.Key_Equal: "=",
+                        Qt.Key_BracketLeft: "[",
+                        Qt.Key_BracketRight: "]",
+                        Qt.Key_Backslash: "\\",
+                        Qt.Key_Semicolon: ";",
+                        Qt.Key_QuoteLeft: "'",
+                        Qt.Key_Comma: ",",
+                        Qt.Key_Period: ".",
+                        Qt.Key_Slash: "/",
+                        Qt.Key_QuoteLeft: "`",
 
-            for account in selected_accounts:
-                self.start_auto_rejoin_for_account(account)
-
-            auto_rejoin_window.after(500, refresh_rejoin_list)
-            if len(selected_accounts) == 1:
-                account = selected_accounts[0]
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Started",
-                    f"Monitoring **{account}** on place `{self.auto_rejoin_configs[account].get('place_id', '?')}`.",
-                    0x2ECC71
-                )
-                messagebox.showinfo("Started", f"Auto-rejoin started for {account}!")
-            else:
-                lines = "\n".join(
-                    f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
-                    for acc in selected_accounts
-                )
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Started",
-                    f"Monitoring {len(selected_accounts)} account(s):\n{lines}",
-                    0x2ECC71
-                )
-                messagebox.showinfo("Started", f"Auto-rejoin started for {len(selected_accounts)} account(s)!")
-        
-        def stop_selected():
-            """Stop auto-rejoin for selected account(s)"""
-            selected_accounts = _get_selected_rejoin_accounts()
-            if not selected_accounts:
-                messagebox.showwarning("No Selection", "Please select account(s) to stop.")
-                return
-
-            for account in selected_accounts:
-                self.stop_auto_rejoin_for_account(account)
-            refresh_rejoin_list()
-            if len(selected_accounts) == 1:
-                messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {selected_accounts[0]}!")
-            else:
-                messagebox.showinfo("Stopped", f"Auto-rejoin stopped for {len(selected_accounts)} account(s)!")
-        
-        def start_all():
-            """Start auto-rejoin for all accounts"""
-            accounts = list(self.auto_rejoin_configs.keys())
-
-            self._match_pids_to_accounts(accounts)
-
-            if accounts:
-                lines = "\n".join(
-                    f"- **{acc}** on place `{self.auto_rejoin_configs[acc].get('place_id', '?')}`"
-                    for acc in accounts
-                )
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Started",
-                    f"Monitoring {len(accounts)} account(s):\n{lines}",
-                    0x2ECC71
-                )
-
-            for account in accounts:
-                self.start_auto_rejoin_for_account(account)
-
-            auto_rejoin_window.after(500, refresh_rejoin_list)
-            messagebox.showinfo("Started", f"Auto-rejoin started for all {len(accounts)} account(s)!")
-        
-        def stop_all():
-            """Stop auto-rejoin for all accounts"""
-            for account in list(self.auto_rejoin_threads.keys()):
-                self.stop_auto_rejoin_for_account(account)
-            refresh_rejoin_list()
-            messagebox.showinfo("Stopped", "Auto-rejoin stopped for all accounts!")
-        
-        def on_auto_rejoin_close():
-            """Save window position before closing"""
-            self.settings['auto_rejoin_window_position'] = {
-                'x': auto_rejoin_window.winfo_x(),
-                'y': auto_rejoin_window.winfo_y()
-            }
-            self.save_settings()
-            auto_rejoin_window.destroy()
-        
-        auto_rejoin_window.protocol("WM_DELETE_WINDOW", on_auto_rejoin_close)
-        
-        row1_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
-        row1_frame.pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(row1_frame, text="Add", style="Dark.TButton", command=add_auto_rejoin).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(row1_frame, text="Edit", style="Dark.TButton", command=edit_auto_rejoin).pack(side="left", fill="x", expand=True, padx=2)
-        ttk.Button(row1_frame, text="Remove", style="Dark.TButton", command=remove_auto_rejoin).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        
-        row2_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
-        row2_frame.pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(row2_frame, text="Start Selected", style="Dark.TButton", command=start_selected).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(row2_frame, text="Stop Selected", style="Dark.TButton", command=stop_selected).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        
-        row3_frame = ttk.Frame(btn_frame, style="Dark.TFrame")
-        row3_frame.pack(fill="x")
-        
-        ttk.Button(row3_frame, text="Start All", style="Dark.TButton", command=start_all).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ttk.Button(row3_frame, text="Stop All", style="Dark.TButton", command=stop_all).pack(side="left", fill="x", expand=True, padx=(2, 0))
-
-    def join_user(self):
-        """Join a user's current game"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-        else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
-        
-        join_window = tk.Toplevel(self.root)
-        self.apply_window_icon(join_window)
-        join_window.title("Join User")
-        join_window.geometry("450x220")
-        join_window.configure(bg=self.BG_DARK)
-        join_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 220) // 2
-        join_window.geometry(f"450x220+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            join_window.attributes("-topmost", True)
-        
-        join_window.transient(self.root)
-        join_window.grab_set()
-        
-        main_frame = ttk.Frame(join_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Join User's Game",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        ttk.Label(
-            main_frame,
-            text="⚠️ User must have their joins enabled!",
-            style="Dark.TLabel",
-            font=("Segoe UI", 9, "italic"),
-            foreground="#FFA500"
-        ).pack(anchor="w", pady=(0, 10))
-        
-        ttk.Label(main_frame, text="Username to join:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        username_entry = ttk.Entry(main_frame, style="Dark.TEntry")
-        username_entry.pack(fill="x", pady=(0, 15))
-        username_entry.focus_set()
-        
-        def do_join():
-            target_username = username_entry.get().strip()
-            
-            if not target_username:
-                messagebox.showwarning("Missing Information", "Please enter a username.")
-                return
-            
-            join_window.destroy()
-            
-            def worker(selected_usernames, target_user):
-                
-                user_id = RobloxAPI.get_user_id_from_username(target_user)
-                if not user_id:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        f"User '{target_user}' not found."
-                    ))
-                    return
-                
-                account_cookie = self.manager.accounts.get(selected_usernames[0])
-                if isinstance(account_cookie, dict):
-                    account_cookie = account_cookie.get('cookie')
-                
-                if not account_cookie:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        "Failed to get account cookie."
-                    ))
-                    return
-                
-                presence = RobloxAPI.get_player_presence(user_id, account_cookie)
-                
-                if not presence:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        f"Failed to get presence for '{target_user}'. Please try again."
-                    ))
-                    return
-                
-                if not presence.get('in_game'):
-                    self.root.after(0, lambda: messagebox.showinfo(
-                        "Not In Game",
-                        f"'{target_user}' is not currently in a game.\n\nStatus: {presence.get('last_location', 'Unknown')}"
-                    ))
-                    return
-                
-                place_id = str(presence.get('place_id', ''))
-                game_id = str(presence.get('game_id', ''))
-                
-                if not place_id:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        f"Could not get game info for '{target_user}'."
-                    ))
-                    return
-                
-                launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-                success_count = 0
-                
-                for uname in selected_usernames:
-                    try:
-                        if self.manager.launch_roblox(uname, place_id, "", launcher_pref, game_id, custom_launcher_path):
-                            success_count += 1
-                    except Exception as e:
-                        print(f"[ERROR] Failed to launch game for {uname}: {e}")
-                
-                def on_done():
-                    if success_count > 0:
-                        game_name = RobloxAPI.get_game_name(place_id)
-                        if game_name:
-                            self.add_game_to_list(place_id, game_name, "")
-                        else:
-                            self.add_game_to_list(place_id, f"Place {place_id}", "")
-                        
-                        if len(selected_usernames) == 1:
-                            messagebox.showinfo(
-                                "Success",
-                                f"Joining '{target_user}' in their game! Check your desktop."
-                            )
-                        else:
-                            messagebox.showinfo(
-                                "Success",
-                                f"Joining '{target_user}' with {success_count} account(s)! Check your desktop."
-                            )
-                    else:
-                        messagebox.showerror("Error", "Failed to launch Roblox.")
-                
-                self.root.after(0, on_done)
-            
-            threading.Thread(target=worker, args=(usernames, target_username), daemon=True).start()
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Join",
-            style="Dark.TButton",
-            command=do_join
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=join_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-
-    def join_by_job_id(self):
-        """Join a game by Job ID"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-        else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
-        
-        job_id_window = tk.Toplevel(self.root)
-        self.apply_window_icon(job_id_window)
-        job_id_window.title("Join by Job-ID")
-        job_id_window.geometry("450x220")
-        job_id_window.configure(bg=self.BG_DARK)
-        job_id_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        main_x = self.root.winfo_x()
-        main_y = self.root.winfo_y()
-        main_width = self.root.winfo_width()
-        main_height = self.root.winfo_height()
-        
-        x = main_x + (main_width - 450) // 2
-        y = main_y + (main_height - 220) // 2
-        job_id_window.geometry(f"450x220+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            job_id_window.attributes("-topmost", True)
-        
-        job_id_window.transient(self.root)
-        job_id_window.grab_set()
-        
-        main_frame = ttk.Frame(job_id_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        ttk.Label(
-            main_frame,
-            text="Join by Job-ID",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        ttk.Label(main_frame, text="Job-ID:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        job_id_entry = ttk.Entry(main_frame, style="Dark.TEntry")
-        job_id_entry.pack(fill="x", pady=(0, 15))
-        job_id_entry.focus_set()
-        
-        def do_join_job():
-            place_id = self.place_entry.get().strip()
-            if not place_id:
-                messagebox.showwarning("Missing Information", "Please enter a Place ID first.")
-                return
-            
-            job_id = job_id_entry.get().strip()
-            if not job_id:
-                messagebox.showwarning("Missing Information", "Please enter a Job-ID.")
-                return
-            
-            job_id_window.destroy()
-            
-            def worker(selected_usernames, pid, jid):
-                launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-                success_count = 0
-                
-                for uname in selected_usernames:
-                    try:
-                        if self.manager.launch_roblox(uname, pid, "", launcher_pref, jid, custom_launcher_path):
-                            success_count += 1
-                    except Exception as e:
-                        print(f"[ERROR] Failed to launch game for {uname}: {e}")
-                
-                def on_done():
-                    if success_count > 0:
-                        game_name = RobloxAPI.get_game_name(pid)
-                        if game_name:
-                            self.add_game_to_list(pid, game_name, "")
-                        else:
-                            self.add_game_to_list(pid, f"Place {pid}", "")
-                        
-                        messagebox.showinfo(
-                            "Success",
-                            f"Joining Job-ID {jid} with {success_count} account(s)! Check your desktop."
-                        )
-                    else:
-                        messagebox.showerror("Error", "Failed to launch Roblox.")
-                
-                self.root.after(0, on_done)
-            
-            threading.Thread(target=worker, args=(usernames, place_id, job_id), daemon=True).start()
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Join",
-            style="Dark.TButton",
-            command=do_join_job
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            style="Dark.TButton",
-            command=job_id_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-
-    def join_small_server(self):
-        """Join the smallest available server for a given place ID"""
-        if self.settings.get("enable_multi_select", False):
-            usernames = self.get_selected_usernames()
-            if not usernames:
-                return
-        else:
-            username = self.get_selected_username()
-            if not username:
-                return
-            usernames = [username]
-        
-        place_id = self.place_entry.get().strip()
-        if not place_id:
-            messagebox.showwarning("Missing Information", "Please enter a Place ID first.")
-            return
-        
-        try:
-            int(place_id)
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Place ID must be a valid number.")
-            return
-        
-        def worker(selected_usernames, pid):
-            print(f"[INFO] Searching for smallest server in place {pid}...")
-            game_id = RobloxAPI.get_smallest_server(pid)
-            
-            if not game_id:
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Error",
-                    f"Could not find any available servers for place {pid}.\n\nPlease try again later or check the Place ID."
-                ))
-                return
-            
-            print(f"[SUCCESS] Found smallest server: {game_id}")
-            
-            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-            success_count = 0
-            
-            for uname in selected_usernames:
-                try:
-                    if self.manager.launch_roblox(uname, pid, "", launcher_pref, game_id, custom_launcher_path):
-                        success_count += 1
-                except Exception as e:
-                    print(f"[ERROR] Failed to launch game for {uname}: {e}")
-            
-            def on_done():
-                if success_count > 0:
-                    game_name = RobloxAPI.get_game_name(pid)
-                    if game_name:
-                        self.add_game_to_list(pid, game_name, "")
-                    else:
-                        self.add_game_to_list(pid, f"Place {pid}", "")
+                        Qt.Key_A: "A", Qt.Key_B: "B", Qt.Key_C: "C",
+                        Qt.Key_D: "D", Qt.Key_E: "E", Qt.Key_F: "F",
+                        Qt.Key_G: "G", Qt.Key_H: "H", Qt.Key_I: "I",
+                        Qt.Key_J: "J", Qt.Key_K: "K", Qt.Key_L: "L",
+                        Qt.Key_M: "M", Qt.Key_N: "N", Qt.Key_O: "O",
+                        Qt.Key_P: "P", Qt.Key_Q: "Q", Qt.Key_R: "R",
+                        Qt.Key_S: "S", Qt.Key_T: "T", Qt.Key_U: "U",
+                        Qt.Key_V: "V", Qt.Key_W: "W", Qt.Key_X: "X",
+                        Qt.Key_Y: "Y", Qt.Key_Z: "Z",
+                        Qt.Key_0: "0", Qt.Key_1: "1", Qt.Key_2: "2",
+                        Qt.Key_3: "3", Qt.Key_4: "4", Qt.Key_5: "5",
+                        Qt.Key_6: "6", Qt.Key_7: "7", Qt.Key_8: "8",
+                        Qt.Key_9: "9",
+                    }
+                    key_text = key_map.get(key_code, "")
                     
-                    if len(selected_usernames) == 1:
-                        messagebox.showinfo(
-                            "Success",
-                            f"Joining smallest server! Check your desktop."
-                        )
-                    else:
-                        messagebox.showinfo(
-                            "Success",
-                            f"Joining smallest server with {success_count} account(s)! Check your desktop."
-                        )
+                    if not key_text and Qt.Key_0 <= key_code <= Qt.Key_9:
+                        if modifiers & Qt.KeyboardModifier.KeypadModifier:
+                            key_text = f"NUMPAD{chr(key_code)}"
+                
+                if key_text:
+                    self._afk_key = key_text.lower()
+                    self._afk_key_btn.setText(key_text)
+                    self._afk_key_hint.hide()
+                    self._key_grab_active = False
+                    self._on_afk_setting_changed()
                 else:
-                    messagebox.showerror("Error", "Failed to launch Roblox.")
-            
-            self.root.after(0, on_done)
-        
-        threading.Thread(target=worker, args=(usernames, place_id), daemon=True).start()
-
-    def _close_roblox_handles(self, handle_path):
-        """Close ROBLOX_singletonEvent handles for all running Roblox processes using handle64.exe"""
-        try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-            
-            if not (result.stdout and 'RobloxPlayerBeta.exe' in result.stdout):
+                    self._key_grab_active = False
+                    self._afk_key_hint.hide()
+                    self._afk_key_btn.setText(self._afk_key.upper())
                 return True
-            
-            pids = []
-            for line in result.stdout.split('\n'):
-                match = re.search(r'RobloxPlayerBeta\.exe\s+(\d+)', line)
-                if match:
-                    pids.append(match.group(1))
-            
-            for pid in pids:
-                try:
-                    cmd = f'"{handle_path}" -accepteula -p {pid} -a'
-                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        stdin=subprocess.DEVNULL, text=True, shell=True, timeout=5)
-                    
-                    for line in proc.stdout.splitlines():
-                        if "ROBLOX_singletonEvent" in line:
-                            m = re.search(r'([0-9A-F]+):\s.*ROBLOX_singletonEvent', line, re.IGNORECASE)
-                            if m:
-                                handle_id = m.group(1)
-                                close_cmd = f'"{handle_path}" -accepteula -p {pid} -c {handle_id} -y'
-                                subprocess.run(close_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                            stdin=subprocess.DEVNULL, shell=True, timeout=5)
-                                print(f"[INFO] Closed ROBLOX_singletonEvent handle for PID:{pid}")
-                                break
-                except Exception as e:
-                    print(f"[WARNING] Could not close handle for PID:{pid} - {str(e)}")
-            
-            return True
-        except Exception as e:
-            print(f"[WARNING] Error closing handles: {str(e)}")
-            return False
 
-    def _handle64_monitor_thread(self):
-        target = "robloxplayerbeta.exe"
-        known = set()
-        
-        while self.handle64_monitoring and self.handle64_path:
-            try:
-                current = set()
-                for p in psutil.process_iter(["pid", "name"]):
-                    if p.info["name"] and p.info["name"].lower() == target:
-                        pid = p.info["pid"]
-                        if self._is_valid_roblox_game_client(pid, target):
-                            current.add(pid)
-                
-                new = current - known
-                if new:
-                    threading.Thread(target=self._handle64_close_handles, args=(list(new),), daemon=True).start()
-                    known |= new
-                    for pid in new:
-                        print(f"[INFO] Roblox process created PID:{pid}")
-                
-                known -= (known - current)
-                
-                time.sleep(0.4)
-                    
-            except Exception as e:
-                print(f"[WARNING] Handle64 monitor error: {str(e)}")
-                time.sleep(1.0)
+            elif event.type() == QEvent.MouseButtonPress:
+                button = event.button()
 
-    def _handle64_close_handles(self, new_pids):
-        """Closes ROBLOX_singletonEvent handles for the given PIDs using handle64.exe"""
-        HANDLE = self.handle64_path
-        
-        for pid in new_pids:
-            handle_value = None
-            handle_found = False
-            try:
-                for attempt in range(5):
-                    cmd = f'"{HANDLE}" -accepteula -p {pid} -a'
-                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        stdin=subprocess.DEVNULL, text=True, shell=True)
-                    lines = proc.stdout.splitlines()
-                    for line in lines:
-                        if "ROBLOX_singletonEvent" in line:
-                            m = re.search(r"([0-9A-F]+):.*ROBLOX_singletonEvent", line, re.IGNORECASE)
-                            if m:
-                                handle_value = m.group(1)
-                                break
-                            else:
-                                possible = re.findall(r"\b[0-9A-F]{4,}\b", line)
-                                if possible:
-                                    handle_value = possible[0]
-                                    break
-                    if handle_value:
-                        handle_found = True
-                        break
-                    time.sleep(1)
-                if not handle_value:
-                    print(f"[ERROR] Handle not closed for PID:{pid}")
-                if handle_found:
-                    subprocess.run(f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, shell=True)
-                    print(f"[SUCCESS] Closed handle event for PID:{pid}")
-            except Exception:
-                print(f"[ERROR] Handle not closed for PID:{pid}")
+                mouse_map = {
+                    Qt.LeftButton: "LMB",
+                    Qt.RightButton: "RMB",
+                    Qt.MiddleButton: "MMB",
+                    Qt.BackButton: "MBACK",
+                    Qt.ForwardButton: "MFWD",
+                }
 
-    def _download_handle64_exe(self, local_path):
-        """Download handle64.exe from Sysinternals and extract it"""
-        try:
-            handle_url = "https://download.sysinternals.com/files/Handle.zip"
-            handle_exe_name = "handle64.exe" if platform.architecture()[0] == "64bit" else "handle.exe"
-            
-            with tempfile.TemporaryDirectory() as tmpdirname:
-                zip_path = os.path.join(tmpdirname, "Handle.zip")
-                
-                urlretrieve(handle_url, zip_path)
-                
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extract(handle_exe_name, tmpdirname)
-                    extracted_path = os.path.join(tmpdirname, handle_exe_name)
-                    shutil.move(extracted_path, local_path)
-            
-            return True
-        except Exception as e:
-            print(f"[ERROR] Failed to download handle64.exe: {str(e)}")
-            return False
+                key_text = mouse_map.get(button)
 
-    def _find_handle64_exe(self):
-        """Find handle64.exe in AccountManagerData, same directory as executable, or 'tools' subfolder"""
-        try:
-            handle_path = os.path.join(self.data_folder, 'handle64.exe')
-            if os.path.exists(handle_path):
-                print(f"[INFO] Found handle64.exe at: {handle_path}")
-                return handle_path
-            
-            if getattr(sys, 'frozen', False):
-                base_dir = os.path.dirname(sys.executable)
-            else:
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            
-            handle_path = os.path.join(base_dir, 'handle64.exe')
-            if os.path.exists(handle_path):
-                print(f"[INFO] Found handle64.exe at: {handle_path}")
-                return handle_path
-            
-            handle_path = os.path.join(base_dir, 'handle', 'handle64.exe')
-            if os.path.exists(handle_path):
-                print(f"[INFO] Found handle64.exe at: {handle_path}")
-                return handle_path
-            
-            print(f"[WARNING] handle64.exe not found in: {self.data_folder}, {base_dir}, or {os.path.join(base_dir, 'handle')}")
-            return None
-        except Exception as e:
-            print(f"[WARNING] Error finding handle64.exe: {str(e)}")
-            return None
+                if key_text:
+                    self._afk_key = key_text.lower()
+                    self._afk_key_btn.setText(key_text)
+                    self._afk_key_hint.hide()
+                    self._key_grab_active = False
+                    self._on_afk_setting_changed()
+                return True
+        return super().eventFilter(obj, event)
 
-    def enable_multi_roblox(self):
-        """Enable Multi Roblox + 773 fix"""
-        
-        if self.multi_roblox_handle is not None:
-            self.disable_multi_roblox()
-        
-        try:
-            selected_method = self.settings.get("multi_roblox_method", "default")
-            use_handle64 = selected_method == "handle64"
-            
-            if use_handle64:
-                try:
-                    is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-                except:
-                    is_admin = False
-                
-                if not is_admin:
-                    print("[WARNING] Not running as admin! Prompting user.")
-                    want_admin = messagebox.askyesno(
-                        "Admin Required",
-                        "handle64 mode requires administrator privileges.\n\n"
-                        "The app is NOT running as admin.\n\n"
-                        "Do you want to relaunch as administrator?\n\n"
-                        "Click Yes to restart as admin, or No to fall back to the Default method."
-                    )
-                    if want_admin:
-                        print("[INFO] Relaunching as administrator...")
-                        try:
-                            params = " ".join(f'"{a}"' for a in sys.argv[1:])
-                            ctypes.windll.shell32.ShellExecuteW(
-                                None, "runas", sys.executable, params, None, 1
-                            )
-                        except Exception as e:
-                            print(f"[ERROR] Failed to relaunch as admin: {e}")
-                            messagebox.showerror("Error", f"Failed to relaunch as administrator:\n{e}")
-                        self.root.after(500, self.root.destroy)
-                        return False
-                    else:
-                        print("[INFO] User declined admin, switching to Default method.")
-                        self.settings["multi_roblox_method"] = "default"
-                        self.save_settings()
-                        use_handle64 = False
-                
-                if use_handle64:
-                    handle64_path = self._find_handle64_exe()
-                    if handle64_path:
-                        print("[INFO] handle64.exe found. Using advanced multi-roblox mode.")
-                        self.handle64_path = handle64_path
-                        
-                        self.handle64_monitoring = True
-                        self.handle64_monitor_thread = threading.Thread(
-                            target=self._handle64_monitor_thread,
-                            daemon=True
-                        )
-                        self.handle64_monitor_thread.start()
-                        print("[INFO] Handle64 monitor started.")
-                    else:
-                        print("[INFO] handle64.exe not found. Falling back to default method.")
-                        use_handle64 = False
-            
-            if not use_handle64:
-                print("[INFO] Using default multi-roblox mode.")
-                result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RobloxPlayerBeta.exe'], 
-                                      capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                
-                if result.stdout and 'RobloxPlayerBeta.exe' in result.stdout:
-                    response = messagebox.askquestion(
-                        "Roblox Already Running",
-                        "A Roblox instance is already running.\n\n"
-                        "To use Multi Roblox, you need to close all instances first.\n\n"
-                        "Do you want to close all Roblox instances now?",
-                        icon='warning'
-                    )
-                    
-                    if response == 'yes':
-                        subprocess.run(['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'], 
-                                     capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                        time.sleep(1)
-                        messagebox.showinfo("Success", "All Roblox instances have been closed.")
-                    else:
-                        return False
-            
-            mutex = None
-            if not use_handle64:
-                mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
-                print("[INFO] Multi Roblox activated (mutex mode).")
-                
-                if win32api.GetLastError() == 183:
-                    print("[INFO] Mutex already exists. Took ownership.")
-            else:
-                print("[INFO] Multi Roblox activated (handle64 mode).")
-            
-            cookies_path = os.path.join(
-                os.getenv('LOCALAPPDATA'),
-                r'Roblox\LocalStorage\RobloxCookies.dat'
+    def _on_afk_enabled_changed(self, state):
+        self._afk_enabled = (state == Qt.CheckState.Checked.value)
+        self._save_afk_settings()
+        self._update_afk_status()
+        if self._afk_enabled:
+            actions.start_anti_afk(
+                self._afk_key,
+                self._afk_press_count,
+                self._afk_interval,
+                self._afk_tooltip_enabled,
             )
-            
-            cookie_file = None
-            if os.path.exists(cookies_path):
-                try:
-                    cookie_file = open(cookies_path, 'r+b')
-                    msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
-                    print("[SUCCESS] Error 773 fix applied.")
-                except OSError:
-                    print("[WARNING] Could not lock RobloxCookies.dat. It may already be locked.")
-            else:
-                print("[INFO] Cookies file not found. 773 fix skipped.")
-
-            self.multi_roblox_handle = {'mutex': mutex, 'file': cookie_file}
-            return True
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to enable Multi Roblox: {str(e)}")
-            return False
-    
-    def disable_multi_roblox(self):
-        """Disable Multi Roblox and release resources"""
-        try:
-            if self.handle64_monitoring:
-                self.handle64_monitoring = False
-                if self.handle64_monitor_thread:
-                    self.handle64_monitor_thread.join(timeout=2.0)
-                self.handle64_monitor_thread = None
-                self.handle64_path = None
-                print("[INFO] Handle64 monitor stopped.")
-            
-            if self.multi_roblox_handle:
-                if self.multi_roblox_handle.get('file'):
-                    try:
-                        cookie_file = self.multi_roblox_handle['file']
-                        cookies_path = os.path.join(
-                            os.getenv('LOCALAPPDATA'),
-                            r'Roblox\LocalStorage\RobloxCookies.dat'
-                        )
-                        if os.path.exists(cookies_path):
-                            try:
-                                msvcrt.locking(cookie_file.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
-                                print("[SUCCESS] Cookie file unlocked.")
-                            except Exception as unlock_error:
-                                print(f"[ERROR] Failed to unlock cookie file: {unlock_error}")
-                        cookie_file.close()
-                    except Exception as file_error:
-                        print(f"[ERROR] Failed to close cookie file: {file_error}")
-                
-                if self.multi_roblox_handle.get('mutex'):
-                    try:
-                        mutex_handle = self.multi_roblox_handle['mutex']
-                        win32event.ReleaseMutex(mutex_handle)
-                        win32api.CloseHandle(mutex_handle)
-                        print("[SUCCESS] Multi Roblox mutex released and closed.")
-                    except Exception as mutex_error:
-                        print(f"[ERROR] Failed to release mutex: {mutex_error}")
-                
-                self.multi_roblox_handle = None
-        except Exception as e:
-            print(f"[ERROR] Error disabling Multi Roblox: {e}")
-    
-    def initialize_multi_roblox(self):
-        """Initialize Multi Roblox on startup if enabled in settings"""
-        success = self.enable_multi_roblox()
-        if not success:
-            self.settings["enable_multi_roblox"] = False
-            self.save_settings()
-
-    def open_multi_roblox_method_settings(self):
-        """Open Multi Roblox method selection window"""
-        method_window = tk.Toplevel(self.root)
-        self.apply_window_icon(method_window)
-        method_window.title("Multi Roblox Method Settings")
-        method_window.geometry("400x330")
-        method_window.configure(bg=self.BG_DARK)
-        method_window.resizable(False, False)
-        method_window.transient(self.root)
-        
-        if self.settings.get("enable_topmost", False):
-            method_window.attributes("-topmost", True)
-        
-        method_window.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (method_window.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (method_window.winfo_height() // 2)
-        method_window.geometry(f"+{x}+{y}")
-        
-        current_method = self.settings.get("multi_roblox_method", "default")
-        method_var = tk.StringVar(value=current_method)
-        
-        handle64_path = os.path.join(self.data_folder, "handle64.exe")
-        handle64_exists = os.path.exists(handle64_path)
-        
-        container = ttk.Frame(method_window, style="Dark.TFrame")
-        container.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        header_frame = ttk.Frame(container, style="Dark.TFrame")
-        header_frame.pack(fill="x", pady=(0, 15))
-        
-        ttk.Label(
-            header_frame,
-            text="Select Multi Roblox Method",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w")
-        
-        ttk.Label(
-            header_frame,
-            text="Choose how to enable multiple Roblox instances",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(2, 0))
-        
-        separator = ttk.Frame(container, style="Dark.TFrame", height=1)
-        separator.pack(fill="x", pady=(0, 15))
-        separator.configure(relief="solid", borderwidth=1)
-        
-        methods_frame = ttk.Frame(container, style="Dark.TFrame")
-        methods_frame.pack(fill="both", expand=True)
-        
-        tooltip_window = None
-        tooltip_timer = None
-        
-        def show_tooltip(event, text):
-            """Show tooltip with the same style as existing tooltips"""
-            nonlocal tooltip_window, tooltip_timer
-            
-            if tooltip_timer:
-                method_window.after_cancel(tooltip_timer)
-            
-            def create_tooltip():
-                nonlocal tooltip_window
-                if tooltip_window:
-                    return
-                
-                x_pos = event.x_root
-                y_pos = event.y_root + 20
-                
-                tooltip_window = tk.Toplevel(method_window)
-                tooltip_window.wm_overrideredirect(True)
-                tooltip_window.wm_geometry(f"+{x_pos}+{y_pos}")
-                
-                label = tk.Label(
-                    tooltip_window,
-                    text=text,
-                    bg="#333333",
-                    fg="white",
-                    font=(self.FONT_FAMILY, 9),
-                    padx=8,
-                    pady=4,
-                    relief="solid",
-                    borderwidth=1
-                )
-                label.pack()
-                
-                if self.settings.get("enable_topmost", False):
-                    tooltip_window.attributes("-topmost", True)
-            
-            tooltip_timer = method_window.after(500, create_tooltip)
-        
-        def hide_tooltip(event=None):
-            """Hide tooltip"""
-            nonlocal tooltip_window, tooltip_timer
-            
-            if tooltip_timer:
-                method_window.after_cancel(tooltip_timer)
-                tooltip_timer = None
-            
-            if tooltip_window:
-                tooltip_window.destroy()
-                tooltip_window = None
-        
-        radio_style = ttk.Style()
-        radio_style.configure(
-            "Dark.TRadiobutton",
-            background=self.BG_DARK,
-            foreground=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 10)
-        )
-        radio_style.map(
-            "Dark.TRadiobutton",
-            background=[("active", self.BG_DARK)],
-            foreground=[("active", self.FG_TEXT)]
-        )
-        
-        default_radio = ttk.Radiobutton(
-            methods_frame,
-            text="Default Method",
-            variable=method_var,
-            value="default",
-            style="Dark.TRadiobutton"
-        )
-        default_radio.pack(anchor="w", pady=(0, 8))
-        default_radio.bind("<Enter>", lambda e: show_tooltip(e, "Pre-create mutex. Requires closing\nexisting Roblox instances first."))
-        default_radio.bind("<Leave>", hide_tooltip)
-        
-        handle_radio = ttk.Radiobutton(
-            methods_frame,
-            text="Handle64 Method (Advanced)",
-            variable=method_var,
-            value="handle64",
-            style="Dark.TRadiobutton"
-        )
-        handle_radio.pack(anchor="w", pady=(0, 15))
-        handle_radio.bind("<Enter>", lambda e: show_tooltip(e, "Uses handle64.exe to close handles.\nAllows multi-roblox with running instances.\nRequires administrator permission!"))
-        handle_radio.bind("<Leave>", hide_tooltip)
-        
-        status_frame = tk.Frame(
-            methods_frame,
-            bg=self.BG_MID,
-            relief="solid",
-            borderwidth=1
-        )
-        status_frame.pack(fill="x", pady=(0, 10))
-        
-        status_inner = tk.Frame(status_frame, bg=self.BG_MID)
-        status_inner.pack(fill="x", padx=10, pady=8)
-        
-        tk.Label(
-            status_inner,
-            text="handle64.exe Status:",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 9),
-            anchor="w"
-        ).pack(side="left")
-        
-        status_text = "✓ Installed" if handle64_exists else "✗ Not Installed"
-        status_color = "#90EE90" if handle64_exists else "#FFB6C1"
-        
-        status_label = tk.Label(
-            status_inner,
-            text=status_text,
-            bg=self.BG_MID,
-            fg=status_color,
-            font=(self.FONT_FAMILY, 9, "bold"),
-            anchor="e"
-        )
-        status_label.pack(side="right")
-        
-        download_btn = None
-        if not handle64_exists:
-            def download_handle64():
-                """Download handle64.exe"""
-                download_btn.config(state="disabled", text="Downloading...")
-                method_window.update()
-                
-                success = self._download_handle64_exe(handle64_path)
-                
-                if success:
-                    messagebox.showinfo("Success", "handle64.exe downloaded successfully!")
-                    status_label.config(text="✓ Installed", fg="#90EE90")
-                    download_btn.config(state="disabled", text="✓ Downloaded")
-                else:
-                    messagebox.showerror("Download Failed", "Failed to download handle64.exe. Check your internet connection.")
-                    download_btn.config(state="normal", text="Download handle64.exe")
-            
-            download_btn = ttk.Button(
-                methods_frame,
-                text="Download handle64.exe",
-                style="Dark.TButton",
-                command=download_handle64
-            )
-            download_btn.pack(fill="x", pady=(0, 15))
-        
-        btn_container = ttk.Frame(container, style="Dark.TFrame")
-        btn_container.pack(fill="x", pady=(15, 0))
-        
-        def save_method():
-            selected = method_var.get()
-            if selected == "handle64" and not os.path.exists(handle64_path):
-                messagebox.showwarning(
-                    "handle64 Not Available",
-                    "Please download handle64.exe first."
-                )
-                return
-            
-            was_active = self.multi_roblox_handle is not None
-            
-            if was_active:
-                old_method = self.settings.get("multi_roblox_method", "default")
-                if old_method != selected:
-                    print(f"[INFO] Switching multi-roblox from {old_method} to {selected}")
-                    self.disable_multi_roblox()
-            
-            self.settings["multi_roblox_method"] = selected
-            try:
-                with open(self.settings_file, 'w') as f:
-                    json.dump(self.settings, f, indent=2)
-            except Exception as e:
-                print(f"[ERROR] Failed to save settings: {e}")
-            
-            if was_active:
-                success = self.enable_multi_roblox()
-                if not success:
-                    messagebox.showerror("Error", "Failed to restart Multi Roblox with new method.")
-                    method_window.destroy()
-                    return
-            
-            actual_method = self.settings.get("multi_roblox_method", "default")
-            messagebox.showinfo("Success", f"Multi Roblox method set to: {actual_method.title()}")
-            method_window.destroy()
-        
-        save_btn = ttk.Button(
-            btn_container,
-            text="Save",
-            style="Dark.TButton",
-            command=save_method
-        )
-        save_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        cancel_btn = ttk.Button(
-            btn_container,
-            text="Cancel",
-            style="Dark.TButton",
-            command=method_window.destroy
-        )
-        cancel_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
-
-
-    def _run_encryption_switch(self):
-        """Run the encryption method switch process"""
-        
-        current_accounts = self.manager.accounts.copy()
-        
-        self.manager.encryption_config.reset_encryption()
-        self.manager.encryptor = None
-        self.manager.accounts = current_accounts
-        self.manager.save_accounts()
-        
-        self.root.destroy()
-        
-        setup_ui = EncryptionSetupUI()
-        result = setup_ui.setup_encryption_ui()
-        
-        if setup_ui.should_exit:
-            sys.exit(0)
-        
-        
-        try:
-            new_method = setup_ui.encryption_config.get_encryption_method()
-            
-            if new_method == 'password':
-                if result is None:
-                    raise ValueError("Password setup failed - no password returned")
-                new_manager = RobloxAccountManager(password=result)
-            else:
-                new_manager = RobloxAccountManager()
-            
-            new_manager.save_accounts()
-            
-            messagebox.showinfo("Success", "Encryption method switched successfully!\nYour accounts have been re-encrypted.")
-            
-            new_root = tk.Tk()
-            app = AccountManagerUI(new_root, new_manager)
-            new_root.mainloop()
-            
-        except Exception as e:
-            print(f"[ERROR] Failed to switch encryption: {e}")
-            traceback.print_exc()
-            messagebox.showerror("Error", f"Failed to switch encryption: {e}")
-            sys.exit(1)
-
-    def open_settings(self):
-        """Open the Settings window"""
-        if hasattr(self, 'settings_window') and self.settings_window and self.settings_window.winfo_exists():
-            self.settings_window.lift()
-            self.settings_window.focus()
-            return
-        
-        settings_window = tk.Toplevel(self.root)
-        self.apply_window_icon(settings_window)
-        self.settings_window = settings_window
-        settings_window.title("Settings")
-        settings_window.configure(bg=self.BG_DARK)
-        settings_window.resizable(False, False)
-        
-        settings_window.transient(self.root)
-        
-        def on_close():
-            self.settings_window = None
-            settings_window.destroy()
-        
-        def on_settings_close():
-            """Save window position before closing"""
-            save_current_theme = getattr(self, "_theme_editor_save_current_config", None)
-            if callable(save_current_theme):
-                try:
-                    save_current_theme()
-                except Exception as exc:
-                    print(f"[ERROR] Failed to save current theme config on close: {exc}")
-
-            self.settings['settings_window_position'] = {
-                'x': settings_window.winfo_x(),
-                'y': settings_window.winfo_y()
-            }
-            self.save_settings()
-            self.settings_window = None
-            settings_window.destroy()
-        
-        settings_window.protocol("WM_DELETE_WINDOW", on_settings_close)
-        
-        if self.settings.get("enable_topmost", False):
-            settings_window.attributes("-topmost", True)
-        
-        self.root.update_idletasks()
-        
-        settings_width = 330
-        settings_height = 385
-        
-        saved_pos = self.settings.get('settings_window_position')
-        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
-            x = saved_pos['x']
-            y = saved_pos['y']
         else:
-            main_x = self.root.winfo_x()
-            main_y = self.root.winfo_y()
-            main_width = self.root.winfo_width()
-            main_height = self.root.winfo_height()
-            x = main_x + (main_width - settings_width) // 2
-            y = main_y + (main_height - settings_height) // 2
-        
-        settings_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
-        
-        tabs = ttk.Notebook(settings_window)
-        tabs.pack(fill=tk.BOTH, expand=True)
-        
-        general_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(general_tab, text="General")
-        
-        themes_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(themes_tab, text="Themes")
-        
-        roblox_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(roblox_tab, text="Roblox")
-        
-        tool_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(tool_tab, text="Tool")
-        
-        discord_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(discord_tab, text="Discord")
-        
-        developer_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(developer_tab, text="Developer")
-        
-        dev_frame = ttk.Frame(developer_tab, style="Dark.TFrame")
-        dev_frame.pack(fill="both", expand=True, padx=20, pady=15)
+            actions.stop_anti_afk()
 
-        ttk.Label(
-            dev_frame,
-            text="Developer",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w", pady=(0, 2))
+    def _update_afk_status(self):
+        status = "Running" if self._afk_enabled else "Stopped"
+        color = self._AR_ACTIVE_COLOR if self._afk_enabled else self._AR_INACTIVE_COLOR
+        self._afk_status_lbl.setText(f"Status: {status}")
+        self._afk_status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
 
-        ttk.Label(
-            dev_frame,
-            text="Developer options are dangerous. Use only if you \nknow what you're doing",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(0, 10))
+    def _save_afk_settings(self):
+        actions.save_ui_setting("anti_afk_key", self._afk_key)
+        actions.save_ui_setting("anti_afk_press_count", self._afk_press_count)
+        actions.save_ui_setting("anti_afk_interval", self._afk_interval)
+        actions.save_ui_setting("anti_afk_tooltip_enabled", self._afk_tooltip_enabled)
+        actions.save_ui_setting("anti_afk_enabled", self._afk_enabled)
 
-        sep = ttk.Frame(dev_frame, style="Dark.TFrame", height=1)
-        sep.pack(fill="x", pady=(0, 8))
-        sep.configure(relief="solid", borderwidth=1)
+    def _build_multi_roblox_panel(self) -> QFrame: # Multi Roblox
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
 
-        dev_mode_var = tk.BooleanVar(value=self.settings.get("developer_mode", False))
-        copy_cookie_var = tk.BooleanVar(value=self.settings.get("enable_copy_cookie", False))
-        ws_enabled_var = tk.BooleanVar(value=self.settings.get("websocket_enabled", False))
-        ws_port_var = tk.StringVar(value=str(self.settings.get("websocket_port", 8765)))
-        ws_require_password_var = tk.BooleanVar(value=self.settings.get("websocket_require_password", False))
-        ws_password_var = tk.StringVar(value="")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
 
-        def _save_dev_mode():
-            self.settings["developer_mode"] = dev_mode_var.get()
-            if not dev_mode_var.get():
-                copy_cookie_var.set(False)
-                self.settings["enable_copy_cookie"] = False
-                ws_enabled_var.set(False)
-                self.settings["websocket_enabled"] = False
-                self.stop_websocket_server()
-            self.save_settings()
-            _update_dev_controls()
+        # Header
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        ttl = QLabel("Multi Roblox")
+        ttl.setObjectName("sectionTitle")
+        hdr.addWidget(ttl)
+        hdr.addStretch(1)
+        self._mr_status_lbl = QLabel("Status: Disabled")
+        self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
+        hdr.addWidget(self._mr_status_lbl)
+        lay.addLayout(hdr)
 
-        def _save_copy_cookie():
-            self.settings["enable_copy_cookie"] = copy_cookie_var.get()
-            self.save_settings()
+        desc = QLabel(
+            "Allows multiple Roblox instances to run simultaneously. "
+            "Choose Default (mutex) or Handle64 (Sysinternals) method."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        lay.addWidget(desc)
 
-        def _save_ws_enabled():
-            self.settings["websocket_enabled"] = ws_enabled_var.get()
-            self.save_settings()
-            if ws_enabled_var.get():
-                self.start_websocket_server()
+        # Enable checkbox
+        self._mr_enabled_chk = QCheckBox("Enable Multi Roblox")
+        self._mr_enabled_chk.setStyleSheet(f"QCheckBox {{ color: {TEXT}; font-size: 12px; font-weight: 700; }}")
+        self._mr_enabled_chk.stateChanged.connect(self._on_mr_enabled_changed)
+        lay.addWidget(self._mr_enabled_chk)
+
+        # Settings form
+        form = QVBoxLayout()
+        form.setContentsMargins(0, 8, 0, 0)
+        form.setSpacing(10)
+
+        # Method row
+        row_method = QHBoxLayout()
+        row_method.setSpacing(8)
+        lbl_method = QLabel("Method:")
+        lbl_method.setStyleSheet(f"color: {MUTED}; font-size: 11px; min-width: 80px;")
+        row_method.addWidget(lbl_method)
+
+        self._mr_default_radio = QRadioButton("Default")
+        self._mr_default_radio.setStyleSheet(f"QRadioButton {{ color: {TEXT}; font-size: 11px; }}")
+        self._mr_default_radio.setToolTip(
+            "Uses a Windows mutex (ROBLOX_singletonEvent) to allow multiple\n"
+            "Roblox instances. Works without administrator rights.\n"
+            "Also applies the Error 773 (cookie lock) fix automatically."
+        )
+        self._mr_default_radio.toggled.connect(self._on_mr_method_changed)
+        row_method.addWidget(self._mr_default_radio)
+
+        self._mr_handle64_radio = QRadioButton("Handle64")
+        self._mr_handle64_radio.setStyleSheet(f"QRadioButton {{ color: {TEXT}; font-size: 11px; }}")
+        self._mr_handle64_radio.setToolTip(
+            "Uses handle64.exe (Sysinternals) to close the singleton handle\n"
+            "in each Roblox process as it launches. More reliable but\n"
+            "REQUIRES administrator privileges and handle64.exe to be present."
+        )
+        self._mr_handle64_radio.toggled.connect(self._on_mr_method_changed)
+        row_method.addWidget(self._mr_handle64_radio)
+        row_method.addStretch(1)
+        form.addLayout(row_method)
+
+        # Handle64 status row
+        row_h64 = QHBoxLayout()
+        row_h64.setSpacing(8)
+        lbl_h64 = QLabel("Handle64:")
+        lbl_h64.setStyleSheet(f"color: {MUTED}; font-size: 11px; min-width: 80px;")
+        row_h64.addWidget(lbl_h64)
+
+        self._mr_h64_status_lbl = QLabel()
+        self._mr_h64_status_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        row_h64.addWidget(self._mr_h64_status_lbl)
+
+        self._mr_dl_btn = QPushButton("Download Handle64")
+        self._mr_dl_btn.setToolTip(
+            "Downloads handle64.exe from Sysinternals (Microsoft)\n"
+            "and saves it to the AccountManagerData folder."
+        )
+        self._mr_dl_btn.setFixedHeight(24)
+        self._mr_dl_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE}; "
+            f"padding: 2px 8px; font-size: 11px; color: {TEXT}; border-radius: 3px; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+            f"QPushButton:disabled {{ color: {MUTED}; }}"
+        )
+        self._mr_dl_btn.clicked.connect(self._on_mr_download_handle64)
+        row_h64.addWidget(self._mr_dl_btn)
+        row_h64.addStretch(1)
+        form.addLayout(row_h64)
+
+        lay.addLayout(form)
+        lay.addStretch(1)
+
+        # Load saved state
+        self._load_mr_settings()
+        return panel
+
+    def _load_mr_settings(self):
+        saved = actions.load_ui_settings()
+        self._mr_method = saved.get("multi_roblox_method", "default")
+        self._mr_enabled = saved.get("multi_roblox_enabled", False)
+
+        if self._mr_method == "handle64":
+            self._mr_handle64_radio.setChecked(True)
+        else:
+            self._mr_default_radio.setChecked(True)
+
+        self._mr_enabled_chk.setChecked(self._mr_enabled)
+        self._update_mr_h64_status()
+        self._update_mr_status()
+
+        if self._mr_enabled:
+            self._start_multi_roblox()
+
+    def _update_mr_h64_status(self):
+        path = actions.find_handle64()
+        if path:
+            self._mr_h64_status_lbl.setText("[handle64 found]")
+            self._mr_h64_status_lbl.setStyleSheet("color: #4CAF50; font-size: 10px;")
+            self._mr_handle64_radio.setEnabled(True)
+            self._mr_dl_btn.setText("Downloaded")
+            self._mr_dl_btn.setEnabled(False)
+        else:
+            self._mr_h64_status_lbl.setText("[handle64 not found]")
+            self._mr_h64_status_lbl.setStyleSheet("color: #EF5350; font-size: 10px;")
+            self._mr_handle64_radio.setEnabled(False)
+            self._mr_dl_btn.setText("Download Handle64")
+            self._mr_dl_btn.setEnabled(True)
+
+    def _on_mr_method_changed(self):
+        if self._mr_handle64_radio.isChecked():
+            self._mr_method = "handle64"
+        else:
+            self._mr_method = "default"
+        actions.save_ui_setting("multi_roblox_method", self._mr_method)
+        if self._mr_enabled:
+            self._stop_multi_roblox()
+            self._start_multi_roblox()
+
+    def _on_mr_enabled_changed(self, state):
+        self._mr_enabled = (state == Qt.CheckState.Checked.value)
+        actions.save_ui_setting("multi_roblox_enabled", self._mr_enabled)
+        if self._mr_enabled:
+            self._start_multi_roblox()
+        else:
+            self._stop_multi_roblox()
+        self._update_mr_status()
+
+    def _start_multi_roblox(self):
+        ok, msg = actions.enable_multi_roblox(self._mr_method)
+        if not ok:
+            if msg == "NEEDS_ADMIN":
+                self._mr_ask_restart_as_admin()
             else:
-                self.stop_websocket_server()
-            _update_dev_controls()
+                self._mr_status_lbl.setText(f"Error: {msg}")
+                self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
+            self._mr_enabled = False
+            self._mr_enabled_chk.blockSignals(True)
+            self._mr_enabled_chk.setChecked(False)
+            self._mr_enabled_chk.blockSignals(False)
+            actions.save_ui_setting("multi_roblox_enabled", False)
+        else:
+            self._update_mr_status()
 
-        def _apply_ws_port():
-            port_text = ws_port_var.get().strip()
+    def _mr_ask_restart_as_admin(self):
+        reply = QMessageBox.question(
+            self,
+            "Administrator Required",
+            "The program is not running as administrator.\n\n"
+            "Handle64 mode requires administrator privileges.\n\n"
+            "Would you like to restart as administrator?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
             try:
-                port = int(port_text)
-            except Exception:
-                messagebox.showerror("Invalid Port", "WebSocket port must be a number.", parent=settings_window)
-                return
-
-            if port < 1 or port > 65535:
-                messagebox.showerror("Invalid Port", "WebSocket port must be between 1 and 65535.", parent=settings_window)
-                return
-
-            self.settings["websocket_port"] = port
-            ws_port_var.set(str(port))
-            self.save_settings()
-            if ws_enabled_var.get():
-                self.restart_websocket_server()
-            print(f"[INFO] WebSocket port set to {port}")
-
-        def _save_ws_require_password():
-            self.settings["websocket_require_password"] = ws_require_password_var.get()
-            self.save_settings()
-            _update_dev_controls()
-
-        def _set_ws_password():
-            password = ws_password_var.get()
-            if not password.strip():
-                messagebox.showwarning("Missing Password", "Please enter a password.", parent=settings_window)
-                return
-
-            if self._set_websocket_password(password):
-                ws_password_var.set("")
-                messagebox.showinfo("Saved", "WebSocket password has been updated.", parent=settings_window)
-            else:
-                messagebox.showerror("Error", "Failed to save WebSocket password.", parent=settings_window)
-
-        def _open_websocket_docs():
-            webbrowser.open("https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram")
-
-        def _update_dev_controls():
-            state = "normal" if dev_mode_var.get() else "disabled"
-            try:
-                copy_check.config(state=state)
-            except Exception:
-                pass
-            for widget in (ws_enabled_check, ws_port_entry, ws_port_set_btn, ws_require_password_check, ws_password_entry, ws_password_set_btn):
-                try:
-                    widget.config(state=state)
-                except Exception:
-                    pass
-
-            ws_detail_state = "normal" if (dev_mode_var.get() and ws_enabled_var.get()) else "disabled"
-            for widget in (ws_port_entry, ws_port_set_btn, ws_require_password_check):
-                try:
-                    widget.config(state=ws_detail_state)
-                except Exception:
-                    pass
-
-            ws_password_state = "normal" if (dev_mode_var.get() and ws_enabled_var.get() and ws_require_password_var.get()) else "disabled"
-            for widget in (ws_password_entry, ws_password_set_btn):
-                try:
-                    widget.config(state=ws_password_state)
-                except Exception:
-                    pass
-
-        dev_check = ttk.Checkbutton(
-            dev_frame,
-            text="Enable Developer Mode",
-            variable=dev_mode_var,
-            style="Dark.TCheckbutton",
-            command=_save_dev_mode
-        )
-        dev_check.pack(anchor="w", pady=2)
-
-        copy_check = ttk.Checkbutton(
-            dev_frame,
-            text="Enable Copy Cookie",
-            variable=copy_cookie_var,
-            style="Dark.TCheckbutton",
-            command=_save_copy_cookie
-        )
-        copy_check.pack(anchor="w", pady=2)
-
-        ws_sep = ttk.Frame(dev_frame, style="Dark.TFrame", height=1)
-        ws_sep.pack(fill="x", pady=(8, 8))
-        ws_sep.configure(relief="solid", borderwidth=1)
-
-        ttk.Label(
-            dev_frame,
-            text="WebSocket Server",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 10, "bold")
-        ).pack(anchor="w", pady=(0, 2))
-
-        ttk.Label(
-            dev_frame,
-            text="Control RAM from local WebSocket clients.",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(0, 6))
-
-        ws_enabled_row = ttk.Frame(dev_frame, style="Dark.TFrame")
-        ws_enabled_row.pack(fill="x", pady=(0, 4))
-
-        ws_enabled_check = ttk.Checkbutton(
-            ws_enabled_row,
-            text="Enable WebSocket",
-            variable=ws_enabled_var,
-            style="Dark.TCheckbutton",
-            command=_save_ws_enabled
-        )
-        ws_enabled_check.pack(side="left")
-
-        ws_docs_btn = ttk.Button(
-            ws_enabled_row,
-            text="Documentation",
-            style="Dark.TButton",
-            command=_open_websocket_docs
-        )
-        ws_docs_btn.pack(side="left", padx=(8, 0))
-
-        ws_port_row = ttk.Frame(dev_frame, style="Dark.TFrame")
-        ws_port_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(ws_port_row, text="Port:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
-        ws_port_entry = ttk.Entry(ws_port_row, textvariable=ws_port_var, width=10, style="Dark.TEntry")
-        ws_port_entry.pack(side="left", padx=(6, 6))
-        ws_port_set_btn = ttk.Button(ws_port_row, text="Set", style="Dark.TButton", command=_apply_ws_port)
-        ws_port_set_btn.pack(side="left")
-
-        ws_require_password_check = ttk.Checkbutton(
-            dev_frame,
-            text="Request require password",
-            variable=ws_require_password_var,
-            style="Dark.TCheckbutton",
-            command=_save_ws_require_password
-        )
-        ws_require_password_check.pack(anchor="w", pady=(0, 4))
-
-        ws_password_row = ttk.Frame(dev_frame, style="Dark.TFrame")
-        ws_password_row.pack(fill="x", pady=(0, 2))
-        ws_password_entry = ttk.Entry(ws_password_row, textvariable=ws_password_var, show="*", style="Dark.TEntry")
-        ws_password_entry.pack(side="left", fill="x", expand=True)
-        ws_password_set_btn = ttk.Button(ws_password_row, text="Set", style="Dark.TButton", command=_set_ws_password)
-        ws_password_set_btn.pack(side="left", padx=(6, 0))
-        _update_dev_controls()
-        
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('TNotebook', background=self.BG_DARK, borderwidth=0)
-        style.configure('TNotebook.Tab', background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor='none')
-        style.map('TNotebook.Tab', background=[('selected', self.BG_LIGHT)], focuscolor=[('!focus', 'none')])
-        
-        main_frame = ttk.Frame(general_tab, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=15)
-        
-        topmost_var = tk.BooleanVar(value=self.settings.get("enable_topmost", False))
-        multi_roblox_var = tk.BooleanVar(value=self.settings.get("enable_multi_roblox", False))
-        confirm_launch_var = tk.BooleanVar(value=self.settings.get("confirm_before_launch", False))
-        multi_select_var = tk.BooleanVar(value=self.settings.get("enable_multi_select", False))
-        
-        checkbox_style = ttk.Style()
-        checkbox_style.configure(
-            "Dark.TCheckbutton",
-            background=self.BG_DARK,
-            foreground=self.FG_TEXT,
-            font=(self.FONT_FAMILY, self.FONT_SIZE)
-        )
-        
-        def auto_save_setting(setting_name, var):
-            def save():
-                self.settings[setting_name] = var.get()
-                
-                if setting_name == "enable_topmost":
-                    self.root.attributes("-topmost", var.get())
-                    settings_window.attributes("-topmost", var.get())
-                
-                self.save_settings()
-            return save
-        
-        def on_multi_roblox_toggle():
-            if multi_roblox_var.get():
-                success = self.enable_multi_roblox()
-                if not success:
-                    multi_roblox_var.set(False)
-                    self.settings["enable_multi_roblox"] = False
+                if getattr(sys, "frozen", False):
+                    executable = sys.executable
+                    params = " ".join(f'"{a}"' for a in sys.argv[1:])
                 else:
-                    self.settings["enable_multi_roblox"] = True
-            else:
-                self.disable_multi_roblox()
-                self.settings["enable_multi_roblox"] = False
-            
-            self.save_settings()
-        
-        def on_multi_select_toggle():
-            self.settings["enable_multi_select"] = multi_select_var.get()
-            if multi_select_var.get():
-                self.account_list.config(selectmode=tk.EXTENDED)
-            else:
-                self.account_list.config(selectmode=tk.SINGLE)
-            self.save_settings()
-        
-        topmost_check = ttk.Checkbutton(
-            main_frame,
-            text="Enable Topmost",
-            variable=topmost_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("enable_topmost", topmost_var)
-        )
-        topmost_check.pack(anchor="w", pady=2)
-        self.topmost_check = topmost_check
-
-        multi_roblox_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        multi_roblox_frame.pack(anchor="w", fill="x", pady=2)
-
-        multi_roblox_check = ttk.Checkbutton(
-            multi_roblox_frame,
-            text="Enable Multi Roblox + 773 fix",
-            variable=multi_roblox_var,
-            style="Dark.TCheckbutton",
-            command=on_multi_roblox_toggle
-        )
-        multi_roblox_check.pack(side="left", anchor="w")
-        self.multi_roblox_check = multi_roblox_check
-
-        def open_method_settings():
-            """Open Multi Roblox method selection window"""
-            self.open_multi_roblox_method_settings()
-
-        settings_btn = tk.Button(
-            multi_roblox_frame,
-            text="⚙️",
-            bg=self.BG_DARK,
-            fg=self.FG_TEXT,
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=open_method_settings,
-            padx=5
-        )
-        settings_btn.pack(side="right", padx=(5, 0))
-        self.settings_btn = settings_btn
-
-        confirm_check = ttk.Checkbutton(
-            main_frame,
-            text="Confirm Before Launch",
-            variable=confirm_launch_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("confirm_before_launch", confirm_launch_var)
-        )
-        confirm_check.pack(anchor="w", pady=2)
-        self.confirm_check = confirm_check
-
-        multi_select_check = ttk.Checkbutton(
-            main_frame,
-            text="Multi Select (Ctrl + Click)",
-            variable=multi_select_var,
-            style="Dark.TCheckbutton",
-            command=on_multi_select_toggle
-        )
-        multi_select_check.pack(anchor="w", pady=2)
-        self.multi_select_check = multi_select_check
-
-        disable_launch_popup_var = tk.BooleanVar(value=self.settings.get("disable_launch_popup", False))
-        disable_launch_popup_check = ttk.Checkbutton(
-            main_frame,
-            text="Disable Launch Success Popup",
-            variable=disable_launch_popup_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
-        )
-        disable_launch_popup_check.pack(anchor="w", pady=2)
-        self.disable_launch_popup_check = disable_launch_popup_check
-
-        auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
-        auto_tile_check = ttk.Checkbutton(
-            main_frame,
-            text="Auto Tile Windows",
-            variable=auto_tile_windows_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("auto_tile_windows", auto_tile_windows_var)
-        )
-        auto_tile_check.pack(anchor="w", pady=2)
-        self.auto_tile_check = auto_tile_check
-
-        def is_start_menu_shortcut_present():
-            """Check if Start Menu shortcut exists"""
-            start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
-            shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
-            return os.path.exists(shortcut_path)
-
-        def toggle_start_menu_shortcut():
-            """Create or remove Start Menu shortcut"""
-            start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
-            shortcut_path = os.path.join(start_menu, "Roblox Account Manager.lnk")
-
-            if start_menu_var.get():
-                try:
-                    exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
-                    if not getattr(sys, 'frozen', False):
-                        exe_path = os.path.abspath(sys.argv[0])
-
-                    ps_script = f'''
-                    $WshShell = New-Object -comObject WScript.Shell
-                    $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
-                    $Shortcut.TargetPath = "{exe_path}"
-                    $Shortcut.WorkingDirectory = "{os.path.dirname(exe_path)}"
-                    $Shortcut.Description = "Roblox Account Manager"
-                    $Shortcut.Save()
-                    '''
-                    subprocess.run(["powershell", "-Command", ps_script], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                    print("[INFO] Start Menu shortcut created")
-                except Exception as e:
-                    print(f"[ERROR] Failed to create Start Menu shortcut: {e}")
-                    start_menu_var.set(False)
-            else:
-                try:
-                    if os.path.exists(shortcut_path):
-                        os.remove(shortcut_path)
-                        print("[INFO] Start Menu shortcut removed")
-                except Exception as e:
-                    print(f"[ERROR] Failed to remove Start Menu shortcut: {e}")
-
-        start_menu_var = tk.BooleanVar(value=is_start_menu_shortcut_present())
-        start_menu_check = ttk.Checkbutton(
-            main_frame,
-            text="Add to Start Menu",
-            variable=start_menu_var,
-            style="Dark.TCheckbutton",
-            command=toggle_start_menu_shortcut
-        )
-        start_menu_check.pack(anchor="w", pady=2)
-        self.start_menu_check = start_menu_check
-
-        max_games_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        max_games_frame.pack(fill="x", pady=2)
-
-        ttk.Label(
-            max_games_frame,
-            text="Max Recent Games:",
-            style="Dark.TLabel",
-            font=("Segoe UI", 10)
-        ).pack(side="left")
-
-        max_games_var = tk.IntVar(value=self.settings.get("max_recent_games", 10))
-
-        def on_max_games_change():
-            try:
-                new_value = max_games_var.get()
-                self.settings["max_recent_games"] = new_value
-                self.save_settings()
-                if len(self.settings["game_list"]) > new_value:
-                    self.settings["game_list"] = self.settings["game_list"][:new_value]
-                    self.save_settings()
-                    self.refresh_game_list()
-            except:
-                pass
-
-        max_games_spinner = tk.Spinbox(
-            max_games_frame,
-            from_=5,
-            to=50,
-            textvariable=max_games_var,
-            width=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            command=on_max_games_change,
-            readonlybackground=self.BG_MID,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
-            borderwidth=1,
-            highlightthickness=0
-        )
-        max_games_spinner.pack(side="right")
-        self.max_games_spinner = max_games_spinner
-
-        max_games_spinner.bind("<KeyRelease>", lambda e: on_max_games_change())
-        max_games_spinner.bind("<FocusOut>", lambda e: on_max_games_change())
-
-        ttk.Label(main_frame, text="", style="Dark.TLabel").pack(pady=3)
-        
-        console_button = ttk.Button(
-            main_frame,
-            text="Console Output",
-            style="Dark.TButton",
-            command=self.open_console_window
-        )
-        console_button.pack(fill="x", pady=(0, 5))
-        
-        close_button = ttk.Button(
-            main_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=settings_window.destroy
-        )
-        close_button.pack(fill="x", pady=(5, 5))
-        
-        is_unstable = bool(re.search(r'(alpha|beta)', self.APP_VERSION, re.IGNORECASE))
-        version_text = f"Version: {self.APP_VERSION}"
-        if is_unstable:
-            version_text += "\nThis is an unstable version"
-        
-        version_label = ttk.Label(
-            main_frame,
-            text=version_text,
-            style="Dark.TLabel",
-            font=("Segoe UI", 9)
-        )
-        version_label.pack(anchor="e", pady=(6, 0))
-        
-        roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
-        roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
-        
-        def open_launcher_selection():
-            launcher_window = tk.Toplevel(settings_window)
-            launcher_window.title("Roblox Launcher")
-            launcher_window.geometry("420x360")
-            launcher_window.configure(bg=self.BG_DARK)
-            launcher_window.resizable(False, False)
-            launcher_window.transient(settings_window)
-            launcher_window.grab_set()
-            self.apply_window_icon(launcher_window)
-            
-            if self.settings.get("enable_topmost", False):
-                launcher_window.attributes("-topmost", True)
-            
-            launcher_window.update_idletasks()
-            x = settings_window.winfo_x() + (settings_window.winfo_width() // 2) - (launcher_window.winfo_width() // 2)
-            y = settings_window.winfo_y() + (settings_window.winfo_height() // 2) - (launcher_window.winfo_height() // 2)
-            launcher_window.geometry(f"+{x}+{y}")
-            
-            container = ttk.Frame(launcher_window, style="Dark.TFrame")
-            container.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            header_frame = ttk.Frame(container, style="Dark.TFrame")
-            header_frame.pack(fill="x", pady=(0, 15))
-            
-            ttk.Label(
-                header_frame,
-                text="Select a Launcher",
-                style="Dark.TLabel",
-                font=(self.FONT_FAMILY, 11, "bold")
-            ).pack(anchor="w")
-            
-            ttk.Label(
-                header_frame,
-                text="Choose how to launch Roblox games",
-                style="Dark.TLabel",
-                font=(self.FONT_FAMILY, 8)
-            ).pack(anchor="w", pady=(2, 0))
-            
-            separator = ttk.Frame(container, style="Dark.TFrame", height=1)
-            separator.pack(fill="x", pady=(0, 15))
-            separator.configure(relief="solid", borderwidth=1)
-            
-            current_launcher = self.settings.get("roblox_launcher", "default")
-            launcher_var = tk.StringVar(value=current_launcher)
-            custom_launcher_path_var = tk.StringVar(value=str(self.settings.get("custom_roblox_launcher_path", "") or "").strip())
-            
-            radio_style = ttk.Style()
-            radio_style.configure(
-                "Dark.TRadiobutton",
-                background=self.BG_DARK,
-                foreground=self.FG_TEXT,
-                font=(self.FONT_FAMILY, 9)
-            )
-            radio_style.map(
-                "Dark.TRadiobutton",
-                background=[('active', self.BG_DARK)],
-                foreground=[('active', self.FG_TEXT)]
-            )
-            
-            launchers_frame = ttk.Frame(container, style="Dark.TFrame")
-            launchers_frame.pack(fill="both", expand=True)
-            
-            launchers = [
-                ("Default", "default"),
-                ("Bloxstrap", "bloxstrap"),
-                ("Fishstrap", "fishstrap"),
-                ("Froststrap", "froststrap"),
-                ("Voidstrap", "voidstrap"),
-                ("Roblox Client", "client"),
-                ("Custom", "custom"),
-            ]
-
-            custom_launcher_display_var = tk.StringVar()
-
-            def _format_custom_launcher_path_display(path, max_len=56):
-                norm = str(path or "").strip().replace("\\", "/")
-                if not norm:
-                    return ""
-                if len(norm) <= max_len:
-                    return norm
-
-                lower_norm = norm.lower()
-                marker = "/appdata/local/"
-                if marker in lower_norm:
-                    marker_index = lower_norm.index(marker)
-                    prefix = "C:/Users/..." if lower_norm.startswith("c:/users/") else (norm[:10] + "...")
-                    tail = norm[marker_index:]
-                    available = max_len - len(prefix)
-                    if available <= 3:
-                        return (prefix[:max_len - 3] + "...") if max_len > 3 else prefix[:max_len]
-                    if len(tail) > available:
-                        tail = tail[:available - 3] + "..."
-                    return prefix + tail
-
-                start_len = max(10, int(max_len * 0.35))
-                end_len = max(12, max_len - start_len - 3)
-                return f"{norm[:start_len]}...{norm[-end_len:]}"
-
-            def _refresh_custom_launcher_path_display(*_):
-                custom_launcher_display_var.set(
-                    _format_custom_launcher_path_display(custom_launcher_path_var.get())
-                )
-
-            custom_launcher_path_var.trace_add("write", _refresh_custom_launcher_path_display)
-            _refresh_custom_launcher_path_display()
-            
-            for name, value in launchers:
-                row = ttk.Frame(launchers_frame, style="Dark.TFrame")
-                row.pack(fill="x", pady=3)
-
-                rb = ttk.Radiobutton(
-                    row,
-                    text=name,
-                    variable=launcher_var,
-                    value=value,
-                    style="Dark.TRadiobutton"
-                )
-                rb.pack(side="left", anchor="w")
-
-                if value == "custom":
-                    def browse_custom_launcher():
-                        selected_path = filedialog.askopenfilename(
-                            title="Select Custom Roblox Launcher (.exe)",
-                            filetypes=[("Executable Files", "*.exe")],
-                        )
-                        if not selected_path:
-                            return
-                        custom_launcher_path_var.set(selected_path)
-                        launcher_var.set("custom")
-
-                    ttk.Button(
-                        row,
-                        text="Browse .exe",
-                        style="Dark.TButton",
-                        command=browse_custom_launcher,
-                    ).pack(side="right")
-
-                    ttk.Label(
-                        row,
-                        textvariable=custom_launcher_display_var,
-                        style="Dark.TLabel",
-                        font=(self.FONT_FAMILY, 8),
-                    ).pack(side="left", fill="x", expand=True, padx=(8, 6))
-            
-            def save_and_close():
-                selected = launcher_var.get()
-                custom_path = custom_launcher_path_var.get().strip()
-
-                if selected == "custom":
-                    if not custom_path:
-                        messagebox.showwarning("Custom Launcher Required", "Please choose a custom launcher .exe file.", parent=launcher_window)
-                        return
-                    if not custom_path.lower().endswith(".exe"):
-                        messagebox.showwarning("Invalid File", "Custom launcher must be an .exe file.", parent=launcher_window)
-                        return
-                    if not os.path.isfile(custom_path):
-                        messagebox.showwarning("File Not Found", "Selected custom launcher file was not found.", parent=launcher_window)
-                        return
-
-                self.settings["roblox_launcher"] = selected
-                self.settings["custom_roblox_launcher_path"] = custom_path
-                self.save_settings()
-                launcher_window.destroy()
-            
-            ttk.Button(
-                container,
-                text="Close",
-                style="Dark.TButton",
-                command=save_and_close
-            ).pack(fill="x", pady=(15, 0))
-        
-        launcher_btn = ttk.Button(
-            roblox_frame,
-            text="Roblox Launcher",
-            style="Dark.TButton",
-            command=open_launcher_selection
-        )
-        launcher_btn.pack(fill="x", pady=(0, 5))
-        
-        def force_close_roblox():
-            confirm = messagebox.askyesno(
-                "Confirm Force Close",
-                "Are you sure you want to force close all Roblox instances?"
-            )
-            if not confirm:
-                return
-
-            try:
-                result = subprocess.run(
-                    ['taskkill', '/F', '/IM', 'RobloxPlayerBeta.exe'],
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                
-                if result.returncode == 0:
-                    messagebox.showinfo("Success", "All Roblox instances have been closed.")
-                else:
-                    messagebox.showinfo("Info", "No Roblox instances were found running.")
+                    executable = sys.executable
+                    params = " ".join(f'"{a}"' for a in sys.argv)
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+                QApplication.quit()
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to close Roblox: {e}")
-        
-        force_close_btn = ttk.Button(
-            roblox_frame,
-            text="Force Close All Roblox",
-            style="Dark.TButton",
-            command=force_close_roblox
+                QMessageBox.critical(self, "Error", f"Failed to restart as administrator:\n{e}")
+
+    def _stop_multi_roblox(self):
+        actions.disable_multi_roblox()
+        self._update_mr_status()
+
+    def _update_mr_status(self):
+        running = self._mr_enabled_chk.isChecked()
+        method_str = "Handle64" if getattr(self, "_mr_method", "default") == "handle64" else "Default"
+        if running:
+            self._mr_status_lbl.setText(f"Status: Running ({method_str})")
+            self._mr_status_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
+        else:
+            self._mr_status_lbl.setText("Status: Disabled")
+            self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
+
+    def _on_mr_download_handle64(self):
+        self._mr_dl_btn.setText("Downloading...")
+        self._mr_dl_btn.setEnabled(False)
+
+        def _thread():
+            ok = actions.download_handle64()
+            self._bridge.mr_download_done.emit(ok)
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _build_settings_panel(self) -> QFrame: # Settings panel
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
+
+        root_lay = QHBoxLayout(panel)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+
+        # Left category list
+        cat_panel = QFrame()
+        cat_panel.setFixedWidth(120)
+        cat_panel.setStyleSheet(
+            f"QFrame {{ background: {BG}; border-right: 1px solid {LINE}; }}"
         )
-        force_close_btn.pack(fill="x", pady=(0, 5))
-        
-        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", False))
-        
-        def on_rename_toggle():
-            enabled = rename_var.get()
-            self.settings["rename_roblox_windows"] = enabled
-            self.save_settings()
-            
-            if enabled:
-                self.start_rename_monitoring()
-            else:
-                self.stop_rename_monitoring()
-        
-        ttk.Checkbutton(
-            roblox_frame,
-            text="Rename Roblox Windows",
-            variable=rename_var,
-            style="Dark.TCheckbutton",
-            command=on_rename_toggle
-        ).pack(anchor="w", pady=(0, 10))
-        
-        anti_afk_btn = ttk.Button(
-            roblox_frame,
-            text="Anti-AFK",
-            style="Dark.TButton",
-            command=self.open_anti_afk_window
+        cat_lay = QVBoxLayout(cat_panel)
+        cat_lay.setContentsMargins(0, 10, 0, 10)
+        cat_lay.setSpacing(2)
+
+        cat_header = QLabel("Settings")
+        cat_header.setStyleSheet(
+            f"color: {MUTED}; font-size: 9px; font-weight: 700; "
+            f"letter-spacing: 0.5px; padding: 0 10px 6px 10px;"
         )
-        anti_afk_btn.pack(fill="x", pady=(10, 5))
-        self.anti_afk_btn = anti_afk_btn
+        cat_lay.addWidget(cat_header)
 
-        optimize_ram_var = tk.BooleanVar(value=self.settings.get("optimize_roblox_ram", False))
-        optimize_ram_limit_var = tk.IntVar(value=int(self.settings.get("optimize_roblox_ram_limit_mb", 750)))
+        # Right stacked content
+        content_stack = QStackedWidget()
+        content_stack.setStyleSheet("background: transparent;")
 
-        def on_optimize_ram_toggle():
-            enabled = optimize_ram_var.get()
-            self.settings["optimize_roblox_ram"] = enabled
-            try:
-                self.settings["optimize_roblox_ram_limit_mb"] = max(1, int(optimize_ram_limit_var.get()))
-            except Exception:
-                self.settings["optimize_roblox_ram_limit_mb"] = 750
-            self.save_settings()
-            if enabled:
-                self.start_optimize_roblox_ram()
-            else:
-                self.stop_optimize_roblox_ram()
+        CATEGORIES = ["General", "Roblox", "Discord", "Misc", "Developer"]
+        cat_buttons: list[QPushButton] = []
 
-        optimize_ram_check = ttk.Checkbutton(
-            roblox_frame,
-            text="Boost Roblox Ram (may cause crash)",
-            variable=optimize_ram_var,
-            style="Dark.TCheckbutton",
-            command=on_optimize_ram_toggle
-        )
-        optimize_ram_check.pack(anchor="w", pady=(0, 10))
-        self.optimize_ram_check = optimize_ram_check
+        def _switch_cat(idx: int):
+            content_stack.setCurrentIndex(idx)
+            for i, b in enumerate(cat_buttons):
+                b.setChecked(i == idx)
 
-        optimize_ram_limit_row = ttk.Frame(roblox_frame, style="Dark.TFrame")
-        optimize_ram_limit_row.pack(fill="x", pady=(0, 4))
+        for i, name in enumerate(CATEGORIES):
+            btn = QPushButton(name)
+            btn.setObjectName("navTab")
+            btn.setCheckable(True)
+            btn.setChecked(i == 0)
+            btn.clicked.connect(lambda _=False, idx=i: _switch_cat(idx))
+            cat_lay.addWidget(btn)
+            cat_buttons.append(btn)
 
-        optimize_ram_limit_label = ttk.Label(
-            optimize_ram_limit_row,
-            text="Low Ram Limit (MB):",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        )
-        optimize_ram_limit_label.pack(side="left")
+        cat_lay.addStretch(1)
 
-        optimize_ram_limit_entry = tk.Spinbox(
-            optimize_ram_limit_row,
-            from_=100,
-            to=4096,
-            increment=25,
-            textvariable=optimize_ram_limit_var,
-            width=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            readonlybackground=self.BG_MID,
-            disabledbackground=self.BG_MID,
-            disabledforeground=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
-            borderwidth=1,
-            highlightthickness=0,
-        )
-        optimize_ram_limit_entry.pack(side="right")
+        root_lay.addWidget(cat_panel)
+        root_lay.addWidget(content_stack, 1)
 
-        optimize_ram_tooltip = None
+        # Shared helpers
+        def _scrollable() -> tuple[QScrollArea, QVBoxLayout]:
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setFrameShape(QFrame.Shape.NoFrame)
+            sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            sa.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            w = QWidget()
+            w.setStyleSheet("background: transparent;")
+            lay = QVBoxLayout(w)
+            lay.setContentsMargins(16, 14, 16, 14)
+            lay.setSpacing(6)
+            sa.setWidget(w)
+            return sa, lay
 
-        def show_optimize_ram_tooltip(_event=None):
-            nonlocal optimize_ram_tooltip
-            if optimize_ram_tooltip:
-                return
-            optimize_ram_tooltip = tk.Toplevel(self.root)
-            optimize_ram_tooltip.wm_overrideredirect(True)
-            if self.settings.get("enable_topmost", False):
-                try:
-                    optimize_ram_tooltip.attributes("-topmost", True)
-                except Exception:
-                    pass
-            tooltip_label = tk.Label(
-                optimize_ram_tooltip,
-                text="Low ram limit can increase the CPU of the program, reccomended value is 750 mb",
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)),
-                padx=8,
-                pady=4,
-                relief="solid",
-                borderwidth=1,
-                highlightbackground=self.BG_LIGHT,
-                highlightcolor=self.BG_LIGHT,
+        S = actions.load_ui_settings() # Snapshot for initial values
+
+        def _chk(key, label: str, tip: str, default=False,
+                 on_change=None) -> QCheckBox:
+            cb = QCheckBox(label)
+            cb.setChecked(S.get(key, default) if key is not None else False)
+            cb.setToolTip(tip)
+            def _h(state):
+                val = (state == Qt.CheckState.Checked.value)
+                if key is not None:
+                    actions.save_ui_setting(key, val)
+                if on_change:
+                    on_change(val)
+            cb.stateChanged.connect(_h)
+            return cb
+
+        def _sec(title: str) -> QLabel:
+            lbl = QLabel(title)
+            lbl.setStyleSheet(
+                f"color: {MUTED}; font-size: 9px; font-weight: 700; "
+                f"letter-spacing: 0.5px; margin-top: 8px;"
             )
-            tooltip_label.pack()
-            optimize_ram_tooltip.update_idletasks()
-            x = optimize_ram_limit_entry.winfo_rootx()
-            y = optimize_ram_limit_entry.winfo_rooty() + optimize_ram_limit_entry.winfo_height() + 5
-            optimize_ram_tooltip.wm_geometry(f"+{x}+{y}")
+            return lbl
 
-        def hide_optimize_ram_tooltip(_event=None):
-            nonlocal optimize_ram_tooltip
-            if optimize_ram_tooltip:
-                try:
-                    optimize_ram_tooltip.destroy()
-                except Exception:
-                    pass
-                optimize_ram_tooltip = None
+        def _sub_indent(widget, px=18):
+            row = QHBoxLayout()
+            row.setContentsMargins(px, 0, 0, 0)
+            row.addWidget(widget)
+            return row
 
-        optimize_ram_limit_label.bind("<Enter>", show_optimize_ram_tooltip)
-        optimize_ram_limit_label.bind("<Leave>", hide_optimize_ram_tooltip)
-        optimize_ram_limit_entry.bind("<Enter>", show_optimize_ram_tooltip)
-        optimize_ram_limit_entry.bind("<Leave>", hide_optimize_ram_tooltip)
+        # General (Page 0)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
 
-        self.optimize_ram_limit_entry = optimize_ram_limit_entry
-
-        def save_optimize_ram_limit(*_):
-            try:
-                self.settings["optimize_roblox_ram_limit_mb"] = max(1, int(optimize_ram_limit_var.get()))
-            except Exception:
-                self.settings["optimize_roblox_ram_limit_mb"] = 750
-            self.save_settings()
-
-        optimize_ram_limit_entry.bind("<KeyRelease>", save_optimize_ram_limit)
-        optimize_ram_limit_entry.bind("<FocusOut>", save_optimize_ram_limit)
-
-        def update_optimize_ram_controls():
-            state = "normal" if optimize_ram_var.get() else "disabled"
-            optimize_ram_limit_entry.config(state=state)
-
-        update_optimize_ram_controls()
-
-        def on_optimize_ram_toggle_wrapper():
-            update_optimize_ram_controls()
-            on_optimize_ram_toggle()
-
-        if self.settings.get("anti_afk_enabled", False):
-            self.root.after(1000, self.start_anti_afk)
-
-        if self.settings.get("optimize_roblox_ram", False):
-            self.root.after(1200, self.start_optimize_roblox_ram)
-
-        optimize_ram_check.config(command=on_optimize_ram_toggle_wrapper)
-
-        if self.settings.get("rename_roblox_windows", False):
-            self.root.after(1000, self.start_rename_monitoring)
-        
-        if self.settings.get("active_instances_monitoring", False):
-            self.root.after(1500, self.start_instances_monitoring)
-        
-        themes_frame = ttk.Frame(themes_tab, style="Dark.TFrame")
-        themes_frame.pack(fill="both", expand=True, padx=20, pady=15)
-
-        theme_state = {
-            "loaded_theme_name": self.settings.get("selected_theme", "Dark"),
-            "base_theme_data": None,
-            "theme_is_dirty": False,
-            "suspend_dirty_events": False,
-        }
-
-        theme_title_var = tk.StringVar(value=f"Theme: {theme_state['loaded_theme_name']}")
-        theme_selector_var = tk.StringVar()
-        theme_status_var = tk.StringVar(value="")
-
-        theme_catalog = {}
-
-        def set_theme_title(text):
-            theme_title_var.set(f"Theme: {text}")
-
-        def refresh_theme_catalog(preferred_name=None):
-            nonlocal theme_catalog
-            theme_catalog = self.theme_manager.get_available_themes()
-            theme_names = sorted(theme_catalog.keys(), key=str.lower)
-            theme_selector["values"] = theme_names
-
-            target = preferred_name or theme_state["loaded_theme_name"]
-            if target not in theme_catalog:
-                for name in theme_names:
-                    if name.lower() == str(target).lower():
-                        target = name
-                        break
-            if target not in theme_catalog and theme_names:
-                target = theme_names[0]
-
-            theme_selector_var.set(target or "")
-
-        header_row = ttk.Frame(themes_frame, style="Dark.TFrame")
-        header_row.pack(fill="x", pady=(0, 8))
-
-        ttk.Label(
-            header_row,
-            textvariable=theme_title_var,
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 10, "bold")
-        ).pack(side="left")
-
-        def open_theme_manager_from_settings():
-            self.open_theme_manager(parent=settings_window, on_themes_changed=lambda preferred=None: refresh_theme_catalog(preferred))
-
-        ttk.Button(
-            header_row,
-            text="Themes",
-            style="Dark.TButton",
-            command=open_theme_manager_from_settings
-        ).pack(side="right")
-
-        selector_row = ttk.Frame(themes_frame, style="Dark.TFrame")
-        selector_row.pack(fill="x", pady=(0, 8))
-
-        ttk.Label(
-            selector_row,
-            text="Load Theme:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        ).pack(side="left", padx=(0, 6))
-
-        theme_selector = ttk.Combobox(
-            selector_row,
-            textvariable=theme_selector_var,
-            state="readonly",
-            width=28
+        f.addWidget(_sec("WINDOW"))
+        self._sett_topmost_chk = _chk(
+            "enable_topmost", "Always on Top",
+            "Keep this window above all other windows.\n"
+            "Useful when managing accounts alongside other apps.",
+            on_change=self._on_sett_topmost,
         )
-        theme_selector.pack(side="left", fill="x", expand=True)
+        f.addWidget(self._sett_topmost_chk)
 
-        editor_box_height = 220
-        editor_shell = tk.Frame(
-            themes_frame,
-            bg=self.BG_MID,
-            relief="solid",
-            borderwidth=1,
-            height=editor_box_height,
+        f.addWidget(_sec("LAUNCH"))
+        self._sett_confirm_chk = _chk(
+            "confirm_before_launch", "Confirm Before Launch",
+            "Show a confirmation prompt before any Roblox join/launch action.\n"
+            "Prevents accidental launches.",
         )
-        editor_shell.pack(fill="x", expand=False, pady=(0, 8))
-        editor_shell.pack_propagate(False)
-        self.theme_editor_shell = editor_shell
+        f.addWidget(self._sett_confirm_chk)
 
-        editor_area = tk.Frame(editor_shell, bg=self.BG_MID)
-        editor_area.pack(fill="both", expand=True, padx=8, pady=8)
-        self.theme_editor_area = editor_area
-
-        editor_scrollbar = tk.Scrollbar(editor_area, orient="vertical")
-        editor_scrollbar.pack(side="left", fill="y", padx=(0, 8))
-        editor_scrollbar.config(width=10)
-
-        editor_canvas = tk.Canvas(
-            editor_area,
-            bg=self.BG_MID,
-            highlightthickness=0,
-            yscrollcommand=editor_scrollbar.set,
-            height=editor_box_height,
+        f.addWidget(_sec("ACCOUNTS LIST"))
+        self._sett_multisel_chk = _chk(
+            "enable_multi_select", "Multi-Select (Ctrl / Shift + Click)",
+            "Allow selecting multiple accounts simultaneously.\n"
+            "Enables batch join, launch, and removal.",
+            on_change=self._on_sett_multi_select,
         )
-        editor_canvas.pack(side="left", fill="both", expand=True)
-        editor_scrollbar.config(command=editor_canvas.yview)
-        self.theme_editor_canvas = editor_canvas
+        f.addWidget(self._sett_multisel_chk)
 
-        editor_content = tk.Frame(editor_canvas, bg=self.BG_MID)
-        editor_window = editor_canvas.create_window((0, 0), window=editor_content, anchor="nw")
-        self.theme_editor_content = editor_content
-        self.theme_editor_widgets = []
-
-        style = ttk.Style()
-        style.configure(
-            "ThemeEditor.TCombobox",
-            fieldbackground=self.BG_MID,
-            background=self.BG_MID,
-            foreground=self.FG_TEXT,
-            arrowcolor=self.FG_TEXT,
-            bordercolor=self.BG_LIGHT,
-            lightcolor=self.BG_LIGHT,
-            darkcolor=self.BG_LIGHT,
-            relief="flat",
+        f.addWidget(_sec("SYSTEM"))
+        self._sett_update_chk = _chk(
+            "check_updates_on_startup", "Check for Updates on Startup",
+            "Automatically check GitHub for a newer version when the app launches.\n"
+            "An update window will appear if a newer release is found.",
         )
+        self._sett_update_chk.setChecked(
+            actions.load_ui_settings().get("check_updates_on_startup", True)
+        )
+        f.addWidget(self._sett_update_chk)
 
-        def _sync_editor_scrollregion(_event=None):
-            editor_canvas.configure(scrollregion=editor_canvas.bbox("all"))
+        # Start Menu shortcut
+        _sm_path = os.path.join(
+            os.environ.get("APPDATA", ""),
+            "Microsoft", "Windows", "Start Menu", "Programs",
+            "Roblox Account Manager.lnk"
+        )
+        self._sett_startmenu_chk = QCheckBox("Add to Start Menu")
+        self._sett_startmenu_chk.setChecked(os.path.exists(_sm_path))
+        self._sett_startmenu_chk.setToolTip(
+            "Create (or remove) a Start Menu shortcut for this application.\n"
+            "Works with both the .exe build and the Python script."
+        )
+        self._sett_startmenu_chk.stateChanged.connect(
+            lambda state: self._on_sett_start_menu(state, _sm_path)
+        )
+        f.addWidget(self._sett_startmenu_chk)
 
-        def _sync_editor_width(event):
-            editor_canvas.itemconfigure(editor_window, width=event.width)
+        f.addWidget(_sec("RECENT GAMES"))
+        mg_row = QHBoxLayout()
+        mg_row.setContentsMargins(0, 0, 0, 0)
+        mg_l = QLabel("Max Recent Games")
+        mg_l.setToolTip(
+            "How many recent games to keep in the history list.\n"
+            "Older entries are dropped automatically."
+        )
+        mg_row.addWidget(mg_l)
+        mg_row.addStretch(1)
+        self._sett_mg_spin = QSpinBox()
+        self._sett_mg_spin.setRange(5, 50)
+        self._sett_mg_spin.setValue(int(S.get("max_recent_games", 10)))
+        self._sett_mg_spin.setFixedWidth(64)
+        self._sett_mg_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_mg_spin.valueChanged.connect(
+            lambda v: actions.save_ui_setting("max_recent_games", v)
+        )
+        mg_row.addWidget(self._sett_mg_spin)
+        f.addLayout(mg_row)
 
-        editor_content.bind("<Configure>", _sync_editor_scrollregion)
-        editor_canvas.bind("<Configure>", _sync_editor_width)
+        f.addStretch(1)
 
-        def _scroll_editor(event):
-            editor_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            return "break"
+        # Roblox (Page 1)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
 
-        def _bind_mousewheel_recursive(widget):
-            widget.bind("<MouseWheel>", _scroll_editor)
-            for child in widget.winfo_children():
-                _bind_mousewheel_recursive(child)
+        f.addWidget(_sec("LAUNCHER"))
+        _launcher_lbl = QLabel(
+            "Choose how Roblox is launched when you join a game."
+        )
+        _launcher_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        _launcher_lbl.setWordWrap(True)
+        f.addWidget(_launcher_lbl)
 
-        def _refresh_editor_mousewheel_bindings(*_):
-            _bind_mousewheel_recursive(editor_shell)
-
-        editor_shell.bind("<Enter>", _refresh_editor_mousewheel_bindings)
-        editor_shell.bind("<Leave>", lambda _event: editor_canvas.unbind_all("<MouseWheel>"))
-
-        current_theme_config = self._load_current_theme_config()
-        initial_theme_name = self.settings.get("selected_theme", "Dark")
-        if current_theme_config:
-            initial_theme_name = str(current_theme_config.get("source_theme", initial_theme_name) or initial_theme_name)
-
-        theme_state = {
-            "loaded_theme_name": initial_theme_name,
-            "base_theme_name": initial_theme_name,
-            "base_theme_data": None,
-            "theme_is_dirty": False,
-            "suspend_dirty_events": False,
-        }
-
-        color_keys = [
-            ("bg_dark", "Background Dark"),
-            ("bg_mid", "Background Mid"),
-            ("bg_light", "Background Light"),
-            ("fg_text", "Text Color"),
-            ("fg_accent", "Accent Color"),
+        LAUNCHERS = [
+            ("default",   "Default (Roblox)",
+             "Launch via the standard roblox:// URI protocol (roblox-player)."),
+            ("bloxstrap", "Bloxstrap",
+             "Launch using Bloxstrap, an open-source Roblox bootstrapper with extra features."),
+            ("fishstrap", "Fishstrap",
+             "Launch using Fishstrap, a Bloxstrap fork."),
+            ("froststrap", "Froststrap",
+             "Launch using Froststrap."),
+            ("client", "Roblox Client (direct .exe)",
+             "Directly invoke the RobloxPlayerBeta.exe binary without a bootstrapper."),
+            ("custom",    "Custom",
+             "Specify a custom executable path to use as the launcher."),
         ]
+        _cur_launcher = S.get("roblox_launcher", "default")
+        _launcher_grp = QButtonGroup(sa)
+        self._sett_launcher_radios: dict[str, QRadioButton] = {}
 
-        color_vars = {key: tk.StringVar() for key, _ in color_keys}
-        self.theme_color_vars = color_vars
+        for key, label, tip in LAUNCHERS:
+            rb = QRadioButton(label)
+            rb.setToolTip(tip)
+            rb.setChecked(key == _cur_launcher)
+            _launcher_grp.addButton(rb)
+            self._sett_launcher_radios[key] = rb
+            f.addWidget(rb)
 
-        font_field_defaults = {
-            "family": self.theme_manager.DEFAULT_THEME["fonts"]["family"],
-            "size_base": str(self.theme_manager.DEFAULT_THEME["fonts"]["size_base"]),
-        }
-        font_vars = {key: tk.StringVar(value=value) for key, value in font_field_defaults.items()}
+        # Custom path row
+        _custom_row = QHBoxLayout()
+        _custom_row.setContentsMargins(20, 0, 0, 0)
+        self._sett_custom_launcher_edit = QLineEdit()
+        self._sett_custom_launcher_edit.setPlaceholderText("Path to launcher .exe ...")
+        self._sett_custom_launcher_edit.setText(str(S.get("custom_roblox_launcher_path", "") or ""))
+        self._sett_custom_launcher_edit.setEnabled(_cur_launcher == "custom")
+        self._sett_custom_launcher_edit.textChanged.connect(
+            lambda t: actions.save_ui_setting("custom_roblox_launcher_path", t)
+        )
+        _custom_row.addWidget(self._sett_custom_launcher_edit)
+        _browse_btn = QPushButton("Browse")
+        _browse_btn.setFixedWidth(60)
+        _browse_btn.setEnabled(_cur_launcher == "custom")
+        _browse_btn.clicked.connect(self._on_sett_browse_launcher)
+        _custom_row.addWidget(_browse_btn)
+        f.addLayout(_custom_row)
+        self._sett_browse_btn = _browse_btn
 
-        def _validated_font_size(text_value, fallback):
+        def _on_launcher_toggled(key):
+            def _h(checked):
+                if checked:
+                    actions.save_ui_setting("roblox_launcher", key)
+                    is_custom = (key == "custom")
+                    self._sett_custom_launcher_edit.setEnabled(is_custom)
+                    self._sett_browse_btn.setEnabled(is_custom)
+            return _h
+
+        for key, rb in self._sett_launcher_radios.items():
+            rb.toggled.connect(_on_launcher_toggled(key))
+
+        f.addWidget(_sec("WINDOWS"))
+        self._sett_rename_chk = _chk(
+            "rename_roblox_windows", "Rename Roblox Windows to Username",
+            "Set each Roblox window's title bar to the account username\n"
+            "so you can identify windows at a glance.",
+            on_change=self._on_sett_rename_windows,
+        )
+        f.addWidget(self._sett_rename_chk)
+
+        self._sett_monitoring_chk = _chk(
+            "presence_indicator", "Presence Indicator",
+            "Show a green dot on accounts that currently have Roblox running.\n"
+            "Scans running processes every 10 seconds - no Roblox API used.",
+            on_change=self._on_sett_presence_indicator,
+        )
+        f.addWidget(self._sett_monitoring_chk)
+
+        # Start scanner immediately if the setting is already on
+        if actions.load_ui_settings().get("presence_indicator", False):
+            self._start_presence_scanner()
+
+        f.addWidget(_sec("RAM OPTIMIZATION"))
+        self._sett_boost_ram_chk = _chk(
+            "optimize_roblox_ram", "Boost Roblox RAM Limit",
+            "Periodically trim Roblox working-set memory to reduce RAM usage.\n"
+            "May causes crash when using this feature, use with caution.",
+            on_change=self._on_sett_boost_ram,
+        )
+        f.addWidget(self._sett_boost_ram_chk)
+
+        ram_row = QHBoxLayout()
+        ram_row.setContentsMargins(20, 0, 0, 0)
+        _ram_lbl = QLabel("Low RAM Limit (MB)")
+        _ram_lbl.setToolTip(
+            "Target memory limit per Roblox process in megabytes.\n"
+            "Processes using more than this will have their working set trimmed."
+        )
+        ram_row.addWidget(_ram_lbl)
+        ram_row.addStretch(1)
+        self._sett_ram_spin = QSpinBox()
+        self._sett_ram_spin.setRange(100, 8192)
+        self._sett_ram_spin.setValue(int(S.get("optimize_roblox_ram_limit_mb", 750)))
+        self._sett_ram_spin.setSuffix(" MB")
+        self._sett_ram_spin.setFixedWidth(90)
+        self._sett_ram_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_ram_spin.setEnabled(S.get("optimize_roblox_ram", False))
+        self._sett_ram_spin.valueChanged.connect(
+            lambda v: actions.save_ui_setting("optimize_roblox_ram_limit_mb", v)
+        )
+        ram_row.addWidget(self._sett_ram_spin)
+        f.addLayout(ram_row)
+
+        f.addStretch(1)
+
+        # Discord (Page 2)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
+
+        dc = S.get("discord_webhook", {})
+
+        f.addWidget(_sec("WEBHOOK"))
+        self._sett_dc_enabled_chk = QCheckBox("Enable Discord Webhook")
+        self._sett_dc_enabled_chk.setChecked(dc.get("enabled", False))
+        self._sett_dc_enabled_chk.setToolTip(
+            "Forward log events to a Discord channel via webhook.\n"
+            "All events that pass your filters will be posted automatically."
+        )
+        self._sett_dc_enabled_chk.stateChanged.connect(self._on_dc_save)
+        f.addWidget(self._sett_dc_enabled_chk)
+
+        url_row = QHBoxLayout()
+        url_row.setContentsMargins(0, 0, 0, 0)
+        url_lbl = QLabel("Webhook URL")
+        url_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        url_row.addWidget(url_lbl)
+        f.addLayout(url_row)
+        self._sett_dc_url_edit = QLineEdit()
+        self._sett_dc_url_edit.setPlaceholderText("https://discord.com/api/webhooks/...")
+        self._sett_dc_url_edit.setText(dc.get("url", ""))
+        self._sett_dc_url_edit.textChanged.connect(self._on_dc_save)
+        f.addWidget(self._sett_dc_url_edit)
+
+        f.addWidget(_sec("PINGS"))
+        ping_row = QHBoxLayout()
+        ping_row.setContentsMargins(0, 0, 0, 0)
+        self._sett_dc_ping_chk = QCheckBox("Ping user on alerts")
+        self._sett_dc_ping_chk.setChecked(dc.get("enable_ping", False))
+        self._sett_dc_ping_chk.setToolTip("Mention a Discord user ID in alert messages.")
+        self._sett_dc_ping_chk.stateChanged.connect(self._on_dc_save)
+        ping_row.addWidget(self._sett_dc_ping_chk)
+        self._sett_dc_pingid_edit = QLineEdit()
+        self._sett_dc_pingid_edit.setPlaceholderText("User ID (e.g. 123456789)")
+        self._sett_dc_pingid_edit.setText(dc.get("ping_user_id", ""))
+        self._sett_dc_pingid_edit.setFixedWidth(160)
+        self._sett_dc_pingid_edit.textChanged.connect(self._on_dc_save)
+        ping_row.addWidget(self._sett_dc_pingid_edit)
+        f.addLayout(ping_row)
+
+        self._sett_dc_pingerr_chk = QCheckBox("Ping only on [ERROR]")
+        self._sett_dc_pingerr_chk.setChecked(dc.get("ping_on_error", True))
+        self._sett_dc_pingerr_chk.setToolTip(
+            "Only mention the user for [ERROR] messages, not every event."
+        )
+        self._sett_dc_pingerr_chk.stateChanged.connect(self._on_dc_save)
+        f.addLayout(_sub_indent(self._sett_dc_pingerr_chk))
+
+        f.addWidget(_sec("SCREENSHOTS"))
+        ss_row = QHBoxLayout()
+        ss_row.setContentsMargins(0, 0, 0, 0)
+        self._sett_dc_ss_chk = QCheckBox("Screenshot every")
+        self._sett_dc_ss_chk.setChecked(dc.get("screenshot_enabled", False))
+        self._sett_dc_ss_chk.setToolTip(
+            "Periodically capture a screenshot and upload it to Discord via the webhook."
+        )
+        self._sett_dc_ss_chk.stateChanged.connect(self._on_dc_save)
+        ss_row.addWidget(self._sett_dc_ss_chk)
+        self._sett_dc_ss_spin = QSpinBox()
+        self._sett_dc_ss_spin.setRange(1, 1440)
+        self._sett_dc_ss_spin.setValue(int(dc.get("screenshot_interval_minutes", 60)))
+        self._sett_dc_ss_spin.setSuffix(" min")
+        self._sett_dc_ss_spin.setFixedWidth(80)
+        self._sett_dc_ss_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_dc_ss_spin.valueChanged.connect(self._on_dc_save)
+        ss_row.addWidget(self._sett_dc_ss_spin)
+        ss_row.addStretch(1)
+        f.addLayout(ss_row)
+
+        f.addWidget(_sec("LOG FILTERS"))
+        _filter_lbl = QLabel(
+            "Choose which event types are forwarded to Discord."
+        )
+        _filter_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        _filter_lbl.setWordWrap(True)
+        f.addWidget(_filter_lbl)
+
+        _log_fields = [
+            ("log_errors", "Log [ERROR]", True),
+            ("log_success", "Log [SUCCESS]", True),
+            ("log_warnings", "Log [WARNING]", True),
+            ("log_info", "Log [INFO]", False),
+            ("log_auto_rejoin", "Log Auto-Rejoin events", True),
+            ("log_auto_rejoin_console", "Log Auto-Rejoin console", False),
+        ]
+        self._sett_dc_log_chks: dict[str, QCheckBox] = {}
+        for key, label, default in _log_fields:
+            cb = QCheckBox(label)
+            cb.setChecked(dc.get(key, default))
+            cb.stateChanged.connect(self._on_dc_save)
+            f.addWidget(cb)
+            self._sett_dc_log_chks[key] = cb
+
+        f.addWidget(_sec("ACTIONS"))
+        _test_btn = QPushButton("Test Webhook")
+        _test_btn.setToolTip(
+            "Send a test embed to the configured webhook URL to verify it is working."
+        )
+        _test_btn.clicked.connect(self._on_dc_test)
+        f.addWidget(_test_btn)
+
+        f.addStretch(1)
+
+        # Misc (Page 3)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
+
+        f.addWidget(_sec("BROWSER ENGINE"))
+        _br_lbl = QLabel(
+            "Browser used when adding accounts via the browser method."
+        )
+        _br_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        _br_lbl.setWordWrap(True)
+        f.addWidget(_br_lbl)
+
+        _cur_br = S.get("browser_type", "chrome")
+        _br_grp = QButtonGroup(sa)
+        for br_key, br_label, br_tip in [
+            ("chrome", "Google Chrome",
+             "Use Google Chrome via ChromeDriver (recommended). Chrome must be installed."),
+            ("chromium", "Chromium",
+             "Use Chromium (open-source base of Chrome). Download it with the button below."),
+        ]:
+            rb = QRadioButton(br_label)
+            rb.setChecked(br_key == _cur_br)
+            rb.setToolTip(br_tip)
+            _br_grp.addButton(rb)
+            rb.toggled.connect(
+                (lambda k: lambda checked: actions.save_ui_setting("browser_type", k) if checked else None)(br_key)
+            )
+            f.addWidget(rb)
+
+        _chromium_exe = os.path.join(
+            _ROOT_DIR, "AccountManagerData", "Chromium", "chrome-win64", "chrome.exe"
+        )
+        _chromium_installed = os.path.exists(_chromium_exe)
+        self._sett_chromium_btn = QPushButton(
+            "Downloaded" if _chromium_installed else "Download Chromium"
+        )
+        self._sett_chromium_btn.setEnabled(not _chromium_installed)
+        self._sett_chromium_btn.setToolTip(
+            "Download a portable Chromium + ChromeDriver build to AccountManagerData/Chromium.\n"
+            "No installation required."
+        )
+        if _chromium_installed:
+            self._sett_chromium_btn.setStyleSheet(
+                f"QPushButton {{ background: #2A5A2A; color: {TEXT}; "
+                f"border: 1px solid #3A7A3A; text-align: center; }}"
+            )
+        self._sett_chromium_btn.clicked.connect(self._on_sett_dl_chromium)
+        f.addLayout(_sub_indent(self._sett_chromium_btn))
+
+        f.addWidget(_sec("ENCRYPTION"))
+        _enc_btn = QPushButton("Switch Encryption Method")
+        _enc_btn.setToolTip(
+            "Change between hardware-based and password-based encryption.\n"
+            "You will need to re-import your accounts after switching."
+        )
+        _enc_btn.clicked.connect(self._on_sett_switch_encryption)
+        f.addWidget(_enc_btn)
+
+        f.addWidget(_sec("DATA"))
+        _wipe_btn = QPushButton("Wipe All Data")
+        _wipe_btn.setToolTip(
+            "Permanently delete all saved accounts, settings, and cached data.\n"
+            "This action cannot be undone."
+        )
+        _wipe_btn.setStyleSheet(
+            f"QPushButton {{ color: #EF5350; border-color: #5A2A2A; }}"
+            f"QPushButton:hover {{ background: #3A1A1A; color: #FF6B6B; }}"
+        )
+        _wipe_btn.clicked.connect(self._on_sett_wipe_data)
+        f.addWidget(_wipe_btn)
+
+        f.addStretch(1)
+
+        # Developer (Page 4)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
+
+        f.addWidget(_sec("DEVELOPER"))
+        self._sett_devmode_chk = _chk(
+            "developer_mode", "Developer Mode",
+            "Unlock developer-only features.\n"
+            "Enables Copy Cookie and WebSocket controls.",
+            on_change=self._on_sett_developer_mode,
+        )
+        f.addWidget(self._sett_devmode_chk)
+
+        self._sett_copycookie_chk = _chk(
+            "enable_copy_cookie", "Enable Copy Cookie Button",
+            "Show a Copy Cookie button on each account entry.\n"
+            "WARNING: cookies grant full account access, never share them.",
+        )
+        f.addWidget(self._sett_copycookie_chk)
+        _dev_on = S.get("developer_mode", False)
+        self._sett_copycookie_chk.setEnabled(_dev_on)
+
+        f.addWidget(_sec("WEBSOCKET SERVER"))
+        self._sett_ws_chk = _chk(
+            "websocket_enabled", "Enable WebSocket Server",
+            "Start a local WebSocket server so external scripts can\n"
+            "query account data and trigger actions.",
+            on_change=self._on_sett_ws_changed,
+        )
+        f.addWidget(self._sett_ws_chk)
+        self._sett_ws_chk.setEnabled(_dev_on)
+
+        ws_port_row = QHBoxLayout()
+        ws_port_row.setContentsMargins(20, 0, 0, 0)
+        _wsp_lbl = QLabel("Port")
+        _wsp_lbl.setToolTip("TCP port for the WebSocket server (default: 7963).")
+        ws_port_row.addWidget(_wsp_lbl)
+        ws_port_row.addStretch(1)
+        self._sett_ws_port = QSpinBox()
+        self._sett_ws_port.setRange(1024, 65535)
+        self._sett_ws_port.setValue(int(S.get("websocket_port", 7963)))
+        self._sett_ws_port.setFixedWidth(80)
+        self._sett_ws_port.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_ws_port.valueChanged.connect(
+            lambda v: actions.save_ui_setting("websocket_port", v)
+        )
+        ws_port_row.addWidget(self._sett_ws_port)
+        f.addLayout(ws_port_row)
+
+        self._sett_ws_pw_chk = _chk(
+            "websocket_require_password", "Require Password",
+            "Clients must supply a password to connect to the WebSocket server.",
+        )
+        f.addLayout(_sub_indent(self._sett_ws_pw_chk))
+        self._sett_ws_pw_chk.setEnabled(_dev_on and S.get("websocket_enabled", False))
+
+        f.addStretch(1)
+
+        return panel
+
+    def _on_sett_topmost(self, enabled: bool):
+        current = bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        if current == enabled:
+            return
+        self.hide()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
+        self.show()
+        print(f"[INFO] Always on Top {'enabled' if enabled else 'disabled'}")
+
+    def _on_sett_multi_select(self, enabled: bool):
+        if hasattr(self, "_account_list") and self._account_list:
+            mode = (QAbstractItemView.SelectionMode.ExtendedSelection
+                    if enabled else
+                    QAbstractItemView.SelectionMode.SingleSelection)
+            self._account_list.setSelectionMode(mode)
+
+    def _on_sett_start_menu(self, state: int, path: str):
+        enabled = (state == Qt.CheckState.Checked.value)
+        if enabled:
             try:
-                return max(6, min(36, int(str(text_value).strip())))
-            except Exception:
-                return fallback
+                if getattr(sys, "frozen", False):
+                    exe = sys.executable
+                else:
+                    exe = os.path.abspath(sys.argv[0])
+                ps = (
+                    f'$s=New-Object -comObject WScript.Shell;'
+                    f'$l=$s.CreateShortcut("{path}");'
+                    f'$l.TargetPath="{exe}";'
+                    f'$l.WorkingDirectory="{os.path.dirname(exe)}";'
+                    f'$l.Description="Roblox Account Manager";$l.Save()'
+                )
+                subprocess.run(["powershell", "-Command", ps],
+                               capture_output=True, creationflags=0x08000000)
+                print("[INFO] Start Menu shortcut created")
+            except Exception as e:
+                print(f"[ERROR] Failed to create shortcut: {e}")
+                self._sett_startmenu_chk.setChecked(False)
+        else:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    print("[INFO] Start Menu shortcut removed")
+            except Exception as e:
+                print(f"[ERROR] Failed to remove shortcut: {e}")
 
-        def get_editor_theme_data():
-            data = self._deepcopy_theme_data(theme_state["base_theme_data"] or self.theme_manager.DEFAULT_THEME)
-            colors = data.setdefault("colors", {})
-            fonts = data.setdefault("fonts", {})
+    def _on_sett_boost_ram(self, enabled: bool):
+        if hasattr(self, "_sett_ram_spin"):
+            self._sett_ram_spin.setEnabled(enabled)
+        if enabled:
+            self._start_ram_boost()
+        else:
+            self._stop_ram_boost()
 
-            for key, _label in color_keys:
-                colors[key] = self._normalize_hex_color(color_vars[key].get(), self.theme_manager.DEFAULT_THEME["colors"].get(key, "#000000"))
+    def _on_sett_rename_windows(self, enabled: bool):
+        if enabled:
+            self._start_rename_windows()
+        else:
+            self._stop_rename_windows()
 
-            fonts["family"] = font_vars["family"].get().strip() or self.theme_manager.DEFAULT_THEME["fonts"]["family"]
-            fonts["size_base"] = _validated_font_size(font_vars["size_base"].get(), 10)
+    def _on_sett_presence_indicator(self, enabled: bool):
+        if enabled:
+            self._start_presence_scanner()
+        else:
+            self._stop_presence_scanner()
 
-            return data
+    def _start_update_check(self) -> None:
+        if not actions.load_ui_settings().get("check_updates_on_startup", True):
+            return
+        def _worker():
+            latest = updater_mod.check_latest_version()
+            if latest and updater_mod.is_newer(APP_VERSION, latest):
+                self._bridge.update_available.emit(latest)
+        threading.Thread(target=_worker, daemon=True, name="UpdateCheck").start()
 
-        def theme_data_matches_base(current_data):
-            base_data = theme_state["base_theme_data"] or self.theme_manager.DEFAULT_THEME
-            current_colors = current_data.get("colors", {})
-            base_colors = base_data.get("colors", {})
-            current_fonts = current_data.get("fonts", {})
-            base_fonts = base_data.get("fonts", {})
-            for key, _label in color_keys:
-                if self._normalize_hex_color(current_colors.get(key), "") != self._normalize_hex_color(base_colors.get(key), ""):
-                    return False
-            for key in ("family", "size_base"):
-                if str(current_fonts.get(key, "")).strip() != str(base_fonts.get(key, "")).strip():
-                    return False
+    def _on_update_available(self, latest_version: str) -> None:
+        self._show_update_dialog(latest_version)
+
+    def _show_update_dialog(self, latest_version: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Update Available")
+        dlg.setFixedSize(440, 290)
+        dlg.setStyleSheet(f"""
+            QDialog   {{ background: {BG}; }}
+            QLabel    {{ color: {TEXT}; background: transparent; }}
+            QPushButton {{
+                background: {INPUT}; color: {TEXT};
+                border: 1px solid {LINE}; border-radius: 0;
+                padding: 6px 14px; font-size: 12px;
+            }}
+            QPushButton:hover    {{ background: {SELECT}; border-color: #444; }}
+            QPushButton:disabled {{ color: #666; }}
+        """)
+
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(12)
+
+        # Header
+        hdr = QLabel("Update Available")
+        hdr.setStyleSheet("font-size: 15px; font-weight: 700; color: #EDEDED;")
+        lay.addWidget(hdr)
+
+        # Version Info Card
+        card = QFrame()
+        card.setStyleSheet(f"QFrame {{ background: {PANEL}; border: none; }}")
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(14, 10, 14, 10)
+        card_lay.setSpacing(4)
+        lbl_cur = QLabel(f"Your version is outdated:  v{APP_VERSION}")
+        lbl_cur.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        lbl_new = QLabel(f"Latest version:  v{latest_version}")
+        lbl_new.setStyleSheet("color: #5DBBFF; font-size: 13px; font-weight: 600;")
+        card_lay.addWidget(lbl_cur)
+        card_lay.addWidget(lbl_new)
+        lay.addWidget(card)
+
+        # Progress download button (mimics chromium bar)
+        dl_btn = QPushButton("Download Automatically")
+        dl_btn.setFixedHeight(34)
+        lay.addWidget(dl_btn)
+
+        # Status label
+        status_lbl = QLabel("")
+        status_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        status_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(status_lbl)
+
+        # Bottom buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        manual_btn = QPushButton("Manual Download")
+        ignore_btn = QPushButton("Ignore")
+        btn_row.addWidget(manual_btn)
+        btn_row.addWidget(ignore_btn)
+        lay.addLayout(btn_row)
+
+        # Helpers for the chromium-style progress bar
+        def _set_progress(pct: int) -> None:
+            pct = max(0, min(100, pct))
+            dl_btn.setText(f"Downloading...  {pct}%")
+            if pct == 0:
+                dl_btn.setStyleSheet("")
+            else:
+                a = f"{pct / 100:.4f}"
+                b = f"{min(pct / 100 + 0.001, 1.0):.4f}"
+                dl_btn.setStyleSheet(
+                    f"QPushButton {{"
+                    f"  background: qlineargradient("
+                    f"    x1:0, y1:0, x2:1, y2:0,"
+                    f"    stop:0 #3A5A9A, stop:{a} #3A5A9A,"
+                    f"    stop:{b} {INPUT}, stop:1 {INPUT}"
+                    f"  );"
+                    f"  color: {TEXT}; border: 1px solid {LINE}; border-radius: 4px;"
+                    f"}}"
+                )
+
+        def _set_buttons_enabled(enabled: bool) -> None:
+            dl_btn.setEnabled(enabled)
+            manual_btn.setEnabled(enabled)
+            ignore_btn.setEnabled(enabled)
+
+        # Download signal connections
+        def _on_progress(pct: int) -> None:
+            _set_progress(pct)
+
+        def _on_done(success: bool, err: str) -> None:
+            try:
+                self._bridge.update_progress.disconnect(_on_progress)
+                self._bridge.update_done.disconnect(_on_done)
+            except RuntimeError:
+                pass
+            if success:
+                dl_btn.setText("Done! Closing...")
+                dl_btn.setStyleSheet(
+                    f"QPushButton {{ background: #1E4D1E; color: {TEXT}; "
+                    f"border: 1px solid #2E6D2E; border-radius: 4px; }}"
+                )
+                status_lbl.setText("Update installed. The app will close now.")
+                dlg.setEnabled(False)
+                QTimer.singleShot(1500, self.close)
+            else:
+                _set_buttons_enabled(True)
+                dl_btn.setText("Download Automatically")
+                dl_btn.setStyleSheet("")
+                status_lbl.setText(f"Download failed: {err}")
+
+        # Button actions
+        def _on_download_clicked() -> None:
+            _set_buttons_enabled(False)
+            _set_progress(0)
+            status_lbl.setText("Starting download...")
+            try:
+                self._bridge.update_progress.disconnect()
+            except RuntimeError:
+                pass
+            try:
+                self._bridge.update_done.disconnect()
+            except RuntimeError:
+                pass
+            self._bridge.update_progress.connect(_on_progress)
+            self._bridge.update_done.connect(_on_done)
+            updater_mod.download_update(
+                on_progress=lambda p: self._bridge.update_progress.emit(p),
+                on_done=lambda ok, e: self._bridge.update_done.emit(ok, e),
+            )
+
+        dl_btn.clicked.connect(_on_download_clicked)
+        manual_btn.clicked.connect(lambda: (
+            __import__("webbrowser").open(updater_mod.RELEASES_PAGE),
+            dlg.accept(),
+        ))
+        ignore_btn.clicked.connect(dlg.accept)
+
+        dlg.exec()
+
+    # Cookie Validator
+    def _start_cookie_validator(self) -> None:
+        if self._cv_validator is not None:
+            return
+        self._cv_validator = self._cv_mod.CookieValidator(
+            self.manager,
+            on_result=lambda u, ok: self._bridge.cookie_validated.emit(u, ok),
+            # on_done=lambda: print("[INFO] Cookie validation pass complete."),
+            delay_sec=1.5,
+        )
+        self._cv_validator.start()
+
+    def _on_cookie_validated(self, username: str, is_valid: bool) -> None:
+        if not is_valid:
+            print(f"[WARNING] {username}: cookie invalid, flagging account.")
+        self._refresh_account_list()
+
+    def _is_account_invalid(self, username: str) -> bool:
+        data = self.manager.accounts.get(username)
+        return self._cv_mod.is_flagged(data) if isinstance(data, dict) else False
+
+    def _guard_invalid(self, usernames: list[str]) -> bool:
+        bad = [u for u in usernames if self._is_account_invalid(u)]
+        if not bad:
             return True
-
-        def update_theme_title_from_state(current_data=None):
-            if theme_state["theme_is_dirty"]:
-                set_theme_title("Custom")
-                return
-            loaded_name = theme_state["loaded_theme_name"] or "Dark"
-            if current_data is not None and not theme_data_matches_base(current_data):
-                theme_state["theme_is_dirty"] = True
-                set_theme_title("Custom")
-            else:
-                set_theme_title(loaded_name)
-
-        def set_status(text):
-            theme_status_var.set(text)
-
-        def mark_theme_dirty(*_):
-            if theme_state["suspend_dirty_events"]:
-                return
-            current_data = get_editor_theme_data()
-            theme_state["theme_is_dirty"] = not theme_data_matches_base(current_data)
-            update_theme_title_from_state(current_data)
-            set_status("Unsaved changes" if theme_state["theme_is_dirty"] else "")
-
-        for var in color_vars.values():
-            var.trace_add("write", mark_theme_dirty)
-        for var in font_vars.values():
-            var.trace_add("write", mark_theme_dirty)
-        def apply_theme_to_editor(theme_name, theme_data_override=None):
-            resolved = theme_name
-            if resolved not in theme_catalog:
-                for existing in theme_catalog.keys():
-                    if existing.lower() == str(theme_name).lower():
-                        resolved = existing
-                        break
-            if resolved not in theme_catalog:
-                return
-
-            base_theme_data = self.theme_manager.load_theme(resolved)
-            merged = self.theme_manager._merge_with_defaults(theme_data_override or base_theme_data)
-            theme_state["suspend_dirty_events"] = True
-            theme_state["base_theme_name"] = resolved
-            theme_state["base_theme_data"] = self._deepcopy_theme_data(base_theme_data)
-            for key, _label in color_keys:
-                color_vars[key].set(str(merged.get("colors", {}).get(key, self.theme_manager.DEFAULT_THEME["colors"].get(key, "#000000"))))
-            fonts = merged.get("fonts", {})
-            font_vars["family"].set(str(fonts.get("family", self.theme_manager.DEFAULT_THEME["fonts"]["family"])))
-            font_vars["size_base"].set(str(int(fonts.get("size_base", 10))))
-            theme_state["suspend_dirty_events"] = False
-
-            theme_state["loaded_theme_name"] = resolved
-            theme_state["theme_is_dirty"] = not theme_data_matches_base(merged)
-            theme_selector_var.set(resolved)
-            set_theme_title("Custom" if theme_state["theme_is_dirty"] else resolved)
-            set_status("")
-
-        def on_theme_selector_change(_event=None):
-            selected_name = theme_selector_var.get().strip()
-            if selected_name:
-                apply_theme_to_editor(selected_name)
-
-        theme_selector.bind("<<ComboboxSelected>>", on_theme_selector_change)
-
-        def choose_theme_color(setting_key, label_text):
-            current_color = color_vars[setting_key].get() or "#000000"
-            picked = colorchooser.askcolor(initialcolor=current_color, title=f"Choose {label_text}", parent=settings_window)
-            if picked and picked[1]:
-                color_vars[setting_key].set(picked[1])
-
-        color_section = tk.Frame(editor_content, bg=self.BG_MID)
-        color_section.pack(fill="x", pady=(0, 8))
-        self.theme_color_section = color_section
-
-        color_header = tk.Label(color_section, text="Colors", bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10, "bold"))
-        color_header.pack(anchor="w", pady=(0, 4))
-        self.theme_editor_widgets.append(color_header)
-
-        color_rows = tk.Frame(color_section, bg=self.BG_MID)
-        color_rows.pack(fill="x")
-        self.theme_color_rows = color_rows
-
-        color_swatches = {}
-        self.theme_color_swatch_widgets = color_swatches
-
-        def make_color_row(parent, key, label_text):
-            row = tk.Frame(parent, bg=self.BG_MID)
-            row.pack(fill="x", pady=2)
-
-            label = tk.Label(row, text=label_text, bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 8), width=18, anchor="w")
-            label.pack(side="left")
-            self.theme_editor_widgets.append(label)
-            self.theme_editor_widgets.append(row)
-
-            entry = tk.Entry(
-                row,
-                textvariable=color_vars[key],
-                width=12,
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                insertbackground=self.FG_TEXT,
-                relief="solid",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=self.BG_LIGHT,
-                highlightcolor=self.FG_ACCENT,
-            )
-            entry.pack(side="left", padx=(0, 6))
-            self.theme_editor_widgets.append(entry)
-
-            swatch = tk.Frame(row, bg="#000000", width=18, height=18, relief="solid", borderwidth=1)
-            swatch.pack(side="left", padx=(0, 6))
-            swatch.pack_propagate(False)
-            color_swatches[key] = swatch
-
-            def refresh_swatch(*_):
-                value = color_vars[key].get().strip()
-                if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-                    swatch.config(bg=value)
-
-            color_vars[key].trace_add("write", refresh_swatch)
-            refresh_swatch()
-
-            picker_btn = tk.Button(
-                row,
-                text="...",
-                width=3,
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                relief="flat",
-                activebackground=self.BG_LIGHT,
-                activeforeground=self.FG_TEXT,
-                command=lambda k=key, t=label_text: choose_theme_color(k, t),
-            )
-            picker_btn.pack(side="right")
-            self.theme_editor_widgets.append(picker_btn)
-
-        for key, label in color_keys:
-            make_color_row(color_rows, key, label)
-
-        font_section = tk.Frame(editor_content, bg=self.BG_MID)
-        font_section.pack(fill="x", pady=(4, 8))
-        self.theme_font_section = font_section
-
-        font_header = tk.Label(font_section, text="Fonts", bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10, "bold"))
-        font_header.pack(anchor="w", pady=(0, 4))
-        self.theme_editor_widgets.append(font_header)
-
-        def font_row(parent, label_text, create_widget):
-            row = tk.Frame(parent, bg=self.BG_MID)
-            row.pack(fill="x", pady=2)
-            self.theme_editor_widgets.append(row)
-            label = tk.Label(row, text=label_text, bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 8), width=18, anchor="w")
-            label.pack(side="left")
-            self.theme_editor_widgets.append(label)
-            widget = create_widget(row)
-            widget.pack(side="right", fill="x", expand=True)
-            self.theme_editor_widgets.append(widget)
-            return widget
-
-        font_families = sorted({family for family in tkfont.families() if family and not family.startswith("@")})
-        if "Segoe UI" in font_families:
-            font_families.insert(0, font_families.pop(font_families.index("Segoe UI")))
-
-        font_family_combo = font_row(
-            font_section,
-            "Family",
-            lambda parent: ttk.Combobox(
-                parent,
-                textvariable=font_vars["family"],
-                values=font_families,
-                state="readonly",
-                width=24,
-                style="ThemeEditor.TCombobox",
-            ),
+        names = ", ".join(bad)
+        QMessageBox.warning(
+            self, "Invalid Account",
+            f"The following account(s) have an expired or revoked cookie "
+            f"and cannot be launched:\n\n  {names}\n\n"
+            "Please remove the account and add it again to restore access."
         )
-        self.theme_family_combo = font_family_combo
+        return False
 
-        def make_size_entry(variable):
-            return lambda parent: tk.Entry(
-                parent,
-                textvariable=variable,
-                width=10,
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                insertbackground=self.FG_TEXT,
-                relief="solid",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=self.BG_LIGHT,
-                highlightcolor=self.FG_ACCENT,
-            )
-
-        font_row(font_section, "Base Size", make_size_entry(font_vars["size_base"]))
-
-        def set_theme_from_editor():
-            current_data = get_editor_theme_data()
-            dirty = not theme_data_matches_base(current_data)
-            theme_state["theme_is_dirty"] = dirty
-            update_theme_title_from_state(current_data)
-            self._save_current_theme_config(current_data, theme_state["base_theme_name"])
-            self._apply_theme_data(current_data, selected_theme_name=("Custom" if dirty else theme_state["loaded_theme_name"]), persist_selection=True)
-            set_status("Applied custom theme" if dirty else f"Applied {theme_state['loaded_theme_name']}")
-
-        def save_theme_from_editor():
-            current_data = get_editor_theme_data()
-            suggested_name = theme_state["loaded_theme_name"]
-            theme_name = simpledialog.askstring(
-                "Save Theme",
-                "Theme name:",
-                initialvalue=suggested_name,
-                parent=settings_window,
-            )
-            if theme_name is None:
-                return
-
-            theme_name = str(theme_name).strip()
-            if not theme_name:
-                messagebox.showwarning("Save Theme", "Theme name cannot be empty.", parent=settings_window)
-                return
-
-            safe_theme_name = re.sub(r'[<>:"/\\|?*]', "_", theme_name).strip()
-            if not safe_theme_name:
-                messagebox.showwarning("Save Theme", "Theme name contains only invalid filename characters.", parent=settings_window)
-                return
-
-            suggested_author = ""
-            suggested_description = ""
-            if suggested_name in self.theme_manager.get_available_themes():
-                existing_theme = self.theme_manager.load_theme(suggested_name)
-                suggested_author = existing_theme.get("metadata", {}).get("author", "")
-                suggested_description = existing_theme.get("metadata", {}).get("description", "")
-
-            author_name = simpledialog.askstring(
-                "Save Theme",
-                "Author:",
-                initialvalue=suggested_author,
-                parent=settings_window,
-            )
-            if author_name is None:
-                return
-            author_name = str(author_name).strip()
-            if not author_name:
-                messagebox.showwarning("Save Theme", "Author cannot be empty.", parent=settings_window)
-                return
-
-            description_text = simpledialog.askstring(
-                "Save Theme",
-                "Description:",
-                initialvalue=suggested_description,
-                parent=settings_window,
-            )
-            if description_text is None:
-                return
-            description_text = str(description_text).strip()
-            if not description_text:
-                messagebox.showwarning("Save Theme", "Description cannot be empty.", parent=settings_window)
-                return
-
-            available = self.theme_manager.get_available_themes()
-            if safe_theme_name in available and available[safe_theme_name].get("builtin", False):
-                messagebox.showwarning("Save Theme", "Cannot overwrite a builtin theme. Choose another name.", parent=settings_window)
-                return
-
-            if safe_theme_name in available and not messagebox.askyesno(
-                "Save Theme",
-                f"Overwrite existing custom theme '{safe_theme_name}'?",
-                parent=settings_window,
-            ):
-                return
-
-            save_data = self._deepcopy_theme_data(current_data)
-            metadata = save_data.setdefault("metadata", {})
-            metadata["name"] = safe_theme_name
-            metadata["author"] = author_name
-            metadata["description"] = description_text
-
-            if not self.theme_manager.save_theme(safe_theme_name, save_data, is_custom=True):
-                messagebox.showerror("Save Theme", "Failed to save theme.", parent=settings_window)
-                return
-
-            self._save_current_theme_config(save_data, safe_theme_name)
-            theme_state["base_theme_name"] = safe_theme_name
-            theme_state["loaded_theme_name"] = safe_theme_name
-            theme_state["theme_is_dirty"] = False
-            refresh_theme_catalog(safe_theme_name)
-            apply_theme_to_editor(safe_theme_name, save_data)
-            set_theme_title(safe_theme_name)
-            set_status("Theme saved")
-            messagebox.showinfo("Save Theme", f"Saved theme '{safe_theme_name}'.", parent=settings_window)
-
-        button_row = ttk.Frame(themes_frame, style="Dark.TFrame")
-        button_row.pack(fill="x")
-
-        ttk.Button(button_row, text="Set Theme", style="Dark.TButton", command=set_theme_from_editor).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ttk.Button(button_row, text="Save Theme", style="Dark.TButton", command=save_theme_from_editor).pack(side="left", fill="x", expand=True, padx=(4, 0))
-
-        refresh_theme_catalog(self.settings.get("selected_theme", "Dark"))
-        if current_theme_config:
-            apply_theme_to_editor(theme_state["loaded_theme_name"], current_theme_config)
-        else:
-            apply_theme_to_editor(theme_state["loaded_theme_name"])
-        self._theme_editor_save_current_config = lambda: self._save_current_theme_config(get_editor_theme_data(), theme_state["base_theme_name"])
-        if theme_state["theme_is_dirty"]:
-            set_theme_title("Custom")
-        else:
-            set_theme_title(theme_state["loaded_theme_name"])
-        
-        dc_frame = ttk.Frame(discord_tab, style="Dark.TFrame")
-        dc_frame.pack(fill="both", expand=True, padx=20, pady=15)
-
-        webhook_cfg = self.settings.setdefault("discord_webhook", self._default_discord_integration_settings("webhook"))
-
-        ttk.Label(
-            dc_frame, text="Discord Webhook",
-            style="Dark.TLabel", font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w", pady=(0, 2))
-
-        ttk.Label(
-            dc_frame, text="Send log events to Discord via webhook.",
-            style="Dark.TLabel", font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(0, 10))
-
-        sep = ttk.Frame(dc_frame, style="Dark.TFrame", height=1)
-        sep.pack(fill="x", pady=(0, 12))
-        sep.configure(relief="solid", borderwidth=1)
-
-        dc_enabled_var = tk.BooleanVar(value=webhook_cfg.get("enabled", False))
-        dc_url_var = tk.StringVar(value=webhook_cfg.get("url", ""))
-        dc_ping_var = tk.BooleanVar(value=webhook_cfg.get("enable_ping", False))
-        dc_ping_id_var = tk.StringVar(value=webhook_cfg.get("ping_user_id", ""))
-        dc_ping_err_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_error", True))
-        dc_log_all_var = tk.BooleanVar(value=webhook_cfg.get("log_everything", False))
-        dc_log_err_var = tk.BooleanVar(value=webhook_cfg.get("log_errors", True))
-        dc_log_ok_var = tk.BooleanVar(value=webhook_cfg.get("log_success", True))
-        dc_log_warn_var = tk.BooleanVar(value=webhook_cfg.get("log_warnings", True))
-        dc_log_info_var = tk.BooleanVar(value=webhook_cfg.get("log_info", False))
-        dc_log_rejoin_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin", True))
-        dc_log_rejoin_console_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin_console", False))
-        dc_screenshot_interval_var = tk.StringVar(value=str(webhook_cfg.get("screenshot_interval_minutes", 60)))
-        dc_screenshot_enabled_var = tk.BooleanVar(value=webhook_cfg.get("screenshot_enabled", False))
-
-        def _dc_save():
-            webhook_cfg["enabled"] = dc_enabled_var.get()
-            webhook_cfg["url"] = dc_url_var.get().strip()
-            webhook_cfg["enable_ping"] = dc_ping_var.get()
-            webhook_cfg["ping_user_id"] = dc_ping_id_var.get().strip()
-            webhook_cfg["ping_on_error"] = dc_ping_err_var.get()
-            webhook_cfg["log_everything"] = dc_log_all_var.get()
-            webhook_cfg["log_errors"] = dc_log_err_var.get()
-            webhook_cfg["log_success"] = dc_log_ok_var.get()
-            webhook_cfg["log_warnings"] = dc_log_warn_var.get()
-            webhook_cfg["log_info"] = dc_log_info_var.get()
-            webhook_cfg["log_auto_rejoin"] = dc_log_rejoin_var.get()
-            webhook_cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
-            try:
-                webhook_cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
-            except (ValueError, TypeError):
-                webhook_cfg["screenshot_interval_minutes"] = 60
-            webhook_cfg["screenshot_enabled"] = dc_screenshot_enabled_var.get()
-
-            self.settings["discord_webhook"] = webhook_cfg
-            self.save_settings()
-
-        def _dc_toggle_fields(*_, _send_connect=True):
-            now_enabled = dc_enabled_var.get()
-            state = "normal" if now_enabled else "disabled"
-            for w in _dc_dependent_widgets:
-                try:
-                    w.config(state=state)
-                except Exception:
-                    pass
-            was_enabled = webhook_cfg.get("enabled", False)
-            _dc_save()
-            if _send_connect and now_enabled and not was_enabled and dc_url_var.get().strip():
-                try:
-                    self._send_webhook_embed(dc_url_var.get().strip(), "Connected to Discord!", "Roblox Account Manager is now connected.", 0x2ECC71)
-                except Exception:
-                    pass
-            if dc_url_var.get().strip() and webhook_cfg.get("screenshot_enabled"):
-                self._start_global_screenshot_loop()
-            else:
-                self._stop_global_screenshot_loop()
-
-        dc_enable_check = ttk.Checkbutton(
-            dc_frame, text="Enable Webhook", variable=dc_enabled_var,
-            style="Dark.TCheckbutton", command=_dc_toggle_fields
-        )
-        dc_enable_check.pack(anchor="w", pady=(0, 8))
-
-        url_row = ttk.Frame(dc_frame, style="Dark.TFrame")
-        url_row.pack(fill="x", pady=(0, 6))
-        dc_url_label = ttk.Label(url_row, text="Webhook URL:", style="Dark.TLabel",
-                  font=(self.FONT_FAMILY, 9))
-        dc_url_label.pack(anchor="w", pady=(0, 2))
-        dc_url_entry = ttk.Entry(url_row, textvariable=dc_url_var, style="Dark.TEntry")
-        dc_url_entry.pack(fill="x", ipady=3)
-
-        ping_row1 = ttk.Frame(dc_frame, style="Dark.TFrame")
-        ping_row1.pack(fill="x", pady=(4, 0))
-
-        dc_ping_id_entry = ttk.Entry(ping_row1, textvariable=dc_ping_id_var,
-                                     width=20, style="Dark.TEntry")
-
-        def _dc_ping_toggle(*_):
-            dc_ping_id_entry.config(state="normal" if dc_ping_var.get() else "disabled")
-            _dc_save()
-
-        ttk.Checkbutton(
-            ping_row1, text="Ping user on alerts:", variable=dc_ping_var,
-            style="Dark.TCheckbutton", command=_dc_ping_toggle
-        ).pack(side="left")
-        dc_ping_id_entry.pack(side="left", padx=(6, 0))
-        dc_ping_id_entry.config(state="normal" if dc_ping_var.get() else "disabled")
-
-        ping_row2 = ttk.Frame(dc_frame, style="Dark.TFrame")
-        ping_row2.pack(fill="x", pady=(2, 6))
-        ttk.Checkbutton(
-            ping_row2, text="Ping only on [ERROR]", variable=dc_ping_err_var,
-            style="Dark.TCheckbutton", command=_dc_save
-        ).pack(anchor="w", padx=(2, 0))
-
-        ss_row = ttk.Frame(dc_frame, style="Dark.TFrame")
-        ss_row.pack(fill="x", pady=(2, 6))
-        dc_ss_entry = ttk.Entry(ss_row, textvariable=dc_screenshot_interval_var, width=5, style="Dark.TEntry")
-
-        def _dc_ss_toggle(*_):
-            dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
-            _dc_save()
-            try:
-                cfg = self.settings.get("discord_webhook", {})
-                if cfg.get("enabled") and cfg.get("screenshot_enabled"):
-                    self._start_global_screenshot_loop()
-                else:
-                    self._stop_global_screenshot_loop()
-            except Exception:
-                self._stop_global_screenshot_loop()
-
-        ttk.Checkbutton(
-            ss_row, text="Screenshot every:", variable=dc_screenshot_enabled_var,
-            style="Dark.TCheckbutton", command=_dc_ss_toggle
-        ).pack(side="left")
-        dc_ss_entry.pack(side="left", padx=(6, 4))
-        dc_ss_entry.config(state="normal" if dc_screenshot_enabled_var.get() else "disabled")
-        ttk.Label(ss_row, text="min", style="Dark.TLabel",
-                  font=(self.FONT_FAMILY, 9)).pack(side="left")
-        dc_ss_entry.bind("<FocusOut>", lambda e: _dc_save())
-        dc_ss_entry.bind("<Return>", lambda e: _dc_save())
-
-        btn_row = ttk.Frame(dc_frame, style="Dark.TFrame")
-        btn_row.pack(fill="x", pady=(12, 0))
-
-        def _open_log_filters():
-            _dc_save()
-            fw = tk.Toplevel(settings_window)
-            self.apply_window_icon(fw)
-            fw.title("Log Filters")
-            fw.configure(bg=self.BG_DARK)
-            fw.resizable(False, False)
-            fw.transient(settings_window)
-            fw.focus_force()
-            settings_window.update_idletasks()
-            fw.update_idletasks()
-            fx = settings_window.winfo_x() + (settings_window.winfo_width() - 260) // 2
-            fy = settings_window.winfo_y() + (settings_window.winfo_height() - 280) // 2
-            fw.geometry(f"260x300+{fx}+{fy}")
-            if self.settings.get("enable_topmost", False):
-                fw.attributes("-topmost", True)
-
-            ff = ttk.Frame(fw, style="Dark.TFrame")
-            ff.pack(fill="both", expand=True, padx=18, pady=15)
-
-            ttk.Label(ff, text="Log Filters", style="Dark.TLabel",
-                      font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 8))
-
-            def _chk(text, var):
-                cb = ttk.Checkbutton(
-                    ff, text=text, variable=var,
-                    style="Dark.TCheckbutton", command=_dc_save
-                )
-                cb.pack(anchor="w", pady=2)
-                return cb
-
-            def _toggle_log_all(*_):
-                st = "disabled" if dc_log_all_var.get() else "normal"
-                for w in _sub_checks:
-                    try:
-                        w.config(state=st)
-                    except Exception:
-                        pass
-                _dc_save()
-
-            ttk.Checkbutton(
-                ff, text="Log Everything (override all)", variable=dc_log_all_var,
-                style="Dark.TCheckbutton", command=_toggle_log_all
-            ).pack(anchor="w", pady=2)
-
-            sep_f = ttk.Frame(ff, style="Dark.TFrame", height=1)
-            sep_f.pack(fill="x", pady=(4, 6))
-            sep_f.configure(relief="solid", borderwidth=1)
-
-            _sub_checks = [
-                _chk("Log [ERROR]",                    dc_log_err_var),
-                _chk("Log [SUCCESS]",                  dc_log_ok_var),
-                _chk("Log [WARNING]",                  dc_log_warn_var),
-                _chk("Log [INFO]",                     dc_log_info_var),
-                _chk("Log Auto-Rejoin events",         dc_log_rejoin_var),
-                _chk("Log Auto-Rejoin console",        dc_log_rejoin_console_var),
-            ]
-            _toggle_log_all()
-
-            ttk.Button(ff, text="Close", style="Dark.TButton",
-                       command=fw.destroy).pack(fill="x", pady=(10, 0))
-
-        def _dc_test():
-            test_target = dc_url_var.get().strip()
-            if not test_target:
-                messagebox.showwarning("Missing Target", "Enter a webhook URL first.", parent=settings_window)
-                return
-
-            _dc_save()
-            _ping = dc_ping_id_var.get().strip() if dc_ping_var.get() else None
-            try:
-                self._send_webhook_embed(test_target, "Discord Test", "Discord integration is working correctly!", 0x2ECC71, ping_user_id=_ping)
-            except Exception:
-                pass
-
-        def _open_webhook_filters():
-            fw = tk.Toplevel(settings_window)
-            self.apply_window_icon(fw)
-            fw.title("Webhook Filters")
-            fw.configure(bg=self.BG_DARK)
-            fw.resizable(False, False)
-            fw.transient(settings_window)
-            fw.focus_force()
-            settings_window.update_idletasks()
-            fx = settings_window.winfo_x() + (settings_window.winfo_width() - 320) // 2
-            fy = settings_window.winfo_y() + (settings_window.winfo_height() - 380) // 2
-            fw.geometry(f"320x380+{fx}+{fy}")
-            if self.settings.get("enable_topmost", False):
-                fw.attributes("-topmost", True)
-
-            frm = ttk.Frame(fw, style="Dark.TFrame")
-            frm.pack(fill="both", expand=True, padx=16, pady=14)
-
-            ttk.Label(frm, text="Webhook Filters", style="Dark.TLabel",
-                      font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 2))
-            ttk.Label(frm, text="Messages containing these substrings won't be \nforwarded to Discord.\n[ERROR] messages are never filtered.",
-                      style="Dark.TLabel", font=(self.FONT_FAMILY, 8),
-                      justify="left").pack(anchor="w", pady=(0, 8))
-
-            list_frame = ttk.Frame(frm, style="Dark.TFrame")
-            list_frame.pack(fill="both", expand=True)
-
-            lb = tk.Listbox(list_frame, bg=self.BG_MID, fg=self.FG_TEXT,
-                            selectbackground=self.FG_ACCENT, highlightthickness=0,
-                            border=0, font=(self.FONT_FAMILY, 9))
-            lb.pack(side="left", fill="both", expand=True)
-            sb = ttk.Scrollbar(list_frame, command=lb.yview)
-            sb.pack(side="right", fill="y")
-            lb.config(yscrollcommand=sb.set)
-
-            filters = self.settings.setdefault("console_filters", [
-                "Got authentication ticket!",
-                "You are on the latest version",
-            ])
-            for f in filters:
-                lb.insert(tk.END, f)
-
-            add_row = ttk.Frame(frm, style="Dark.TFrame")
-            add_row.pack(fill="x", pady=(8, 4))
-            entry_var = tk.StringVar()
-            entry = ttk.Entry(add_row, textvariable=entry_var, style="Dark.TEntry")
-            entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
-
-            def add_filter(e=None):
-                val = entry_var.get().strip()
-                if val and val not in filters:
-                    filters.append(val)
-                    lb.insert(tk.END, val)
-                    self.save_settings()
-                entry_var.set("")
-
-            def remove_filter():
-                sel = lb.curselection()
-                if not sel:
-                    return
-                idx = sel[0]
-                lb.delete(idx)
-                del filters[idx]
-                self.save_settings()
-
-            entry.bind("<Return>", add_filter)
-            ttk.Button(add_row, text="Add", style="Dark.TButton",
-                       command=add_filter).pack(side="left")
-
-            wf_btn_row = ttk.Frame(frm, style="Dark.TFrame")
-            wf_btn_row.pack(fill="x", pady=(4, 0))
-            ttk.Button(wf_btn_row, text="Remove Selected", style="Dark.TButton",
-                       command=remove_filter).pack(side="left", fill="x", expand=True, padx=(0, 4))
-            ttk.Button(wf_btn_row, text="Close", style="Dark.TButton",
-                       command=fw.destroy).pack(side="left", fill="x", expand=True)
-
-        ttk.Button(btn_row, text="Log Filters", style="Dark.TButton",
-                   command=_open_log_filters).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        dc_test_btn = ttk.Button(btn_row, text="Test Webhook", style="Dark.TButton",
-            command=_dc_test)
-        dc_test_btn.pack(side="left", fill="x", expand=True)
-
-        btn_row2 = ttk.Frame(dc_frame, style="Dark.TFrame")
-        btn_row2.pack(fill="x", pady=(4, 0))
-        dc_filters_btn = ttk.Button(btn_row2, text="Webhook Filters", style="Dark.TButton",
-               command=_open_webhook_filters)
-        dc_filters_btn.pack(fill="x")
-
-        _dc_dependent_widgets = [dc_url_entry, dc_ping_id_entry, dc_ss_entry]
-        _dc_toggle_fields(_send_connect=False)
-
-        tool_frame = ttk.Frame(tool_tab, style="Dark.TFrame")
-        tool_frame.pack(fill="both", expand=True, padx=20, pady=15)
-        
-        ttk.Label(
-            tool_frame,
-            text="Tools",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 15))
-        
-        def wipe_data():
-            """Wipe data"""
-            if not messagebox.askyesno("Confirm Wipe Data", "Are you sure you want to wipe ALL data?\n\nThis action cannot be undone!"):
-                return
-            
-            encryption_method = self.manager.get_encryption_method()
-            
-            if encryption_method == "password":
-                password_window = tk.Toplevel(settings_window)
-                self.apply_window_icon(password_window)
-                password_window.title("Enter Password")
-                password_window.geometry("350x150")
-                password_window.configure(bg=self.BG_DARK)
-                password_window.resizable(False, False)
-                password_window.transient(settings_window)
-                password_window.grab_set()
-                
-                settings_window.update_idletasks()
-                x = settings_window.winfo_x() + (settings_window.winfo_width() - 350) // 2
-                y = settings_window.winfo_y() + (settings_window.winfo_height() - 150) // 2
-                password_window.geometry(f"350x150+{x}+{y}")
-                
-                main_frame = ttk.Frame(password_window, style="Dark.TFrame")
-                main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-                
-                ttk.Label(main_frame, text="Enter your password:", style="Dark.TLabel").pack(anchor="w", pady=(0, 10))
-                
-                password_entry = ttk.Entry(main_frame, style="Dark.TEntry", show="*")
-                password_entry.pack(fill="x", pady=(0, 15))
-                password_entry.focus_set()
-                
-                def verify_and_wipe():
-                    password = password_entry.get()
-                    if not password:
-                        messagebox.showwarning("Missing Password", "Please enter your password.")
-                        return
-                    
-                    if self.manager.verify_password(password):
-                        password_window.destroy()
-                        if messagebox.askyesno("Final Confirmation", "This will permanently delete ALL data. Continue?"):
-                            settings_window.destroy()
-                            self.manager.wipe_all_data()
-                            messagebox.showinfo("Success", "All data has been wiped!")
-                            settings_window.quit()
-                    else:
-                        messagebox.showerror("Invalid Password", "Password is incorrect.")
-                
-                btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-                btn_frame.pack(fill="x")
-                
-                ttk.Button(btn_frame, text="Verify", style="Dark.TButton", command=verify_and_wipe).pack(side="left", fill="x", expand=True, padx=(0, 5))
-                ttk.Button(btn_frame, text="Cancel", style="Dark.TButton", command=password_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
-            else:
-                if messagebox.askyesno("Final Confirmation", "This will permanently delete ALL data. Continue?"):
-                    settings_window.destroy()
-                    self.manager.wipe_all_data()
-                    messagebox.showinfo("Success", "All data has been wiped!")
-                    settings_window.quit()
-        
-        
-        def switch_encryption_method():
-            """Switch encryption method"""
-            current_method = self.manager.get_encryption_method()
-            
-            if current_method == "password":
-                password_window = tk.Toplevel(settings_window)
-                self.apply_window_icon(password_window)
-                password_window.title("Verify Password")
-                password_window.geometry("350x150")
-                password_window.configure(bg=self.BG_DARK)
-                password_window.resizable(False, False)
-                password_window.transient(settings_window)
-                password_window.grab_set()
-                
-                settings_window.update_idletasks()
-                x = settings_window.winfo_x() + (settings_window.winfo_width() - 350) // 2
-                y = settings_window.winfo_y() + (settings_window.winfo_height() - 150) // 2
-                password_window.geometry(f"350x150+{x}+{y}")
-                
-                pwd_frame = ttk.Frame(password_window, style="Dark.TFrame")
-                pwd_frame.pack(fill="both", expand=True, padx=20, pady=20)
-                
-                ttk.Label(pwd_frame, text="Enter your password to continue:", style="Dark.TLabel").pack(anchor="w", pady=(0, 10))
-                
-                password_entry = ttk.Entry(pwd_frame, style="Dark.TEntry", show="*")
-                password_entry.pack(fill="x", pady=(0, 15))
-                password_entry.focus_set()
-                
-                def verify_and_proceed():
-                    password = password_entry.get()
-                    if not password:
-                        messagebox.showwarning("Missing Password", "Please enter your password.")
-                        return
-                    
-                    if self.manager.verify_password(password):
-                        password_window.destroy()
-                        settings_window.destroy()
-                        self._run_encryption_switch()
-                    else:
-                        messagebox.showerror("Invalid Password", "Password is incorrect.")
-                
-                pwd_btn_frame = ttk.Frame(pwd_frame, style="Dark.TFrame")
-                pwd_btn_frame.pack(fill="x")
-                
-                ttk.Button(pwd_btn_frame, text="Verify", style="Dark.TButton", command=verify_and_proceed).pack(side="left", fill="x", expand=True, padx=(0, 5))
-                ttk.Button(pwd_btn_frame, text="Cancel", style="Dark.TButton", command=password_window.destroy).pack(side="left", fill="x", expand=True, padx=(5, 0))
-            else:
-                settings_window.destroy()
-                self._run_encryption_switch()
-        
-        ttk.Button(
-            tool_frame,
-            text="Switch Encryption Method",
-            style="Dark.TButton",
-            command=switch_encryption_method
-        ).pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(
-            tool_frame,
-            text="Browser Engine",
-            style="Dark.TButton",
-            command=self.open_browser_engine_window
-        ).pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(
-            tool_frame,
-            text="Roblox Settings",
-            style="Dark.TButton",
-            command=self.open_roblox_settings_window
-        ).pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(
-            tool_frame,
-            text="Active Instances",
-            style="Dark.TButton",
-            command=self.open_active_instances_window
-        ).pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(
-            tool_frame,
-            text="Roblox Version",
-            style="Dark.TButton",
-            command=self.open_roblox_version_window
-        ).pack(fill="x", pady=(0, 5))
-        
-        ttk.Button(
-            tool_frame,
-            text="Wipe Data",
-            style="Dark.TButton",
-            command=wipe_data
-        ).pack(side="bottom", fill="x", pady=(10, 0))
-    
-    def start_instances_monitoring(self):
-        """Start background monitoring of active Roblox instances"""
-        if self.instances_monitor_thread and self.instances_monitor_thread.is_alive():
+    def _start_presence_scanner(self) -> None:
+        if self._presence_scanner is not None:
             return
-        
-        self.instances_monitor_stop.clear()
-        self.instances_monitor_thread = threading.Thread(target=self._instances_monitor_worker, daemon=True)
-        self.instances_monitor_thread.start()
-        print("[INFO] Active Instances background monitoring started")
-    
-    def stop_instances_monitoring(self):
-        """Stop background monitoring of active Roblox instances"""
-        if self.instances_monitor_thread:
-            self.instances_monitor_stop.set()
-            self.instances_monitor_thread = None
-            self.instances_data.clear()
-            self.instances_pids.clear()
-            print("[INFO] Active Instances background monitoring stopped")
-    
-    def _instances_monitor_worker(self):
-        """Background thread that continuously monitors Roblox instances"""
-        last_memory_refresh = 0.0
-        poll_interval_seconds = 4
-        failed_retry_delay_seconds = 8
+        self._presence_scanner = self.presence_mod.PresenceScanner(
+            self.manager,
+            on_update=lambda online: self._bridge.presence_update.emit(online),
+            interval_sec=10,
+        )
+        self._presence_scanner.start()
+        print("[INFO] Presence Indicator started.")
 
-        while not self.instances_monitor_stop.is_set():
-            try:
-                new_pids = set()
-                processes = []
-                pid_to_proc = {}
-                
-                for proc in psutil.process_iter(['pid', 'name', 'create_time', 'memory_info']):
-                    try:
-                        if proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            pid = proc.info['pid']
-                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                                new_pids.add(pid)
-                                processes.append(proc)
-                                pid_to_proc[pid] = proc
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                current_time = time.time()
-                for pid in list(self.instances_failed_pids.keys()):
-                    if pid not in new_pids:
-                        del self.instances_failed_pids[pid]
-                
-                if new_pids != self.instances_pids:
-                    print(f"[INFO] Active Instances: PID change detected. Old: {self.instances_pids}, New: {new_pids}")
-                    self.instances_pids = new_pids.copy()
-
-                    old_data_by_pid = {entry['pid']: entry for entry in self.instances_data}
-                    new_data = []
-
-                    for proc in processes:
-                        pid = proc.info['pid']
-                        
-                        try:
-                            memory_mb = proc.info['memory_info'].rss / 1024 / 1024
-                            create_time = proc.info['create_time']
-                        except:
-                            memory_mb = 0
-                            create_time = 0
-
-                        prev = old_data_by_pid.get(pid, {})
-                        new_data.append({
-                            "pid": pid,
-                            "user_id": prev.get("user_id"),
-                            "username": prev.get("username"),
-                            "avatar_url": prev.get("avatar_url"),
-                            "create_time": create_time,
-                            "memory_mb": memory_mb,
-                        })
-
-                    self.instances_data = new_data
-                    self.instances_data_updated = True
-                    self.root.after(0, self.refresh_accounts)
-
-                if current_time - last_memory_refresh >= poll_interval_seconds:
-                    last_memory_refresh = current_time
-                    for entry in self.instances_data:
-                        try:
-                            proc = pid_to_proc.get(entry["pid"]) or psutil.Process(entry["pid"])
-                            entry["memory_mb"] = proc.memory_info().rss / 1024 / 1024
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            pass
-
-                unresolved_entry = None
-                for entry in self.instances_data:
-                    if entry.get("user_id"):
-                        continue
-                    pid = entry.get("pid")
-                    failed_data = self.instances_failed_pids.get(pid)
-                    if failed_data and (current_time - failed_data[0] < failed_retry_delay_seconds):
-                        continue
-                    unresolved_entry = entry
-                    break
-
-                if unresolved_entry:
-                    pid = unresolved_entry["pid"]
-                    used_logs = set()
-                    user_id, _ = self._get_user_id_from_pid(pid, used_logs)
-
-                    if user_id:
-                        username = None
-                        avatar_url = None
-
-                        if user_id in self.instances_cache["user_id_to_username"]:
-                            username = self.instances_cache["user_id_to_username"][user_id]
-                        else:
-                            for account in self.manager.accounts:
-                                stored_uid = self.manager.accounts[account].get("user_id")
-                                if stored_uid == user_id or stored_uid == str(user_id):
-                                    username = account
-                                    self.instances_cache["user_id_to_username"][user_id] = username
-                                    break
-
-                            if not username:
-                                username = RobloxAPI.get_username_from_user_id(user_id)
-                                if username:
-                                    self.instances_cache["user_id_to_username"][user_id] = username
-                                    for account in self.manager.accounts:
-                                        if account == username:
-                                            self.manager.accounts[account]["user_id"] = str(user_id)
-                                            self.manager.save_accounts()
-                                            break
-
-                        if user_id in self.instances_cache["user_id_to_avatar"]:
-                            avatar_url = self.instances_cache["user_id_to_avatar"][user_id]
-                        else:
-                            avatar_url = RobloxAPI.get_user_avatar_url(user_id, "150x150")
-                            if avatar_url:
-                                self.instances_cache["user_id_to_avatar"][user_id] = avatar_url
-
-                        unresolved_entry["user_id"] = user_id
-                        unresolved_entry["username"] = username
-                        unresolved_entry["avatar_url"] = avatar_url
-                        if pid in self.instances_failed_pids:
-                            del self.instances_failed_pids[pid]
-                        self.instances_data_updated = True
-                        self.root.after(0, self.refresh_accounts)
-                    else:
-                        self.instances_failed_pids[pid] = (
-                            current_time,
-                            unresolved_entry.get("create_time", 0),
-                            unresolved_entry.get("memory_mb", 0),
-                        )
-                
-            except Exception as e:
-                print(f"[ERROR] Active Instances monitor error: {e}")
-            
-            self.instances_monitor_stop.wait(poll_interval_seconds)
-    
-    def open_active_instances_window(self):
-        """Open window showing all active Roblox instances with pre-cached data"""
-        instances_window = tk.Toplevel(self.root)
-        self.apply_window_icon(instances_window)
-        instances_window.title("Active Roblox Instances")
-        instances_window.geometry("400x400")
-        instances_window.configure(bg=self.BG_DARK)
-        instances_window.resizable(False, False)
-        
-        if self.settings.get("enable_topmost", False):
-            instances_window.attributes("-topmost", True)
-        
-        instances_window.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (instances_window.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (instances_window.winfo_height() // 2)
-        instances_window.geometry(f"+{x}+{y}")
-        
-        main_frame = ttk.Frame(instances_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
-        
-        header_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        header_frame.pack(fill="x", pady=(0, 10))
-        
-        title_label = ttk.Label(
-            header_frame,
-            text="Active Roblox Instances",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 12, "bold")
-        )
-        title_label.pack(side="left")
-        
-        monitoring_enabled = tk.BooleanVar(value=self.settings.get("active_instances_monitoring", False))
-        
-        monitor_checkbox = ttk.Checkbutton(
-            header_frame,
-            text="Enable Active Instances",
-            variable=monitoring_enabled,
-            style="Dark.TCheckbutton"
-        )
-        monitor_checkbox.pack(side="right")
-        
-        canvas_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        canvas_frame.pack(fill="both", expand=True)
-        
-        canvas = tk.Canvas(canvas_frame, bg=self.BG_DARK, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style="Dark.TFrame")
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        status_label = ttk.Label(
-            main_frame,
-            text="Loading instances...",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        )
-        status_label.pack(pady=(10, 0))
-        
-        window_active = [True]
-        refresh_timer = [None]
-        last_rendered_pids = [set()]
-        instance_widgets = {}
-        
-        def on_window_close():
-            window_active[0] = False
-            if refresh_timer[0]:
-                instances_window.after_cancel(refresh_timer[0])
-            instances_window.destroy()
-        
-        instances_window.protocol("WM_DELETE_WINDOW", on_window_close)
-        
-        def render_instances():
-            """Render the pre-cached instance data to the UI"""
-            if not window_active[0]:
-                return
-            
-            if not monitoring_enabled.get():
-                return
-            
-            data = list(self.instances_data)
-            current_pids_set = {d["pid"] for d in data}
-            
-            data_was_updated = self.instances_data_updated
-            if data_was_updated:
-                self.instances_data_updated = False
-            
-            if current_pids_set != last_rendered_pids[0] or data_was_updated:
-                reason = "PIDs changed" if current_pids_set != last_rendered_pids[0] else "data updated"
-                print(f"[INFO] Active Instances window: {reason}, rebuilding UI")
-                last_rendered_pids[0] = current_pids_set
-                instance_widgets.clear()
-                
-                for widget in scrollable_frame.winfo_children():
-                    widget.destroy()
-                
-                if not data:
-                    status_label.config(text="No active Roblox instances found")
-                    ttk.Label(
-                        scrollable_frame,
-                        text="No active Roblox instances",
-                        style="Dark.TLabel",
-                        font=(self.FONT_FAMILY, 10)
-                    ).pack(pady=20)
-                else:
-                    status_label.config(text=f"Found {len(data)} instance(s) - Last updated: {datetime.now().strftime('%H:%M:%S')}")
-                    
-                    for entry in data:
-                        pid = entry["pid"]
-                        user_id = entry["user_id"]
-                        username = entry["username"]
-                        avatar_url = entry["avatar_url"]
-                        create_time = entry["create_time"]
-                        memory_mb = entry["memory_mb"]
-                        
-                        instance_frame = tk.Frame(
-                            scrollable_frame, bg=self.BG_MID, relief="solid", borderwidth=1
-                        )
-                        instance_frame.pack(fill="x", pady=5, padx=5)
-                        
-                        inner_frame = tk.Frame(instance_frame, bg=self.BG_MID)
-                        inner_frame.pack(fill="x", padx=10, pady=10)
-                        
-                        try:
-                            ct = datetime.fromtimestamp(create_time)
-                            uptime = datetime.now() - ct
-                            uptime_str = f"{int(uptime.total_seconds() // 3600)}h {int((uptime.total_seconds() % 3600) // 60)}m"
-                        except:
-                            uptime_str = "Unknown"
-                        
-                        if username:
-                            avatar_label = tk.Label(inner_frame, bg=self.BG_MID)
-                            avatar_label.pack(side="left", padx=(0, 15))
-                            
-                            if user_id and user_id in self.instances_cache["user_id_to_photo"]:
-                                photo = self.instances_cache["user_id_to_photo"][user_id]
-                                avatar_label.config(image=photo)
-                                avatar_label.image = photo
-                            else:
-                                avatar_label.config(text="...", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
-                                
-                                def download_avatar(uid, url, label, win):
-                                    try:
-                                        if url:
-                                            response = requests.get(url, timeout=5)
-                                            if response.status_code == 200:
-                                                img_data = BytesIO(response.content)
-                                                img = Image.open(img_data)
-                                                img = img.resize((70, 70), Image.Resampling.LANCZOS)
-                                                photo = ImageTk.PhotoImage(img)
-                                                self.instances_cache["user_id_to_photo"][uid] = photo
-                                                def update_label():
-                                                    try:
-                                                        if window_active[0] and label.winfo_exists():
-                                                            label.config(image=photo)
-                                                            label.image = photo
-                                                    except:
-                                                        pass
-                                                win.after(0, update_label)
-                                                return
-                                        def update_fallback():
-                                            try:
-                                                if window_active[0] and label.winfo_exists():
-                                                    label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
-                                            except:
-                                                pass
-                                        win.after(0, update_fallback)
-                                    except Exception as e:
-                                        print(f"[ERROR] Failed to load avatar for user {uid}: {e}")
-                                        def update_error():
-                                            try:
-                                                if window_active[0] and label.winfo_exists():
-                                                    label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
-                                            except:
-                                                pass
-                                        win.after(0, update_error)
-                                
-                                if user_id and avatar_url:
-                                    threading.Thread(target=download_avatar, args=(user_id, avatar_url, avatar_label, instances_window), daemon=True).start()
-                                else:
-                                    avatar_label.config(text="[?]", font=(self.FONT_FAMILY, 24), fg=self.FG_TEXT)
-                            
-                            info_frame = tk.Frame(inner_frame, bg=self.BG_MID)
-                            info_frame.pack(side="left", fill="both", expand=True)
-                            
-                            tk.Label(info_frame, text=username, bg=self.BG_MID, fg=self.FG_TEXT,
-                                     font=(self.FONT_FAMILY, 12, "bold"), anchor="w").pack(anchor="w")
-                            
-                            details1_frame = tk.Frame(info_frame, bg=self.BG_MID)
-                            details1_frame.pack(anchor="w", pady=(2, 0))
-                            tk.Label(details1_frame, text=f"PID: {pid}", bg=self.BG_MID, fg=self.FG_TEXT,
-                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left", padx=(0, 15))
-                            tk.Label(details1_frame, text=f"User ID: {user_id}", bg=self.BG_MID, fg=self.FG_TEXT,
-                                     font=(self.FONT_FAMILY, 9), anchor="w").pack(side="left")
-                            
-                            details2_frame = tk.Frame(info_frame, bg=self.BG_MID)
-                            details2_frame.pack(anchor="w", pady=(2, 0))
-                            uptime_label = tk.Label(details2_frame, text=f"Uptime: {uptime_str}", bg=self.BG_MID, fg="#90EE90",
-                                     font=(self.FONT_FAMILY, 9), anchor="w")
-                            uptime_label.pack(side="left", padx=(0, 15))
-                            memory_label = tk.Label(details2_frame, text=f"Memory: {memory_mb:.0f} MB", bg=self.BG_MID, fg="#87CEEB",
-                                     font=(self.FONT_FAMILY, 9), anchor="w")
-                            memory_label.pack(side="left")
-                            
-                            instance_widgets[pid] = {'uptime_label': uptime_label, 'memory_label': memory_label, 'create_time': create_time}
-                        elif user_id:
-                            tk.Label(inner_frame, text=f"PID: {pid} - Failed to get username (Uptime: {uptime_str})",
-                                     bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10)).pack()
-                        else:
-                            tk.Label(inner_frame, text=f"PID: {pid} - Failed to get user ID (Uptime: {uptime_str}, Memory: {memory_mb:.0f} MB)",
-                                     bg=self.BG_MID, fg=self.FG_TEXT, font=(self.FONT_FAMILY, 10)).pack()
-            else:
-                if data:
-                    status_label.config(text=f"Found {len(data)} instance(s) - Last updated: {datetime.now().strftime('%H:%M:%S')}")
-                    
-                    for entry in data:
-                        pid = entry["pid"]
-                        if pid in instance_widgets:
-                            widgets = instance_widgets[pid]
-                            
-                            try:
-                                create_time = widgets['create_time']
-                                ct = datetime.fromtimestamp(create_time)
-                                uptime = datetime.now() - ct
-                                uptime_str = f"{int(uptime.total_seconds() // 3600)}h {int((uptime.total_seconds() % 3600) // 60)}m"
-                                if widgets['uptime_label'].winfo_exists():
-                                    widgets['uptime_label'].config(text=f"Uptime: {uptime_str}")
-                            except:
-                                pass
-                            
-                            try:
-                                memory_mb = entry.get("memory_mb", 0)
-                                if widgets['memory_label'].winfo_exists():
-                                    widgets['memory_label'].config(text=f"Memory: {memory_mb:.0f} MB")
-                            except:
-                                pass
-            
-            if window_active[0] and monitoring_enabled.get():
-                refresh_timer[0] = instances_window.after(2000, render_instances)
-        
-        def toggle_monitoring():
-            enabled = monitoring_enabled.get()
-            self.settings["active_instances_monitoring"] = enabled
-            self.save_settings()
-            print(f"[INFO] Active Instances {'enabled' if enabled else 'disabled'}")
-            if enabled:
-                last_rendered_pids[0] = set()
-                instance_widgets.clear()
-                for widget in scrollable_frame.winfo_children():
-                    widget.destroy()
-                
-                self.start_instances_monitoring()
-                refresh_btn.config(state="normal")
-                status_label.config(text="Starting monitoring...")
-                render_instances()
-                self.refresh_accounts()
-            else:
-                self.stop_instances_monitoring()
-                refresh_btn.config(state="disabled")
-                if refresh_timer[0]:
-                    instances_window.after_cancel(refresh_timer[0])
-                    refresh_timer[0] = None
-                for widget in scrollable_frame.winfo_children():
-                    widget.destroy()
-                status_label.config(text="Active Instances disabled")
-                ttk.Label(
-                    scrollable_frame,
-                    text="Enable the checkbox to start monitoring",
-                    style="Dark.TLabel",
-                    font=(self.FONT_FAMILY, 10)
-                ).pack(pady=20)
-                self.refresh_accounts()
-        
-        monitor_checkbox.config(command=toggle_monitoring)
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x", pady=(10, 0))
-        
-        refresh_btn = ttk.Button(
-            button_frame,
-            text="Refresh Now",
-            style="Dark.TButton",
-            command=render_instances,
-            state="normal" if monitoring_enabled.get() else "disabled"
-        )
-        refresh_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=on_window_close
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-        if monitoring_enabled.get():
-            render_instances()
-        else:
-            status_label.config(text="Active Instances disabled")
-            ttk.Label(
-                scrollable_frame,
-                text="Enable the checkbox to start monitoring",
-                style="Dark.TLabel",
-                font=(self.FONT_FAMILY, 10)
-            ).pack(pady=20)
-    
-    def open_browser_engine_window(self):
-        """Open Browser Engine selection window"""
-        browser_window = tk.Toplevel(self.root)
-        self.apply_window_icon(browser_window)
-        browser_window.title("Browser Engine Settings")
-        browser_window.geometry("420x330")
-        browser_window.configure(bg=self.BG_DARK)
-        browser_window.resizable(False, False)
-        browser_window.transient(self.root)
-        
-        if self.settings.get("enable_topmost", False):
-            browser_window.attributes("-topmost", True)
-        
-        browser_window.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (browser_window.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (browser_window.winfo_height() // 2)
-        browser_window.geometry(f"+{x}+{y}")
-        
-        current_browser = self.settings.get("browser_type", "chrome")
-        browser_var = tk.StringVar(value=current_browser)
-        chrome_installed = self.is_chrome_installed()
-        chromium_path = os.path.join(self.data_folder, "Chromium", "chrome-win64", "chrome.exe")
-        chromium_installed = os.path.exists(chromium_path)
-        
-        container = ttk.Frame(browser_window, style="Dark.TFrame")
-        container.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        header_frame = ttk.Frame(container, style="Dark.TFrame")
-        header_frame.pack(fill="x", pady=(0, 15))
-        
-        ttk.Label(
-            header_frame,
-            text="Select Browser Engine",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w")
-        
-        ttk.Label(
-            header_frame,
-            text="Choose which browser to use for Add Account",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(2, 0))
-        
-        separator = ttk.Frame(container, style="Dark.TFrame", height=1)
-        separator.pack(fill="x", pady=(0, 15))
-        separator.configure(relief="solid", borderwidth=1)
-        
-        options_frame = ttk.Frame(container, style="Dark.TFrame")
-        options_frame.pack(fill="both", expand=True)
-        
-        radio_style = ttk.Style()
-        radio_style.configure(
-            "Browser.TRadiobutton",
-            background=self.BG_DARK,
-            foreground=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 10)
-        )
-        radio_style.map(
-            "Browser.TRadiobutton",
-            background=[("active", self.BG_DARK)],
-            foreground=[("active", self.FG_TEXT)]
-        )
-        
-        chrome_frame = ttk.Frame(options_frame, style="Dark.TFrame")
-        chrome_frame.pack(fill="x", pady=(0, 8))
-        
-        chrome_radio = ttk.Radiobutton(
-            chrome_frame,
-            text="Google Chrome",
-            variable=browser_var,
-            value="chrome",
-            style="Browser.TRadiobutton"
-        )
-        chrome_radio.pack(side="left")
-        
-        chrome_status = "✓ Installed" if chrome_installed else "Not Installed"
-        chrome_color = "#00FF00" if chrome_installed else "#FF6666"
-        tk.Label(
-            chrome_frame,
-            text=f"  [{chrome_status}]",
-            bg=self.BG_DARK,
-            fg=chrome_color,
-            font=(self.FONT_FAMILY, 9)
-        ).pack(side="left")
-        
-        chromium_frame = ttk.Frame(options_frame, style="Dark.TFrame")
-        chromium_frame.pack(fill="x", pady=(0, 15))
-        
-        chromium_radio = ttk.Radiobutton(
-            chromium_frame,
-            text="Chromium",
-            variable=browser_var,
-            value="chromium",
-            style="Browser.TRadiobutton"
-        )
-        chromium_radio.pack(side="left")
-        
-        chromium_status_text = "✓ Installed" if chromium_installed else "Not Installed"
-        chromium_color = "#00FF00" if chromium_installed else "#FF6666"
-        chromium_status_label = tk.Label(
-            chromium_frame,
-            text=f"  [{chromium_status_text}]",
-            bg=self.BG_DARK,
-            fg=chromium_color,
-            font=(self.FONT_FAMILY, 9)
-        )
-        chromium_status_label.pack(side="left")
-        
-        progress_outer = tk.Frame(options_frame, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
-        
-        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
-        progress_inner.pack(fill="x", padx=1, pady=1)
-        progress_inner.pack_propagate(False)
-        
-        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
-        progress_fill.place(x=0, y=0, relheight=1)
-        
-        progress_label = tk.Label(
-            progress_inner,
-            text="0%",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 9, "bold")
-        )
-        progress_label.place(relx=0.5, rely=0.5, anchor="center")
-        
-        status_label = ttk.Label(
-            options_frame,
-            text="",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9)
-        )
-        
-        def update_progress(percent):
-            """Update the custom progress bar"""
-            progress_inner.update_idletasks()
-            total_width = progress_inner.winfo_width()
-            fill_width = int((percent / 100) * total_width)
-            progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
-            
-            label_x = total_width // 2
-            if fill_width >= label_x:
-                progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
-            else:
-                progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
-            
-            progress_label.config(text=f"{int(percent)}%")
-            browser_window.update()
-        
-        download_btn = None
-        
-        def download_chromium():
-            """Download portable Chromium"""
-            nonlocal chromium_installed
-            
-            download_btn.config(state="disabled", text="Downloading...")
-            progress_outer.pack(fill="x", pady=(0, 10))
-            status_label.pack(anchor="w", pady=(0, 10))
-            status_label.config(text="Downloading Chromium...")
-            browser_window.update()
-            
-            def do_download():
-                try:
-                    chromium_dir = os.path.join(self.data_folder, "Chromium")
-                    os.makedirs(chromium_dir, exist_ok=True)
-                    
-                    browser_window.after(0, lambda: status_label.config(text="Fetching latest version..."))
-                    last_change_url = "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE"
-                    last_change_response = requests.get(last_change_url, timeout=30)
-                    if last_change_response.status_code != 200:
-                        raise Exception("Failed to fetch latest Chromium version")
-                    build_number = last_change_response.text.strip()
-                    
-                    download_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build_number}/chrome-win.zip"
-                    browser_window.after(0, lambda: status_label.config(text=f"Downloading build {build_number}..."))
-                    zip_path = os.path.join(chromium_dir, "chromium.zip")
-                    
-                    response = requests.get(download_url, stream=True, timeout=60)
-                    total_size = int(response.headers.get('content-length', 0))
-                    downloaded = 0
-                    last_progress = 0
-                    
-                    with open(zip_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=65536):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = int((downloaded / total_size) * 100)
-                                    if progress >= last_progress + 1:
-                                        last_progress = progress
-                                        browser_window.after(10, lambda p=progress: update_progress(p))
-                    
-                    browser_window.after(0, lambda: update_progress(100))
-                    browser_window.after(0, lambda: status_label.config(text="Extracting Chromium..."))
-                    browser_window.after(50, lambda: update_progress(0))
-                    
-                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                        file_list = zip_ref.namelist()
-                        total_files = len(file_list)
-                        for i, file in enumerate(file_list):
-                            zip_ref.extract(file, chromium_dir)
-                            if i % 50 == 0:
-                                progress = int((i / total_files) * 100)
-                                browser_window.after(0, lambda p=progress: update_progress(p))
-                    
-                    browser_window.after(0, lambda: update_progress(100))
-                    
-                    extracted_folder = os.path.join(chromium_dir, "chrome-win")
-                    target_folder = os.path.join(chromium_dir, "chrome-win64")
-                    if os.path.exists(extracted_folder) and not os.path.exists(target_folder):
-                        os.rename(extracted_folder, target_folder)
-                    
-                    os.remove(zip_path)
-                    
-                    browser_window.after(0, lambda: status_label.config(text="Downloading ChromeDriver..."))
-                    browser_window.after(50, lambda: update_progress(0))
-                    
-                    chromedriver_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build_number}/chromedriver_win32.zip"
-                    chromedriver_zip_path = os.path.join(chromium_dir, "chromedriver.zip")
-                    
-                    chromedriver_response = requests.get(chromedriver_url, stream=True, timeout=60)
-                    cd_total_size = int(chromedriver_response.headers.get('content-length', 0))
-                    cd_downloaded = 0
-                    cd_last_progress = 0
-                    
-                    with open(chromedriver_zip_path, 'wb') as f:
-                        for chunk in chromedriver_response.iter_content(chunk_size=65536):
-                            if chunk:
-                                f.write(chunk)
-                                cd_downloaded += len(chunk)
-                                if cd_total_size > 0:
-                                    progress = int((cd_downloaded / cd_total_size) * 100)
-                                    if progress >= cd_last_progress + 1:
-                                        cd_last_progress = progress
-                                        browser_window.after(10, lambda p=progress: update_progress(p))
-                    
-                    browser_window.after(0, lambda: update_progress(100))
-                    browser_window.after(0, lambda: status_label.config(text="Extracting ChromeDriver..."))
-                    browser_window.after(50, lambda: update_progress(0))
-                    
-                    with zipfile.ZipFile(chromedriver_zip_path, 'r') as zip_ref:
-                        zip_ref.extractall(chromium_dir)
-                    
-                    browser_window.after(0, lambda: update_progress(100))
-                    
-                    chromedriver_extracted = os.path.join(chromium_dir, "chromedriver-win32", "chromedriver.exe")
-                    chromedriver_target = os.path.join(target_folder, "chromedriver.exe")
-                    if os.path.exists(chromedriver_extracted):
-                        shutil.copy2(chromedriver_extracted, chromedriver_target)
-                        shutil.rmtree(os.path.join(chromium_dir, "chromedriver-win32"))
-                    
-                    os.remove(chromedriver_zip_path)
-                    
-                    def update_ui():
-                        nonlocal chromium_installed
-                        chromium_installed = os.path.exists(os.path.join(chromium_dir, "chrome-win64", "chrome.exe"))
-                        if chromium_installed:
-                            chromium_status_label.config(text="  [✓ Installed]", fg="#00FF00")
-                            download_btn.config(state="disabled", text="✓ Downloaded")
-                            status_label.config(text="Chromium downloaded successfully!")
-                        else:
-                            download_btn.config(state="normal", text="Download Chromium")
-                            status_label.config(text="Failed to extract Chromium.")
-                        progress_outer.pack_forget()
-                    
-                    browser_window.after(0, update_ui)
-                    
-                except Exception as download_error:
-                    error_msg = str(download_error)
-                    def show_error():
-                        download_btn.config(state="normal", text="Download Chromium")
-                        progress_outer.pack_forget()
-                        status_label.config(text=f"Download failed: {error_msg[:50]}...")
-                    browser_window.after(0, show_error)
-            
-            thread = threading.Thread(target=do_download, daemon=True)
-            thread.start()
-        
-        if not chromium_installed:
-            download_btn = ttk.Button(
-                options_frame,
-                text="Download Chromium",
-                style="Dark.TButton",
-                command=download_chromium
-            )
-            download_btn.pack(fill="x", pady=(0, 10))
-        else:
-            download_btn = ttk.Button(
-                options_frame,
-                text="✓ Downloaded",
-                style="Dark.TButton",
-                state="disabled"
-            )
-            download_btn.pack(fill="x", pady=(0, 10))
-        
-        def on_browser_change(*args):
-            nonlocal chromium_installed
-            selected = browser_var.get()
-            if selected == "chromium" and not chromium_installed:
-                messagebox.showwarning(
-                    "Chromium Not Installed",
-                    "Please download Chromium first."
-                )
-                browser_var.set("chrome")
-                return
-            if selected == "chrome" and not chrome_installed:
-                messagebox.showwarning(
-                    "Chrome Not Installed",
-                    "Google Chrome is not installed.\nPlease install Chrome or use Chromium."
-                )
-                if chromium_installed:
-                    browser_var.set("chromium")
-                return
-            self.settings["browser_type"] = selected
-            self.save_settings()
-        
-        browser_var.trace_add("write", on_browser_change)
-        
-        ttk.Button(
-            container,
-            text="Close",
-            style="Dark.TButton",
-            command=browser_window.destroy
-        ).pack(fill="x", pady=(10, 0))
-    
-    def open_roblox_version_window(self):
-        """Open Roblox Version downloader window"""
-        version_window = tk.Toplevel(self.root)
-        self.apply_window_icon(version_window)
-        version_window.title("Roblox Version Downloader")
-        version_window.geometry("500x550")
-        version_window.configure(bg=self.BG_DARK)
-        version_window.resizable(False, False)
-        version_window.transient(self.root)
-        
-        if self.settings.get("enable_topmost", False):
-            version_window.attributes("-topmost", True)
-        
-        version_window.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (version_window.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (version_window.winfo_height() // 2)
-        version_window.geometry(f"+{x}+{y}")
-        
-        container = ttk.Frame(version_window, style="Dark.TFrame")
-        container.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        header_frame = ttk.Frame(container, style="Dark.TFrame")
-        header_frame.pack(fill="x", pady=(0, 15))
-        
-        ttk.Label(
-            header_frame,
-            text="Roblox Version Downloader",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w")
-        
-        ttk.Label(
-            header_frame,
-            text="Download and install specific Roblox versions",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 8)
-        ).pack(anchor="w", pady=(2, 0))
-        
-        separator = ttk.Frame(container, style="Dark.TFrame", height=1)
-        separator.pack(fill="x", pady=(0, 15))
-        separator.configure(relief="solid", borderwidth=1)
-        
-        input_frame = ttk.Frame(container, style="Dark.TFrame")
-        input_frame.pack(fill="x", pady=(0, 15))
-        
-        ttk.Label(
-            input_frame,
-            text="Version Hash:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9, "bold")
-        ).pack(anchor="w", pady=(0, 5))
-        
-        version_entry_frame = ttk.Frame(input_frame, style="Dark.TFrame")
-        version_entry_frame.pack(fill="x", pady=(0, 10))
-        
-        version_var = tk.StringVar()
-        version_entry = ttk.Entry(version_entry_frame, textvariable=version_var, style="Dark.TEntry")
-        version_entry.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=4)
-        
-        ttk.Label(
-            input_frame,
-            text="Install Path:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9, "bold")
-        ).pack(anchor="w", pady=(0, 5))
-        
-        path_frame = ttk.Frame(input_frame, style="Dark.TFrame")
-        path_frame.pack(fill="x", pady=(0, 10))
-        
-        default_path = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "Versions")
-        path_var = tk.StringVar(value=default_path)
-        path_entry = ttk.Entry(path_frame, textvariable=path_var, style="Dark.TEntry")
-        path_entry.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=4)
-        
-        def browse_path():
-            """Browse for install directory"""
-            versions_path = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "Versions")
-            directory = filedialog.askdirectory(title="Select Install Directory", initialdir=versions_path if os.path.exists(versions_path) else None)
-            if directory:
-                path_var.set(directory)
-        
-        ttk.Button(
-            path_frame,
-            text="Browse",
-            style="Dark.TButton",
-            command=browse_path
-        ).pack(side="left")
-        
-        progress_outer = tk.Frame(container, bg=self.BG_LIGHT, relief="solid", borderwidth=1)
-        
-        progress_inner = tk.Frame(progress_outer, bg=self.BG_MID, height=22)
-        progress_inner.pack(fill="x", padx=1, pady=1)
-        progress_inner.pack_propagate(False)
-        
-        progress_fill = tk.Frame(progress_inner, bg=self.BG_LIGHT, width=0)
-        progress_fill.place(x=0, y=0, relheight=1)
-        
-        progress_label = tk.Label(
-            progress_inner,
-            text="0%",
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 9, "bold")
-        )
-        progress_label.place(relx=0.5, rely=0.5, anchor="center")
-        
-        log_frame = ttk.Frame(container, style="Dark.TFrame")
-        log_frame.pack(fill="both", expand=True, pady=(10, 0))
-        
-        ttk.Label(
-            log_frame,
-            text="Download Log:",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 9, "bold")
-        ).pack(anchor="w", pady=(0, 5))
-        
-        log_text = tk.Text(
-            log_frame,
-            height=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=(self.FONT_FAMILY, 9),
-            relief="solid",
-            borderwidth=1,
-            wrap="word",
-            state="disabled"
-        )
-        log_text.pack(fill="both", expand=True)
-        
-        scrollbar = ttk.Scrollbar(log_text, command=log_text.yview, style="Dark.Vertical.TScrollbar")
-        scrollbar.pack(side="right", fill="y")
-        log_text.config(yscrollcommand=scrollbar.set)
-        
-        def update_progress(percent):
-            """Update the custom progress bar"""
-            try:
-                progress_inner.update_idletasks()
-                total_width = progress_inner.winfo_width()
-                fill_width = int((percent / 100) * total_width)
-                progress_fill.place(x=0, y=0, relheight=1, width=fill_width)
-                
-                label_x = total_width // 2
-                if fill_width >= label_x:
-                    progress_label.config(bg=self.BG_LIGHT, fg=self.BG_DARK)
-                else:
-                    progress_label.config(bg=self.BG_MID, fg=self.FG_TEXT)
-                
-                progress_label.config(text=f"{int(percent)}%")
-                version_window.update()
-            except:
-                pass
-        
-        def log_message(msg):
-            """Log message to text widget"""
-            try:
-                log_text.config(state="normal")
-                log_text.insert(tk.END, msg + "\n")
-                log_text.see(tk.END)
-                log_text.config(state="disabled")
-            except:
-                pass
-        
-        def get_current_version():
-            """Fetch current LIVE version"""
-            fetch_btn.config(state="disabled", text="Fetching...")
-            version_window.update()
-            
-            def do_fetch():
-                try:
-                    version = self.manager.get_roblox_version("LIVE")
-                    if version:
-                        def update_ui():
-                            version_var.set(version)
-                            log_message(f"✓ Fetched current version: {version}")
-                            fetch_btn.config(state="normal", text="Get Latest")
-                        version_window.after(0, update_ui)
-                    else:
-                        def show_error():
-                            log_message("✗ Failed to fetch current version")
-                            fetch_btn.config(state="normal", text="Get Latest")
-                        version_window.after(0, show_error)
-                except Exception as e:
-                    def show_error():
-                        log_message(f"✗ Error: {str(e)[:50]}")
-                        fetch_btn.config(state="normal", text="Get Latest")
-                    version_window.after(0, show_error)
-            
-            thread = threading.Thread(target=do_fetch, daemon=True)
-            thread.start()
-        
-        fetch_btn = ttk.Button(
-            version_entry_frame,
-            text="Get Latest",
-            style="Dark.TButton",
-            command=get_current_version
-        )
-        fetch_btn.pack(side="left")
-        
-        download_btn = None
-        
-        def download_version():
-            """Download and install Roblox version"""
-            version = version_var.get().strip()
-            if not version:
-                messagebox.showwarning("Missing Version", "Please enter a version hash or click 'Get Latest'")
-                return
-            
-            base_path = path_var.get().strip()
-            if not base_path:
-                messagebox.showwarning("Missing Path", "Please select an install directory")
-                return
-            
-            if not version.startswith("version-"):
-                version_hash = f"version-{version}"
-            else:
-                version_hash = version
-            
-            install_path = os.path.join(base_path, version_hash)
-            
-            download_btn.config(state="disabled", text="Downloading...")
-            fetch_btn.config(state="disabled")
-            log_text.config(state="normal")
-            log_text.delete("1.0", tk.END)
-            log_text.config(state="disabled")
-            progress_outer.pack(fill="x", pady=(10, 0))
-            progress_outer.pack_configure(before=log_frame)
-            update_progress(0)
-            version_window.update()
-            
-            def do_download():
-                try:
-                    package_count = [0]
-                    total_packages = [1]
-                    last_logged_percent = [-1]
-                    
-                    def progress_callback(msg):
-                        if msg.startswith("DOWNLOAD_PROGRESS:"):
-                            try:
-                                parts = msg.split(":")
-                                package_name = parts[1]
-                                percent = float(parts[2])
-                                size_mb = float(parts[3])
-                                total_mb = float(parts[4])
-                                display_msg = f"Downloading {package_name}: {percent:.0f}% ({size_mb:.1f} MB / {total_mb:.1f} MB)"
-                                
-                                if int(percent) % 10 == 0 and int(percent) != last_logged_percent[0]:
-                                    last_logged_percent[0] = int(percent)
-                                    version_window.after(0, lambda m=display_msg: log_message(m))
-                                
-                                version_window.after(0, lambda p=percent: update_progress(p))
-                            except:
-                                pass
-                        elif msg.startswith("EXTRACT_START:"):
-                            try:
-                                package_name = msg.split(":")[1]
-                                display_msg = f"Extracting {package_name}..."
-                                version_window.after(0, lambda m=display_msg: log_message(m))
-                                version_window.after(0, lambda: update_progress(0))
-                                last_logged_percent[0] = -1
-                            except:
-                                pass
-                        elif msg.startswith("EXTRACT_PROGRESS:"):
-                            try:
-                                parts = msg.split(":")
-                                package_name = parts[1]
-                                percent = float(parts[2])
-                                
-                                if int(percent) % 25 == 0 and int(percent) != last_logged_percent[0]:
-                                    last_logged_percent[0] = int(percent)
-                                    display_msg = f"Extracting {package_name}: {percent:.0f}%"
-                                    version_window.after(0, lambda m=display_msg: log_message(m))
-                                
-                                version_window.after(0, lambda p=percent: update_progress(p))
-                            except:
-                                pass
-                        elif msg.startswith("EXTRACT_COMPLETE:"):
-                            try:
-                                package_name = msg.split(":")[1]
-                                display_msg = f"✓ Completed {package_name}"
-                                version_window.after(0, lambda m=display_msg: log_message(m))
-                                version_window.after(0, lambda: update_progress(100))
-                                last_logged_percent[0] = -1
-                            except:
-                                pass
-                        else:
-                            version_window.after(0, lambda m=msg: log_message(m))
-                    
-                    success, result = self.manager.download_roblox_version(
-                        version,
-                        install_path,
-                        "LIVE",
-                        progress_callback
-                    )
-                    
-                    def update_ui():
-                        if success:
-                            log_message(f"✓ Installation complete!")
-                            download_btn.config(state="normal", text="Download")
-                        else:
-                            log_message(f"✗ {result}")
-                            download_btn.config(state="normal", text="Download")
-                            messagebox.showerror("Download Failed", result)
-                        
-                        fetch_btn.config(state="normal")
-                        progress_outer.pack_forget()
-                    
-                    version_window.after(0, update_ui)
-                    
-                except Exception as e:
-                    def show_error():
-                        error_msg = str(e)
-                        log_message(f"✗ Error: {error_msg}")
-                        download_btn.config(state="normal", text="Download")
-                        fetch_btn.config(state="normal")
-                        progress_outer.pack_forget()
-                        messagebox.showerror("Error", f"Download failed:\n{error_msg}")
-                    version_window.after(0, show_error)
-            
-            thread = threading.Thread(target=do_download, daemon=True)
-            thread.start()
-        
-        button_frame = ttk.Frame(container, style="Dark.TFrame")
-        button_frame.pack(fill="x", pady=(15, 0))
-        
-        download_btn = ttk.Button(
-            button_frame,
-            text="Download",
-            style="Dark.TButton",
-            command=download_version
-        )
-        download_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=version_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-    def write(self, text):
-        """Redirect stdout/stderr writes to console"""
-        if text.strip():
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            self.log_to_console(f"[{timestamp}] {text}\n")
-        if self.original_stdout:
-            self.original_stdout.write(text)
-    
-    def flush(self):
-        """Flush stdout"""
-        if self.original_stdout:
-            self.original_stdout.flush()
-    
-    _MAX_CONSOLE_LINES = 2000
-
-    def log_to_console(self, message):
-        """Log message to console output buffer"""
-        self.console_output.append(message)
-        if len(self.console_output) > self._MAX_CONSOLE_LINES:
-            del self.console_output[: len(self.console_output) - self._MAX_CONSOLE_LINES]
-
-        self._maybe_log_message(message)
-        
-        if self.console_text_widget:
-            try:
-                self.console_text_widget.config(state="normal")
-                insert_start = self.console_text_widget.index(f"{tk.END}-1c linestart")
-                self.console_text_widget.insert(tk.END, message)
-                line_count = int(self.console_text_widget.index(tk.END).split(".")[0]) - 1
-                if line_count > self._MAX_CONSOLE_LINES:
-                    excess = line_count - self._MAX_CONSOLE_LINES
-                    self.console_text_widget.delete("1.0", f"{excess + 1}.0")
-                    insert_start = "1.0"
-                self._apply_console_tags(search_from=insert_start)
-                self.console_text_widget.see(tk.END)
-                self.console_text_widget.config(state="disabled")
-            except:
-                pass
-    
-    def _apply_console_tags(self, search_from: str = "1.0"):
-        """Apply color tags to console keywords."""
-        if not self.console_text_widget:
+    def _stop_presence_scanner(self) -> None:
+        if self._presence_scanner is None:
             return
-        
-        keywords = {
-            "[SUCCESS]": "success",
-            "[ERROR]": "error",
-            "[INFO]": "info",
-            "[WARNING]": "warning"
-        }
-        
-        for keyword, tag in keywords.items():
-            search_start = search_from
-            while True:
-                pos = self.console_text_widget.search(keyword, search_start, tk.END, nocase=False)
-                if not pos:
-                    break
-                end_pos = f"{pos}+{len(keyword)}c"
-                self.console_text_widget.tag_add(tag, pos, end_pos)
-                search_start = end_pos
-    
-    def open_console_window(self):
-        """Open the Console Output window"""
-        if self.console_window and tk.Toplevel.winfo_exists(self.console_window):
-            self.console_window.focus()
+        self._presence_scanner.stop()
+        self._presence_scanner = None
+        self._online_usernames = set()
+        self._update_presence_dots()
+        print("[INFO] Presence Indicator stopped.")
+
+    def _on_presence_update(self, online: object) -> None:
+        self._online_usernames = set(online) if online else set()
+        self._update_presence_dots()
+
+    def _update_presence_dots(self) -> None:
+        for username, dot in self._presence_dots.items():
+            dot.setVisible(username in self._online_usernames)
+
+    # RAM boost background worker
+    def _start_ram_boost(self):
+        if getattr(self, "_ram_boost_running", False):
             return
-        
-        self.console_window = tk.Toplevel(self.root)
-        self.apply_window_icon(self.console_window)
-        self.console_window.title("Console Output")
-        self.console_window.configure(bg=self.BG_DARK)
-        self.console_window.minsize(500, 450)
-        
-        if self.settings.get("enable_topmost", False):
-            self.console_window.attributes("-topmost", True)
-        
-        self.root.update_idletasks()
-        
-        saved_console = self.settings.get('console_window_geometry')
-        if saved_console and saved_console.get('x') is not None and saved_console.get('y') is not None:
-            width = saved_console.get('width', 700)
-            height = saved_console.get('height', 500)
-            x = saved_console['x']
-            y = saved_console['y']
-            self.console_window.geometry(f"{width}x{height}+{x}+{y}")
-        else:
-            main_x = self.root.winfo_x()
-            main_y = self.root.winfo_y()
-            main_width = self.root.winfo_width()
-            main_height = self.root.winfo_height()
-            x = main_x + (main_width - 700) // 2
-            y = main_y + (main_height - 500) // 2
-            self.console_window.geometry(f"700x500+{x}+{y}")
-        
-        main_frame = ttk.Frame(self.console_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        title_label = ttk.Label(
-            main_frame,
-            text="Console Output",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        )
-        title_label.pack(anchor="w", pady=(0, 10))
-        
-        text_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        text_frame.pack(fill="both", expand=True)
-        
-        self.console_text_widget = tk.Text(
-            text_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            font=("Consolas", 9),
-            wrap="word",
-            state="disabled"
-        )
-        self.console_text_widget.pack(side="left", fill="both", expand=True)
-        
-        self.console_text_widget.tag_configure("success", foreground="#00FF00")
-        self.console_text_widget.tag_configure("error", foreground="#FF0000")
-        self.console_text_widget.tag_configure("info", foreground="#0078D7")
-        self.console_text_widget.tag_configure("warning", foreground="#FFD700")
-        
-        scrollbar = ttk.Scrollbar(text_frame, command=self.console_text_widget.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.console_text_widget.config(yscrollcommand=scrollbar.set)
-        
-        self.console_text_widget.config(state="normal")
-        for message in self.console_output:
-            self.console_text_widget.insert(tk.END, message)
-        
-        self._apply_console_tags()
-        self.console_text_widget.config(state="disabled")
-        
-        self.console_text_widget.see(tk.END)
-        
-        button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        button_frame.pack(fill="x", pady=(10, 0))
-        
-        def clear_console():
-            self.console_output.clear()
-            self.console_text_widget.config(state="normal") 
-            self.console_text_widget.delete(1.0, tk.END)
-            self.console_text_widget.config(state="disabled") 
-        
-        def copy_all():
-            text = self.console_text_widget.get(1.0, tk.END)
-            try:
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
-                win32clipboard.CloseClipboard()
-            except Exception:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(text)
-            messagebox.showinfo("Copied", "Console output copied to clipboard!")
-
-        ttk.Button(
-            button_frame,
-            text="Clear",
-            style="Dark.TButton",
-            command=clear_console
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        ttk.Button(
-            button_frame,
-            text="Copy All",
-            style="Dark.TButton",
-            command=copy_all
-        ).pack(side="left", fill="x", expand=True, padx=5)
-        
-        ttk.Button(
-            button_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=self.console_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-        def on_console_close():
-            """Save window geometry (position and size) before closing"""
-            self.settings['console_window_geometry'] = {
-                'x': self.console_window.winfo_x(),
-                'y': self.console_window.winfo_y(),
-                'width': self.console_window.winfo_width(),
-                'height': self.console_window.winfo_height()
-            }
-            self.save_settings()
-            self.console_text_widget = None
-            self.console_window.destroy()
-            self.console_window = None
-        
-        self.console_window.protocol("WM_DELETE_WINDOW", on_console_close)
-    
-    def open_favorites_window(self):
-        """Open the favorites management window"""
-        favorites_window = tk.Toplevel(self.root)
-        self.apply_window_icon(favorites_window)
-        favorites_window.title("Favorite Games")
-        favorites_window.configure(bg=self.BG_DARK)
-        favorites_window.resizable(False, False)
-        
-        self.root.update_idletasks()
-        
-        saved_pos = self.settings.get('favorites_window_position')
-        if saved_pos and saved_pos.get('x') is not None and saved_pos.get('y') is not None:
-            x = saved_pos['x']
-            y = saved_pos['y']
-        else:
-            x = self.root.winfo_x() + 50
-            y = self.root.winfo_y() + 50
-        favorites_window.geometry(f"400x350+{x}+{y}")
-        
-        if self.settings.get("enable_topmost", False):
-            favorites_window.attributes("-topmost", True)
-        
-        favorites_window.transient(self.root)
-        favorites_window.focus_force()
-        
-        main_frame = ttk.Frame(favorites_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
-        
-        ttk.Label(
-            main_frame,
-            text="Favorite Games",
-            style="Dark.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-        
-        list_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        list_frame.pack(fill="both", expand=True, pady=(0, 10))
-        
-        list_frame.grid_rowconfigure(0, weight=1)
-        list_frame.grid_columnconfigure(0, weight=1)
-        
-        favorites_list = tk.Listbox(
-            list_frame,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            highlightthickness=0,
-            border=0,
-            font=("Segoe UI", 9)
-        )
-        favorites_list.grid(row=0, column=0, sticky="nsew")
-        
-        v_scrollbar = ttk.Scrollbar(list_frame, command=favorites_list.yview, orient="vertical")
-        v_scrollbar.grid(row=0, column=1, sticky="ns")
-        favorites_list.config(yscrollcommand=v_scrollbar.set)
-        
-        h_scrollbar = ttk.Scrollbar(list_frame, command=favorites_list.xview, orient="horizontal")
-        h_scrollbar.grid(row=1, column=0, sticky="ew")
-        favorites_list.config(xscrollcommand=h_scrollbar.set)
-        
-        def refresh_favorites():
-            favorites_list.delete(0, tk.END)
-            for fav in self.settings.get("favorite_games", []):
-                private_server = fav.get("private_server", "")
-                note = fav.get("note", "")
-                prefix = "[P] " if private_server else ""
-                display = f"{prefix}{fav['name']}"
-                if note:
-                    display += f" • {note}"
-                favorites_list.insert(tk.END, display)
-        
-        refresh_favorites()
-        
-        def on_favorite_click(event):
-            """Load selected favorite into main UI when clicked"""
-            selection = favorites_list.curselection()
-            if not selection:
-                return
-            
-            index = selection[0]
-            fav = self.settings["favorite_games"][index]
-            
-            self.place_entry.delete(0, tk.END)
-            self.place_entry.insert(0, fav["place_id"])
-            self.settings["last_place_id"] = fav["place_id"]
-            
-            private_server = fav.get("private_server", "")
-            self.private_server_entry.delete(0, tk.END)
-            self.private_server_entry.insert(0, private_server)
-            self.settings["last_private_server"] = private_server
-            
-            self.save_settings()
-            self.update_game_name()
-        
-        favorites_list.bind("<<ListboxSelect>>", on_favorite_click)
-        
-        btn_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        btn_frame.pack(fill="x")
-        
-        def add_favorite():
-            """Open dialog to add a new favorite"""
-            add_window = tk.Toplevel(favorites_window)
-            self.apply_window_icon(add_window)
-            add_window.title("Add Favorite")
-            add_window.configure(bg=self.BG_DARK)
-            add_window.resizable(False, False)
-            
-            favorites_window.update_idletasks()
-            x = favorites_window.winfo_x() + 50
-            y = favorites_window.winfo_y() + 50
-            add_window.geometry(f"400x250+{x}+{y}")
-            
-            if self.settings.get("enable_topmost", False):
-                add_window.attributes("-topmost", True)
-            
-            add_window.transient(favorites_window)
-            add_window.focus_force()
-            
-            form_frame = ttk.Frame(add_window, style="Dark.TFrame")
-            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
-            place_id_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            place_id_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            ps_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            ps_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Note (Optional):", style="Dark.TLabel").pack(anchor="w")
-            note_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            note_entry.pack(fill="x", pady=(0, 10))
-            
-            def save_favorite():
-                place_id = place_id_entry.get().strip()
-                
-                if not place_id:
-                    messagebox.showerror("Error", "Place ID is required!")
-                    return
-                
-                name = RobloxAPI.get_game_name(place_id)
-                if not name:
-                    messagebox.showerror("Error", "Could not fetch game name. Please check the Place ID.")
-                    return
-                
-                favorite = {
-                    "place_id": place_id,
-                    "name": name,
-                    "private_server": ps_entry.get().strip(),
-                    "note": note_entry.get().strip()
-                }
-                
-                if "favorite_games" not in self.settings:
-                    self.settings["favorite_games"] = []
-                
-                self.settings["favorite_games"].append(favorite)
-                self.save_settings()
-                refresh_favorites()
-                add_window.destroy()
-                messagebox.showinfo("Success", f"Added '{name}' to favorites!")
-                favorites_window.lift()
-                favorites_window.focus_force()
-        
-        def on_favorites_close():
-            """Save window position before closing"""
-            self.settings['favorites_window_position'] = {
-                'x': favorites_window.winfo_x(),
-                'y': favorites_window.winfo_y()
-            }
-            self.save_settings()
-            favorites_window.destroy()
-        
-        favorites_window.protocol("WM_DELETE_WINDOW", on_favorites_close)
-        
-        def edit_favorite():
-            """Edit selected favorite"""
-            selection = favorites_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select a favorite to edit.")
-                return
-            
-            index = selection[0]
-            fav = self.settings["favorite_games"][index]
-            
-            edit_window = tk.Toplevel(favorites_window)
-            edit_window.title("Edit Favorite")
-            edit_window.configure(bg=self.BG_DARK)
-            edit_window.resizable(False, False)
-            
-            favorites_window.update_idletasks()
-            x = favorites_window.winfo_x() + 50
-            y = favorites_window.winfo_y() + 50
-            edit_window.geometry(f"400x250+{x}+{y}")
-            
-            if self.settings.get("enable_topmost", False):
-                edit_window.attributes("-topmost", True)
-            
-            edit_window.transient(favorites_window)
-            edit_window.focus_force()
-            
-            form_frame = ttk.Frame(edit_window, style="Dark.TFrame")
-            form_frame.pack(fill="both", expand=True, padx=20, pady=20)
-            
-            ttk.Label(form_frame, text="Place ID:", style="Dark.TLabel").pack(anchor="w")
-            place_id_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            place_id_entry.insert(0, fav["place_id"])
-            place_id_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Private Server ID (Optional):", style="Dark.TLabel").pack(anchor="w")
-            ps_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            ps_entry.insert(0, fav.get("private_server", ""))
-            ps_entry.pack(fill="x", pady=(0, 10))
-            
-            ttk.Label(form_frame, text="Note (Optional):", style="Dark.TLabel").pack(anchor="w")
-            note_entry = ttk.Entry(form_frame, style="Dark.TEntry")
-            note_entry.insert(0, fav.get("note", ""))
-            note_entry.pack(fill="x", pady=(0, 10))
-            
-            def save_edit():
-                place_id = place_id_entry.get().strip()
-                
-                if not place_id:
-                    messagebox.showerror("Error", "Place ID is required!")
-                    return
-                
-                if place_id != fav["place_id"]:
-                    name = RobloxAPI.get_game_name(place_id)
-                    if not name:
-                        messagebox.showerror("Error", "Could not fetch game name. Please check the Place ID.")
-                        return
-                else:
-                    name = fav["name"]
-                
-                self.settings["favorite_games"][index] = {
-                    "place_id": place_id,
-                    "name": name,
-                    "private_server": ps_entry.get().strip(),
-                    "note": note_entry.get().strip()
-                }
-                
-                self.save_settings()
-                refresh_favorites()
-                edit_window.destroy()
-                messagebox.showinfo("Success", "Favorite updated!")
-                favorites_window.lift()
-                favorites_window.focus_force()
-            
-            
-            button_frame = ttk.Frame(form_frame, style="Dark.TFrame")
-            button_frame.pack(fill="x", pady=(10, 0))
-            
-            ttk.Button(
-                button_frame,
-                text="Save",
-                style="Dark.TButton",
-                command=save_edit
-            ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-            
-            ttk.Button(
-                button_frame,
-                text="Cancel",
-                style="Dark.TButton",
-                command=edit_window.destroy
-            ).pack(side="left", fill="x", expand=True, padx=(5, 0))
-        
-        def remove_favorite():
-            """Remove selected favorite"""
-            selection = favorites_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select a favorite to remove.")
-                return
-            
-            index = selection[0]
-            fav = self.settings["favorite_games"][index]
-            
-            confirm = messagebox.askyesno(
-                "Confirm Delete",
-                f"Remove '{fav['name']}' from favorites?"
-            )
-            
-            if confirm:
-                self.settings["favorite_games"].pop(index)
-                self.save_settings()
-                refresh_favorites()
-                messagebox.showinfo("Success", "Favorite removed!")
-                favorites_window.lift()
-                favorites_window.focus_force()
-        
-        ttk.Button(
-            btn_frame,
-            text="Add Favorite",
-            style="Dark.TButton",
-            command=add_favorite
-        ).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        
-        ttk.Button(
-            btn_frame,
-            text="Edit",
-            style="Dark.TButton",
-            command=edit_favorite
-        ).pack(side="left", fill="x", expand=True, padx=2)
-        
-        ttk.Button(
-            btn_frame,
-            text="Remove",
-            style="Dark.TButton",
-            command=remove_favorite
-        ).pack(side="left", fill="x", expand=True, padx=2)
-        
-        ttk.Button(
-            btn_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=favorites_window.destroy
-        ).pack(side="left", fill="x", expand=True, padx=(2, 0))
-    
-    def start_rename_monitoring(self):
-        """Start monitoring and renaming Roblox windows"""
-        if self.rename_thread and self.rename_thread.is_alive():
-            return
-        
-        self.rename_stop_event.clear()
-        self.renamed_pids.clear()
-        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True)
-        self.rename_thread.start()
-        print("[INFO] Rename monitoring started")
-    
-    def stop_rename_monitoring(self):
-        """Stop rename monitoring"""
-        if self.rename_thread:
-            self.rename_stop_event.set()
-            self.rename_thread = None
-            self.renamed_pids.clear()
-            print("[INFO] Rename monitoring stopped")
-    
-    def _rename_monitoring_worker(self):
-        """Monitor for new Roblox PIDs and renames them"""
-        while not self.rename_stop_event.is_set():
-            try:
-                current_pids = set()
-                for proc in psutil.process_iter(['pid', 'name']):
-                    try:
-                        if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            pid = proc.info['pid']
-                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                                current_pids.add(pid)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                new_pids = current_pids - self.renamed_pids
-                
-                for pid in new_pids:
-                    if self.rename_stop_event.is_set():
-                        break
-                    
-                    user_id, _ = self._get_user_id_from_pid(pid)
-                    
-                    if user_id:
-                        username = RobloxAPI.get_username_from_user_id(user_id)
-                        
-                        if username:
-                            self._rename_roblox_window(pid, username)
-                            self.renamed_pids.add(pid)
-                            print(f"[INFO] Renamed Roblox window for PID {pid} to '{username}'")
-                    
-                    time.sleep(0.5)
-                
-                self.renamed_pids = self.renamed_pids.intersection(current_pids)
-                
-            except Exception as e:
-                print(f"[ERROR] Error in rename monitoring: {e}")
-            
-            time.sleep(2)
-    
-    def _rename_roblox_window(self, pid, username):
-        """Rename a Roblox window by PID"""
-        try:
-            def enum_windows_callback(hwnd, pid_target):
-                _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if found_pid == pid_target:
-                    if win32gui.IsWindowVisible(hwnd):
-                        current_title = win32gui.GetWindowText(hwnd)
-                        if 'roblox' in current_title.lower():
-                            win32gui.SetWindowText(hwnd, username)
-                            return False
-                return True
-            
-            win32gui.EnumWindows(enum_windows_callback, pid)
-        except Exception as e:
-            print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
-    
-    def start_anti_afk(self):
-        """Start the Anti-AFK background thread"""
-        if self.anti_afk_thread and self.anti_afk_thread.is_alive():
-            return
-        
-        self.anti_afk_stop_event.clear()
-        self.anti_afk_thread = threading.Thread(target=self.anti_afk_worker, daemon=True)
-        self.anti_afk_thread.start()
-        print("[Anti-AFK] Started")
-    
-    def stop_anti_afk(self):
-        """Stop the Anti-AFK background thread"""
-        if self.anti_afk_thread and self.anti_afk_thread.is_alive():
-            self.anti_afk_stop_event.set()
-            self.anti_afk_thread.join(timeout=2)
-            print("[Anti-AFK] Stopped")
-        self._hide_anti_afk_tooltip()
-
-    def _hide_anti_afk_tooltip(self):
-        if self.anti_afk_tooltip_timer:
-            try:
-                self.root.after_cancel(self.anti_afk_tooltip_timer)
-            except Exception:
-                pass
-            self.anti_afk_tooltip_timer = None
-
-        if self.anti_afk_tooltip:
-            try:
-                self.anti_afk_tooltip.destroy()
-            except Exception:
-                pass
-            self.anti_afk_tooltip = None
-            self.anti_afk_tooltip_label = None
-
-    def _show_anti_afk_tooltip(self, text):
-        if not self.settings.get("anti_afk_tooltip_enabled", True):
-            self._hide_anti_afk_tooltip()
-            return
-
-        if self.anti_afk_stop_event.is_set() or not self.root.winfo_exists():
-            return
-
-        def _create_or_update():
-            if self.anti_afk_tooltip and self.anti_afk_tooltip.winfo_exists():
-                if self.anti_afk_tooltip_label:
-                    self.anti_afk_tooltip_label.config(text=text)
-                self._position_anti_afk_tooltip(self.anti_afk_tooltip)
-                return
-
-            self.anti_afk_tooltip = tk.Toplevel(self.root)
-            self.anti_afk_tooltip.wm_overrideredirect(True)
-            self.anti_afk_tooltip.configure(bg=self.BG_MID)
-            self.anti_afk_tooltip.attributes("-topmost", True)
-            if self.settings.get("enable_topmost", False):
-                try:
-                    self.anti_afk_tooltip.attributes("-topmost", True)
-                except Exception:
-                    pass
-
-            label = tk.Label(
-                self.anti_afk_tooltip,
-                text=text,
-                bg=self.BG_MID,
-                fg=self.FG_TEXT,
-                font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)),
-                padx=10,
-                pady=5,
-                relief="solid",
-                borderwidth=1,
-                highlightbackground=self.BG_LIGHT,
-                highlightcolor=self.BG_LIGHT,
-            )
-            label.pack()
-            self.anti_afk_tooltip_label = label
-
-            self.anti_afk_tooltip.update_idletasks()
-            self._position_anti_afk_tooltip(self.anti_afk_tooltip)
-
-        if self.root.winfo_exists():
-            self.root.after(0, _create_or_update)
-
-    def _position_anti_afk_tooltip(self, tooltip_window):
-        if not tooltip_window or not tooltip_window.winfo_exists():
-            return
-
-        try:
-            point = wintypes.POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
-            x = point.x + 18
-            y = point.y + 22
-            tooltip_window.wm_geometry(f"+{x}+{y}")
-        except Exception:
-            try:
-                x = self.root.winfo_pointerx() + 18
-                y = self.root.winfo_pointery() + 22
-                tooltip_window.wm_geometry(f"+{x}+{y}")
-            except Exception:
-                pass
-
-    def _anti_afk_record_action_key(self, button, key_var):
-        button.config(text="Press...")
-        button.focus_set()
-
-        def finish_recording(recorded_key):
-            key_var.set(recorded_key)
-            button.config(text=recorded_key.upper())
-            self.settings["anti_afk_key"] = recorded_key
-            self.save_settings()
-
-            button.unbind("<KeyPress>")
-            button.unbind("<Button-1>")
-            button.unbind("<Button-2>")
-            button.unbind("<Button-3>")
-            button.unbind("<Button-4>")
-            button.unbind("<Button-5>")
-            button.unbind("<MouseWheel>")
-
-        def on_key_press(event):
-            key = event.keysym.lower()
-            key_mapping = {
-                "return": "enter",
-                "control_l": "ctrl",
-                "control_r": "ctrl",
-                "shift_l": "shift",
-                "shift_r": "shift",
-                "alt_l": "alt",
-                "alt_r": "alt",
-            }
-            finish_recording(key_mapping.get(key, key))
-            return "break"
-
-        def on_mouse_button(event):
-            mouse_mapping = {
-                1: "lmb",
-                2: "mmb",
-                3: "rmb",
-                4: "xbutton1",
-                5: "xbutton2",
-            }
-            finish_recording(mouse_mapping.get(event.num, f"mouse{event.num}"))
-            return "break"
-
-        def on_scroll(event):
-            finish_recording("scroll_up" if event.delta > 0 else "scroll_down")
-            return "break"
-
-        button.bind("<KeyPress>", on_key_press)
-        button.bind("<Button-1>", on_mouse_button)
-        button.bind("<Button-2>", on_mouse_button)
-        button.bind("<Button-3>", on_mouse_button)
-        button.bind("<Button-4>", on_mouse_button)
-        button.bind("<Button-5>", on_mouse_button)
-        button.bind("<MouseWheel>", on_scroll)
-
-    def open_anti_afk_window(self):
-        """Open the standalone Anti-AFK window"""
-        if self.anti_afk_window and self.anti_afk_window.winfo_exists():
-            self.anti_afk_window.deiconify()
-            self.anti_afk_window.lift()
-            self.anti_afk_window.focus_force()
-            return
-
-        anti_afk_window = tk.Toplevel(self.root)
-        self.apply_window_icon(anti_afk_window)
-        self.anti_afk_window = anti_afk_window
-        anti_afk_window.title("Anti AFK")
-        anti_afk_window.configure(bg=self.BG_DARK)
-        anti_afk_window.resizable(False, False)
-        anti_afk_window.transient(self.root)
-
-        settings_width = 300
-        settings_height = 250
-        self.root.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
-        anti_afk_window.geometry(f"{settings_width}x{settings_height}+{x}+{y}")
-
-        def on_close():
-            self._hide_anti_afk_tooltip()
-            self.anti_afk_window = None
-            anti_afk_window.destroy()
-
-        anti_afk_window.protocol("WM_DELETE_WINDOW", on_close)
-
-        if self.settings.get("enable_topmost", False):
-            anti_afk_window.attributes("-topmost", True)
-
-        main_frame = ttk.Frame(anti_afk_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=18, pady=14)
-
-        ttk.Label(
-            main_frame,
-            text="Anti AFK",
-            style="Dark.TLabel",
-            font=(self.FONT_FAMILY, 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
-
-        enabled_var = tk.BooleanVar(value=self.settings.get("anti_afk_enabled", False))
-        action_key_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
-        press_time_var = tk.IntVar(value=int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
-        interval_var = tk.IntVar(value=int(self.settings.get("anti_afk_interval_minutes", 10)))
-        tooltip_var = tk.BooleanVar(value=self.settings.get("anti_afk_tooltip_enabled", True))
-
-        def save_anti_afk_settings():
-            self.settings["anti_afk_enabled"] = enabled_var.get()
-            self.settings["anti_afk_key"] = action_key_var.get().strip().lower() or "w"
-            self.settings["anti_afk_tooltip_enabled"] = tooltip_var.get()
-            try:
-                self.settings["anti_afk_press_count"] = max(1, int(press_time_var.get()))
-            except Exception:
-                self.settings["anti_afk_press_count"] = 1
-            try:
-                self.settings["anti_afk_interval_minutes"] = max(1, int(interval_var.get()))
-            except Exception:
-                self.settings["anti_afk_interval_minutes"] = 10
-            self.save_settings()
-
-        def on_enabled_toggle():
-            save_anti_afk_settings()
-            if enabled_var.get():
-                self.start_anti_afk()
-            else:
-                self.stop_anti_afk()
-
-        ttk.Checkbutton(
-            main_frame,
-            text="Enable Anti-AFK",
-            variable=enabled_var,
-            style="Dark.TCheckbutton",
-            command=on_enabled_toggle
-        ).pack(anchor="w", pady=2)
-
-        ttk.Checkbutton(
-            main_frame,
-            text="Show Tooltip",
-            variable=tooltip_var,
-            style="Dark.TCheckbutton",
-            command=save_anti_afk_settings
-        ).pack(anchor="w", pady=2)
-
-        action_row = ttk.Frame(main_frame, style="Dark.TFrame")
-        action_row.pack(fill="x", pady=2)
-        ttk.Label(action_row, text="Action Key:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
-        action_button = ttk.Button(
-            action_row,
-            text=action_key_var.get().upper(),
-            style="Dark.TButton",
-            width=14
-        )
-        action_button.pack(side="right")
-        action_button.config(command=lambda: self._anti_afk_record_action_key(action_button, action_key_var))
-
-        press_row = ttk.Frame(main_frame, style="Dark.TFrame")
-        press_row.pack(fill="x", pady=2)
-        ttk.Label(press_row, text="Press Keys:", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
-        press_spinner = tk.Spinbox(
-            press_row,
-            from_=1,
-            to=10,
-            increment=1,
-            textvariable=press_time_var,
-            width=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            readonlybackground=self.BG_MID,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
-            borderwidth=1,
-            highlightthickness=0,
-        )
-        press_spinner.pack(side="right")
-        press_spinner.bind("<KeyRelease>", lambda _e: save_anti_afk_settings())
-        press_spinner.bind("<FocusOut>", lambda _e: save_anti_afk_settings())
-
-        interval_row = ttk.Frame(main_frame, style="Dark.TFrame")
-        interval_row.pack(fill="x", pady=2)
-        ttk.Label(interval_row, text="Interval (minutes):", style="Dark.TLabel", font=(self.FONT_FAMILY, 9)).pack(side="left")
-        interval_spinner = tk.Spinbox(
-            interval_row,
-            from_=1,
-            to=120,
-            textvariable=interval_var,
-            width=8,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            buttonbackground=self.BG_LIGHT,
-            font=(self.FONT_FAMILY, 9),
-            readonlybackground=self.BG_MID,
-            selectbackground=self.FG_ACCENT,
-            selectforeground=self.FG_TEXT,
-            insertbackground=self.FG_TEXT,
-            relief="flat",
-            borderwidth=1,
-            highlightthickness=0,
-        )
-        interval_spinner.pack(side="right")
-        interval_spinner.bind("<KeyRelease>", lambda _e: save_anti_afk_settings())
-        interval_spinner.bind("<FocusOut>", lambda _e: save_anti_afk_settings())
-
-        ttk.Button(
-            main_frame,
-            text="Close",
-            style="Dark.TButton",
-            command=on_close
-        ).pack(fill="x", pady=(12, 0))
-
-        if enabled_var.get():
-            self.start_anti_afk()
-
-    def start_optimize_roblox_ram(self):
-        """Start background RAM trimming for newly detected Roblox processes"""
-        if self.optimize_ram_thread and self.optimize_ram_thread.is_alive():
-            return
-
-        self.optimize_ram_stop_event.clear()
-        self.optimize_ram_thread = threading.Thread(target=self._optimize_roblox_ram_worker, daemon=True, name="RobloxRamTrim")
-        self.optimize_ram_thread.start()
-        print("[INFO] Roblox RAM optimization started")
-
-    def stop_optimize_roblox_ram(self):
-        """Stop background RAM trimming"""
-        if self.optimize_ram_thread and self.optimize_ram_thread.is_alive():
-            self.optimize_ram_stop_event.set()
-            self.optimize_ram_thread.join(timeout=2)
-        self.optimize_ram_thread = None
-        self.optimize_ram_stop_event.clear()
-        print("[INFO] Roblox RAM optimization stopped")
-
-    def _trim_roblox_process_ram(self, pid):
-        try:
+        self._ram_boost_running = True
+        self._ram_boost_stop = False
+        def _worker():
             kernel32 = ctypes.windll.kernel32
             psapi = ctypes.windll.psapi
-            h_process = kernel32.OpenProcess(0x1F0FFF, False, int(pid))
-            if h_process:
+            seen: set[int] = set()
+            print("[INFO] RAM boost started")
+            while not self._ram_boost_stop:
                 try:
-                    psapi.EmptyWorkingSet(h_process)
-                finally:
-                    kernel32.CloseHandle(h_process)
-                print(f"[INFO] Trimmed Roblox RAM for PID {pid}")
-        except Exception as e:
-            print(f"[ERROR] Failed to trim RAM for PID {pid}: {e}")
-
-    def _optimize_roblox_ram_worker(self):
-        while not self.optimize_ram_stop_event.is_set():
-            try:
-                limit_mb = max(1, int(self.settings.get("optimize_roblox_ram_limit_mb", 750)))
-                current_pids = sorted(self._get_roblox_pids())
-
-                for pid in current_pids:
-                    if self.optimize_ram_stop_event.is_set():
-                        break
-                    try:
-                        proc = psutil.Process(pid)
-                        memory_mb = proc.memory_info().rss / 1024 / 1024
-                        if memory_mb >= limit_mb:
-                            self._trim_roblox_process_ram(pid)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-            except Exception as e:
-                print(f"[ERROR] Roblox RAM optimization error: {e}")
-
-            if self.optimize_ram_stop_event.wait(15):
-                break
-    
-    def start_auto_rejoin_for_account(self, account):
-        """Start the auto-rejoin background thread for a specific account"""
-        if account in self.auto_rejoin_threads:
-            existing_thread = self.auto_rejoin_threads[account]
-            if existing_thread.is_alive():
-                print(f"[Auto-Rejoin] Thread already running for {account}")
-                return
-            else:
-                print(f"[Auto-Rejoin] Cleaning up dead thread for {account}")
-                del self.auto_rejoin_threads[account]
-        
-        if account not in self.auto_rejoin_configs:
-            print(f"[Auto-Rejoin] No config found for {account}")
-            return
-        
-        stop_event = threading.Event()
-        self.auto_rejoin_stop_events[account] = stop_event
-        
-        thread = threading.Thread(
-            target=self.auto_rejoin_worker_for_account,
-            args=(account,),
-            daemon=True,
-            name=f"AutoRejoin-{account}"  
-        )
-        self.auto_rejoin_threads[account] = thread
-        thread.start()
-        print(f"[Auto-Rejoin] Started thread {thread.name} for {account}")
-        if len(self.auto_rejoin_threads) == 1:
-            self._start_global_screenshot_loop()
-    
-    def stop_auto_rejoin_for_account(self, account):
-        """Stop the auto-rejoin background thread for a specific account"""
-        if account in self.auto_rejoin_stop_events:
-            self.auto_rejoin_stop_events[account].set()
-        
-        if account in self.auto_rejoin_threads:
-            thread = self.auto_rejoin_threads[account]
-            if thread.is_alive():
-                thread.join(timeout=2)
-            del self.auto_rejoin_threads[account]
-        
-        if account in self.auto_rejoin_stop_events:
-            del self.auto_rejoin_stop_events[account]
-
-        if not self.auto_rejoin_threads:
-            self._stop_global_screenshot_loop()
-
-        print(f"[Auto-Rejoin] Stopped for {account}")
-    
-    def stop_all_auto_rejoin(self):
-        """Stop all auto-rejoin threads"""
-        for account in list(self.auto_rejoin_threads.keys()):
-            self.stop_auto_rejoin_for_account(account)
-        self._stop_global_screenshot_loop()
-
-    def _start_global_screenshot_loop(self):
-        if self._webhook_screenshot_thread and self._webhook_screenshot_thread.is_alive():
-            return
-        self._webhook_screenshot_thread = threading.Thread(
-            target=self._global_screenshot_worker, daemon=True, name="WebhookScreenshot"
-        )
-        self._webhook_screenshot_thread.start()
-        print("[INFO] Global hourly webhook screenshot started")
-
-    def _stop_global_screenshot_loop(self):
-        if self._webhook_screenshot_thread is None:
-            return
-        self._webhook_screenshot_thread = None
-        print("[INFO] Global hourly webhook screenshot stopped")
-
-    def _global_screenshot_worker(self):
-        interval = self._webhook_screenshot_interval_minutes() * 60
-        time.sleep(interval)
-        while self._webhook_screenshot_thread is threading.current_thread():
-            interval = self._webhook_screenshot_interval_minutes() * 60
-            if self._webhook_enabled() and self._webhook_screenshot_enabled():
-                self._send_webhook_screenshot(self._get_webhook_cfg().get("url", ""), "")
-            time.sleep(interval)
-    
-    def is_roblox_running(self):
-        """Check if any Roblox window exists"""
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, "Roblox")
-            return hwnd != 0
-        except:
-            return False
-
-    def _has_internet_connection(self, timeout=3):
-        test_urls = (
-            "https://www.google.com/generate_204",
-            "https://www.cloudflare.com/cdn-cgi/trace",
-        )
-        for url in test_urls:
-            try:
-                resp = requests.get(url, timeout=timeout)
-                if resp.status_code < 500:
-                    return True
-            except Exception:
-                continue
-        return False
-    
-    def _wait_for_presence_slot(self, stop_event=None, min_gap_seconds=0.35):
-        """Throttle Presence API checks so multiple accounts are checked sequentially."""
-        while True:
-            now = time.time()
-            with self.auto_rejoin_presence_lock:
-                wait_for = self.auto_rejoin_next_presence_time - now
-                if wait_for <= 0:
-                    self.auto_rejoin_next_presence_time = now + max(0.1, float(min_gap_seconds))
-                    return True
-
-            sleep_for = min(0.25, max(0.05, wait_for))
-            if stop_event and stop_event.wait(sleep_for):
-                return False
-            if not stop_event:
-                time.sleep(sleep_for)
-
-    def is_player_in_game(self, user_id, cookie, expected_place_id, stop_event=None):
-        """Check if player is still in the same game using Presence API.
-        Returns (in_game, place_id, game_id, error_msg) — error_msg is None on success."""
-        try:
-            if not self._wait_for_presence_slot(stop_event):
-                return False, None, None, "Presence check cancelled"
-
-            presence = RobloxAPI.get_player_presence(user_id, cookie)
-
-            if presence:
-                in_game = presence.get('in_game', False)
-                place_id = presence.get('place_id')
-
-                if in_game:
-                    try:
-                        if int(place_id) == int(expected_place_id):
-                            return True, place_id, presence.get('game_id'), None
-                    except (ValueError, TypeError):
-                        pass
-
-                return False, None, None, None
-            else:
-                return False, None, None, "Presence API returned None — cookie may be invalid"
-        except Exception as e:
-            print(f"[Auto-Rejoin] Error checking player status: {e}")
-            traceback.print_exc()
-            return False, None, None, f"Presence check exception: {e}"
-    
-    def _check_roblox_process_exists(self, account):
-        """Check if the tracked Roblox process for this account still exists"""
-        if account not in self.auto_rejoin_pids:
-            return False
-        
-        pid = self.auto_rejoin_pids[account]
-        try:
-            result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}'], 
-                                  capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-            return f"{pid}" in result.stdout
-        except Exception as e:
-            print(f"[Auto-Rejoin] Error checking process {pid}: {e}")
-            return False
-    
-    def auto_rejoin_worker_for_account(self, account):
-        """Background worker that monitors for disconnection and rejoins for a specific account."""   
-        config = self.auto_rejoin_configs.get(account, {})
-        stop_event = self.auto_rejoin_stop_events.get(account)
-        
-        if not stop_event:
-            return
-        
-        stagger_delay = random.uniform(6.0, 9.0)
-        time.sleep(stagger_delay)
-        
-        retry_count = 0
-        max_retries = config.get('max_retries', 5)
-        check_interval = config.get('check_interval', 10)
-        check_internet_before_launch = bool(config.get('check_internet_before_launch', True))
-        last_internet_warning_time = 0.0
-
-        def wait_next_check():
-            base = max(3, int(check_interval))
-            jitter = random.uniform(0.2, min(1.5, base * 0.2))
-            return stop_event.wait(base + jitter)
-
-        def can_launch_now():
-            nonlocal last_internet_warning_time
-            if not check_internet_before_launch:
-                return True
-            if self._has_internet_connection(timeout=3):
-                return True
-
-            now = time.time()
-            if now - last_internet_warning_time > 60:
-                print(f"[Auto-Rejoin] [{account}] Internet unavailable, delaying launch.")
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Waiting For Internet",
-                    f"**{account}** is waiting for internet before launching.",
-                    0xF39C12
-                )
-                last_internet_warning_time = now
-            return False
-
-        place_id = config.get('place_id')
-        private_server = config.get('private_server', '')
-        job_id = config.get('job_id', '')
-        
-        if not place_id:
-            print(f"[Auto-Rejoin] Invalid configuration for {account}")
-            return
-        
-        if account not in self.manager.accounts:
-            print(f"[Auto-Rejoin] Account {account} not found")
-            return
-        
-        account_data = self.manager.accounts[account]
-        cookie = account_data.get('cookie')
-        
-        if 'user_id_cache' not in self.settings:
-            self.settings['user_id_cache'] = {}
-        
-        user_id = RobloxAPI.get_user_id_from_username(
-            account,
-            use_cache=True,
-            cache_dict=self.settings['user_id_cache']
-        )
-        if not user_id:
-            print(f"[Auto-Rejoin] Could not get user ID for {account}")
-            return
-        
-        try:
-            self.save_settings()
-        except Exception as e:
-            print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
-        
-        print(f"[Auto-Rejoin] Started monitoring {account} for game {place_id}")
-        self._maybe_send_webhook_embed(
-            "Auto Rejoin — Started",
-            f"**{account}** is now being monitored for place `{place_id}`.",
-            0x3498DB
-        )
-
-        consecutive_failed_checks = 0
-        max_consecutive_fails = 2
-
-        if account in self.auto_rejoin_pids:
-            print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
-        else:
-            print(f"[Auto-Rejoin] [{account}] No pre-matched PID - launching game...")
-            while not stop_event.is_set() and not can_launch_now():
-                if wait_next_check():
-                    return
-            success = self._launch_and_track_pid(account, place_id, private_server, job_id)
-            if not success:
-                retry_count += 1
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Launch Failed",
-                    f"**{account}** failed to launch place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                    0xE74C3C
-                )
-                if retry_count >= max_retries:
-                    print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached on initial launch. Stopping.")
-                    return
-            time.sleep(10)
-        
-        while not stop_event.is_set():
-            try:
-                check_presence = config.get('check_presence', True)
-                disconnect_detected = False
-                game_id = ''
-
-                if check_presence:
-                    in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id, stop_event)
-                    if pres_err:
-                        self._maybe_send_webhook_embed(
-                            "Auto Rejoin — Presence Error",
-                            f"**{account}**\n{pres_err}",
-                            0xF39C12
-                        )
-                    disconnect_detected = not in_game
-                    
-                    if disconnect_detected:
-                        consecutive_failed_checks += 1
-                        if consecutive_failed_checks < max_consecutive_fails:
-                            disconnect_detected = False
-                            if wait_next_check():
-                                break
-                            continue
-                    else:
-                        consecutive_failed_checks = 0
-                else:
-                    if not self._wait_for_presence_slot(stop_event):
-                        break
-                    presence = RobloxAPI.get_player_presence(user_id, cookie)
-                    
-                    if presence:
-                        in_game = presence.get('in_game', False)
-                        current_place_id = presence.get('place_id')
-                        game_id = presence.get('game_id', '')
-                        
-                        print(f"[Auto-Rejoin] [{account}] Presence check (any game mode) - in_game: {in_game}, place_id: {current_place_id}")
-                        
-                        if in_game:
-                            disconnect_detected = False
-                            consecutive_failed_checks = 0
-                        else:
-                            consecutive_failed_checks += 1
-                            if consecutive_failed_checks < max_consecutive_fails:
-                                disconnect_detected = False
-                                if wait_next_check():
-                                    break
-                                continue
-                            else:
-                                disconnect_detected = True
-                    else:
-                        consecutive_failed_checks += 1
-                        if consecutive_failed_checks < max_consecutive_fails:
-                            disconnect_detected = False
-                            if wait_next_check():
-                                break
-                            continue
-                        else:
-                            disconnect_detected = True
-                
-                if disconnect_detected:
-                    if not can_launch_now():
-                        if wait_next_check():
-                            break
-                        continue
-
-                    retry_count += 1
-                    consecutive_failed_checks = 0
-                    print(f"[Auto-Rejoin] [{account}] Disconnection detected! Rejoining... (Attempt {retry_count}/{max_retries})")
-
-                    self._maybe_send_webhook_embed(
-                        "Auto Rejoin — Disconnected",
-                        f"**{account}** disconnected from place `{place_id}`.\nRejoin attempt **{retry_count}/{max_retries}**.",
-                        0xF39C12
-                    )
-
-                    if account in self.auto_rejoin_pids:
-                        old_pid = self.auto_rejoin_pids[account]
+                    limit_mb = int(actions.load_ui_settings().get("optimize_roblox_ram_limit_mb", 750))
+                    current_pids = set()
+                    for proc in psutil.process_iter(["pid", "name"]):
+                        if proc.info["name"] and proc.info["name"].lower() == "robloxplayerbeta.exe":
+                            current_pids.add(proc.info["pid"])
+                    for pid in current_pids:
                         try:
-                            subprocess.run(['taskkill', '/F', '/PID', str(old_pid)],
-                                         capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-                            time.sleep(1)
-                            print(f"[Auto-Rejoin] [{account}] Closed old Roblox instance (PID: {old_pid})")
-                        except Exception as e:
-                            print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
-                        del self.auto_rejoin_pids[account]
-
-                    rejoin_job_id = job_id if job_id else (game_id if game_id else '')
-                    success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
-
-                    if success:
-                        print(f"[Auto-Rejoin] [{account}] Rejoin attempt successful")
-                        self._maybe_send_webhook_embed(
-                            "Auto Rejoin — Success",
-                            f"**{account}** has rejoined place `{place_id}`.",
-                            0x2ECC71
-                        )
-                        retry_count = 0
-                        time.sleep(10)
-                    else:
-                        self._maybe_send_webhook_embed(
-                            "Auto Rejoin — Rejoin Failed",
-                            f"**{account}** failed to relaunch for place `{place_id}` (attempt {retry_count}/{max_retries}).",
-                            0xE74C3C
-                        )
-                        if retry_count >= max_retries:
-                            print(f"[Auto-Rejoin] [{account}] Max retries ({max_retries}) reached. Stopping.")
-                            self._maybe_send_webhook_embed(
-                                "Auto Rejoin — Stopped",
-                                f"**{account}** reached max retries ({max_retries}). Auto-rejoin stopped.",
-                                0xE74C3C
-                            )
-                            break
-                        if wait_next_check():
-                            break
-                else:
-                    retry_count = 0
-                    if wait_next_check():
-                        break
-
-            except Exception as e:
-                print(f"[Auto-Rejoin] [{account}] Error: {e}")
-                self._maybe_send_webhook_embed(
-                    "Auto Rejoin — Error",
-                    f"**{account}**\n```{e}```",
-                    0xE74C3C
-                )
-                if wait_next_check():
-                    break
-    
-    def _launch_and_track_pid(self, account, place_id, private_server, job_id):
-        with self.auto_rejoin_launch_lock:
-            pids_before = self._get_roblox_pids()
-            
-            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
-            success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
-            
-            if not success:
-                return False
-            
-            print(f"[Auto-Rejoin] [{account}] Game launched successfully")
-            
-            time.sleep(5)
-            
-            pids_after = self._get_roblox_pids()
-            new_pids = pids_after - pids_before
-            
-            if not new_pids:
-                print(f"[Auto-Rejoin] [{account}] No new Roblox processes detected")
-                return False
-            
-            available_pids = new_pids - set(self.auto_rejoin_pids.values())
-            
-            if available_pids:
-                new_pid = max(available_pids)
-                self.auto_rejoin_pids[account] = new_pid
-                print(f"[Auto-Rejoin] [{account}] Successfully tracked PID {new_pid}")
-                return True
-            else:
-                print(f"[Auto-Rejoin] [{account}] All new PIDs are already tracked by other accounts")
-                return False
-    
-    def _get_roblox_pids(self):
-        """Get all currently running RobloxPlayerBeta.exe PIDs using psutil."""
-        try:
-            pids = set()
-            for p in psutil.process_iter(["pid", "name"]):
-                if p.info["name"] and p.info["name"].lower() == "robloxplayerbeta.exe":
-                    pid = p.info["pid"]
-                    if self._is_valid_roblox_game_client(pid, "robloxplayerbeta.exe"):
-                        pids.add(pid)
-            return pids
-        except Exception as e:
-            print(f"[Auto-Rejoin] Error getting Roblox PIDs: {e}")
-            return set()
-    
-    def _is_pid_roblox_process(self, pid):
-        """Check if a specific PID is still a running RobloxPlayerBeta.exe process"""
-        try:
-            process = psutil.Process(pid)
-            return process.is_running() and process.name().lower() == "robloxplayerbeta.exe"
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return False
-        except Exception as e:
-            print(f"[Auto-Rejoin] Error checking PID {pid}: {e}")
-            return False
-    
-    def _get_exe_description(self, pid):
-        try:
-            proc = psutil.Process(pid)
-            exe = proc.exe()
-            translations = win32api.GetFileVersionInfo(exe, r'\VarFileInfo\Translation')
-            lang, codepage = translations[0]
-            key = f'\\StringFileInfo\\{lang:04X}{codepage:04X}\\FileDescription'
-            return win32api.GetFileVersionInfo(exe, key) or ""
-        except Exception:
-            return ""
-
-    def _is_valid_roblox_game_client(self, pid, process_name_lower=None):
-        try:
-            if process_name_lower is None:
-                try:
-                    process = psutil.Process(pid)
-                    process_name_lower = process.name().lower()
-                except:
-                    return False
-
-            if process_name_lower != "robloxplayerbeta.exe":
-                return False
-
-            desc = self._get_exe_description(pid)
-            if desc:
-                return "roblox" in desc.lower()
-
-            return True
-
-        except Exception:
-            return process_name_lower == "robloxplayerbeta.exe" if process_name_lower else False
-    
-    def _match_pids_to_accounts(self, accounts):
-        """Match all running Roblox PIDs to accounts"""
-        print(f"[Auto-Rejoin] Starting global PID matching for {len(accounts)} account(s)...")
-        
-        if 'user_id_cache' not in self.settings:
-            self.settings['user_id_cache'] = {}
-        
-        account_user_ids = {}
-        for account in accounts:
-            user_id = RobloxAPI.get_user_id_from_username(
-                account,
-                use_cache=True,
-                cache_dict=self.settings['user_id_cache']
-            )
-            if user_id:
-                account_user_ids[account] = str(user_id)
-                print(f"[Auto-Rejoin] {account} -> User ID: {user_id}")
-            else:
-                print(f"[Auto-Rejoin] {account} -> Could not get user ID")
-        
-        try:
-            self.save_settings()
-        except Exception as e:
-            print(f"[Auto-Rejoin] Warning: Could not save user ID cache: {e}")
-        
-        all_pids = self._get_roblox_pids()
-        print(f"[Auto-Rejoin] Found {len(all_pids)} Roblox process(es)")
-        
-        if not all_pids:
-            return {}
-        
-        used_logs = set()
-        pid_user_ids = {}
-        for pid in all_pids:
-            if pid in self.auto_rejoin_pids.values():
-                print(f"[Auto-Rejoin] PID {pid} already tracked, skipping")
-                continue
-            
-            user_id, matched_log = self._get_user_id_from_pid(pid, used_logs)
-            if user_id:
-                pid_user_ids[pid] = str(user_id)
-                print(f"[Auto-Rejoin] PID {pid} -> User ID: {user_id}")
-            else:
-                print(f"[Auto-Rejoin] PID {pid} -> Could not extract user ID")
-        
-        matches = {}
-        for account, account_user_id in account_user_ids.items():
-            if account in self.auto_rejoin_pids:
-                continue
-                
-            for pid, pid_user_id in pid_user_ids.items():
-                if account_user_id == pid_user_id:
-                    matches[account] = pid
-                    self.auto_rejoin_pids[account] = pid
-                    print(f"[Auto-Rejoin] MATCHED: {account} (user {account_user_id}) -> PID {pid}")
-                    del pid_user_ids[pid]
-                    break
-        
-        unmatched = [acc for acc in accounts if acc not in matches and acc not in self.auto_rejoin_pids]
-        if unmatched:
-            print(f"[Auto-Rejoin] Unmatched accounts (will launch new): {unmatched}")
-        
-        return matches
-    
-    def _get_user_id_from_pid(self, pid, used_logs=None):
-        """Get user ID from a Roblox process PID"""
-        if used_logs is None:
-            used_logs = set()
-            
-        try:
-            process = psutil.Process(pid)
-            if not (process.is_running() and process.name().lower() == "robloxplayerbeta.exe"):
-                return None, None
-            
-            create_time_local = datetime.fromtimestamp(process.create_time())
-            create_time_utc = datetime.fromtimestamp(process.create_time(), tz=timezone.utc).replace(tzinfo=None)
-            
-            logs_dir = os.path.join(os.getenv("LOCALAPPDATA"), "Roblox", "logs")
-            if not os.path.exists(logs_dir):
-                return None, None
-            
-            time_window = timedelta(seconds=10)
-            matching_logs = []
-            
-            for filename in os.listdir(logs_dir):
-                if not filename.endswith("_last.log"):
-                    continue
-                
-                full_path = os.path.join(logs_dir, filename)
-                
-                if full_path in used_logs:
-                    continue
-                
-                match = re.search(r'(\d{8}T\d{6}Z)', filename)
-                if not match:
-                    continue
-                
-                timestamp_str = match.group(1)
-                try:
-                    log_time = datetime.strptime(timestamp_str, "%Y%m%dT%H%M%SZ")
-                    time_diff = (log_time - create_time_utc).total_seconds()
-                    
-                    if 0 <= time_diff <= 10:
-                        matching_logs.append((time_diff, full_path, log_time))
-                except ValueError:
-                    continue
-            
-            matching_logs.sort(key=lambda x: x[0])
-            
-            for time_diff, log_path, log_time in matching_logs:
-                try:
-                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read(50000)
-                    
-                    if "userid:" in content:
-                        user_id = content.split("userid:")[1].split(",")[0].strip()
-                        if user_id.isdigit():
-                            used_logs.add(log_path)
-                            return user_id, log_path
+                            mem_mb = psutil.Process(pid).memory_info().rss / 1024 / 1024
+                            if mem_mb >= limit_mb:
+                                h = kernel32.OpenProcess(0x1F0FFF, False, pid)
+                                if h:
+                                    psapi.EmptyWorkingSet(h)
+                                    kernel32.CloseHandle(h)
+                                    print(f"[INFO] Trimmed RAM for Roblox PID {pid} ({mem_mb:.0f} MB)")
+                        except Exception:
+                            pass
                 except Exception as e:
-                    print(f"[Auto-Rejoin] Error reading log {log_path}: {e}")
-                    continue
-            
-            return None, None
-            
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return None, None
-        except Exception as e:
-            print(f"[Auto-Rejoin] Error getting user ID for PID {pid}: {e}")
-            return None, None
-      
-    def anti_afk_worker(self):
-        """Background worker that rotates Roblox windows during anti-AFK maintenance."""
-        while not self.anti_afk_stop_event.is_set():
-            try:
-                interval_minutes = max(1, int(self.settings.get("anti_afk_interval_minutes", 10)))
-                press_count = max(1, int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
-                action_key = str(self.settings.get("anti_afk_key", "w") or "w").strip().lower()
-                total_seconds = interval_minutes * 60
-                countdown_seconds = min(30, total_seconds)
-                wait_seconds = max(0, total_seconds - countdown_seconds)
+                    print(f"[ERROR] RAM boost error: {e}")
+                time.sleep(15)
+            self._ram_boost_running = False
+            print("[INFO] RAM boost stopped")
+        threading.Thread(target=_worker, daemon=True, name="RamBoost").start()
 
-                if wait_seconds > 0 and self.anti_afk_stop_event.wait(wait_seconds):
-                    break
+    def _stop_ram_boost(self):
+        self._ram_boost_stop = True
 
-                for remaining in range(countdown_seconds, 0, -1):
-                    if self.anti_afk_stop_event.is_set():
-                        return
-                    self._show_anti_afk_tooltip(f"Anti-AFK Maintenance will start in {remaining}s")
-                    if self.anti_afk_stop_event.wait(1):
-                        return
+    # Rename Roblox Windows background worker
+    def _start_rename_windows(self):
+        if getattr(self, "_rename_running", False):
+            return
+        self._rename_running = True
+        self._rename_stop = False
 
-                self._hide_anti_afk_tooltip()
-                self._anti_afk_run_maintenance_cycle(action_key, press_count)
+        def _worker():
+            renamed: set[int] = set()
+            print("[INFO] Rename Roblox Windows started")
 
-            except Exception as e:
-                print(f"[Anti-AFK] Error: {e}")
-                time.sleep(5)
+            def _get_user_id_from_pid(pid, used_logs):
+                try:
+                    proc = psutil.Process(pid)
+                    if not (proc.is_running() and proc.name().lower() == "robloxplayerbeta.exe"):
+                        return None
+                    create_time_utc = datetime.fromtimestamp(proc.create_time(), tz=timezone.utc).replace(tzinfo=None)
+                    logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
+                    if not os.path.exists(logs_dir):
+                        return None
+                    matching = []
+                    for fn in os.listdir(logs_dir):
+                        if not fn.endswith("_last.log"):
+                            continue
+                        full = os.path.join(logs_dir, fn)
+                        if full in used_logs:
+                            continue
+                        m = re.search(r"(\d{8}T\d{6}Z)", fn)
+                        if not m:
+                            continue
+                        try:
+                            log_time = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ")
+                            diff = (log_time - create_time_utc).total_seconds()
+                            if 0 <= diff <= 60: # 60s window for slow machines
+                                matching.append((diff, full))
+                        except ValueError:
+                            continue
+                    matching.sort(key=lambda x: x[0])
+                    for _, log_path in matching:
+                        try:
+                            with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
+                                content = fh.read(50000)
+                            if "userid:" in content:
+                                uid = content.split("userid:")[1].split(",")[0].strip()
+                                if uid.isdigit():
+                                    used_logs.add(log_path)
+                                    return uid
+                        except Exception:
+                            continue
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+                except Exception as e:
+                    print(f"[ERROR] _get_user_id_from_pid({pid}): {e}")
+                return None
 
-    def _anti_afk_run_maintenance_cycle(self, action_key, press_count):
-        roblox_pids = self._get_roblox_pids()
-        if not roblox_pids:
-            print("[Anti-AFK] No Roblox processes found")
+            def _rename_window(pid, username):
+                def _cb(hwnd, _pid):
+                    _, found = win32process.GetWindowThreadProcessId(hwnd)
+                    if found == _pid and win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd)
+                        if "roblox" in title.lower():
+                            win32gui.SetWindowText(hwnd, username)
+                            return False
+                    return True
+                try:
+                    win32gui.EnumWindows(_cb, pid)
+                except Exception:
+                    pass
+
+            while not self._rename_stop:
+                try:
+                    current_pids = set()
+                    for proc in psutil.process_iter(["pid", "name"]):
+                        try:
+                            if proc.info["name"] and proc.info["name"].lower() == "robloxplayerbeta.exe":
+                                current_pids.add(proc.info["pid"])
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+
+                    new_pids = current_pids - renamed
+                    used_logs: set[str] = set()
+
+                    for pid in new_pids:
+                        if self._rename_stop:
+                            break
+                        user_id = _get_user_id_from_pid(pid, used_logs)
+                        if user_id:
+                            username = RobloxAPI.get_username_from_user_id(user_id)
+                            if username:
+                                _did = [False]
+                                def _cb_track(hwnd, _pid=pid, _un=username, _d=_did):
+                                    _, found = win32process.GetWindowThreadProcessId(hwnd)
+                                    if found == _pid and win32gui.IsWindowVisible(hwnd):
+                                        title = win32gui.GetWindowText(hwnd)
+                                        if title and ("roblox" in title.lower() or title == _un):
+                                            try:
+                                                win32gui.SetWindowText(hwnd, _un)
+                                                _d[0] = True
+                                                return False
+                                            except Exception:
+                                                pass
+                                    return True
+                                try:
+                                    win32gui.EnumWindows(_cb_track, pid)
+                                except Exception:
+                                    pass
+                                if _did[0]:
+                                    renamed.add(pid)
+                                    print(f"[INFO] Renamed Roblox window PID {pid} -> '{username}'")
+                                else:
+                                    print(f"[INFO] Roblox window for PID {pid} ({username}) not visible yet, will retry")
+                        time.sleep(0.5)
+
+                    renamed = renamed & current_pids
+
+                except Exception as e:
+                    print(f"[ERROR] Rename Windows error: {e}")
+                time.sleep(2)
+
+            self._rename_running = False
+            print("[INFO] Rename Roblox Windows stopped")
+
+        threading.Thread(target=_worker, daemon=True, name="RenameWindows").start()
+
+    def _stop_rename_windows(self):
+        self._rename_stop = True
+
+    def _on_sett_browse_launcher(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Launcher", "", "Executables (*.exe);;All files (*)"
+        )
+        if path:
+            self._sett_custom_launcher_edit.setText(path)
+
+    def _on_sett_dl_chromium(self):
+
+        btn = self._sett_chromium_btn
+        chromium_dir = os.path.join(_ROOT_DIR, "AccountManagerData", "Chromium")
+        target_exe = os.path.join(chromium_dir, "chrome-win64", "chrome.exe")
+
+        print(f"[INFO] Download requested. Target: {target_exe}")
+
+        if os.path.exists(target_exe):
+            btn.setText("Downloaded")
+            btn.setEnabled(False)
             return
 
-        hwnds = self._get_roblox_hwnds_from_pids(roblox_pids)
-        if not hwnds:
-            print("[Anti-AFK] No Roblox windows found")
-            return
+        btn.setEnabled(False)
+        btn.setText("0%")
+        print("[INFO] Starting download thread...")
 
+        def _on_progress(pct: int, label: str):
+            text = label if label else f"{pct}%"
+            btn.setText(text)
+            filled = max(0, min(100, pct))
+            if filled == 0:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
+                    f"border: 1px solid {LINE}; text-align: center; }}"
+                )
+            else:
+                stop_a = f"{filled / 100:.4f}"
+                stop_b = f"{min(filled / 100 + 0.001, 1.0):.4f}"
+                btn.setStyleSheet(
+                    f"QPushButton {{"
+                    f"  background: qlineargradient("
+                    f"    x1:0, y1:0, x2:1, y2:0,"
+                    f"    stop:0 #3A5A9A,"
+                    f"    stop:{stop_a} #3A5A9A,"
+                    f"    stop:{stop_b} {INPUT},"
+                    f"    stop:1 {INPUT}"
+                    f"  );"
+                    f"  color: {TEXT}; border: 1px solid {LINE}; text-align: center;"
+                    f"}}"
+                )
+
+        def _on_done(success: bool, error_msg: str):
+            if success:
+                print("[INFO] Download and extraction complete.")
+                btn.setText("Downloaded")
+                btn.setEnabled(False)
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: #2A5A2A; color: {TEXT}; "
+                    f"border: 1px solid #3A7A3A; text-align: center; }}"
+                )
+            else:
+                print(f"[INFO] Download failed: {error_msg}")
+                btn.setText("Download Chromium")
+                btn.setEnabled(True)
+                btn.setStyleSheet("") # reset to default
+
+        # Connect signals
         try:
-            original_hwnd = win32gui.GetForegroundWindow()
-        except Exception:
-            original_hwnd = None
+            self._bridge.chromium_progress.disconnect()
+        except RuntimeError:
+            pass
+        try:
+            self._bridge.chromium_done.disconnect()
+        except RuntimeError:
+            pass
+        self._bridge.chromium_progress.connect(_on_progress)
+        self._bridge.chromium_done.connect(_on_done)
 
-        original_placement = None
-        if original_hwnd and win32gui.IsWindow(original_hwnd):
+        def _worker():
             try:
-                original_placement = win32gui.GetWindowPlacement(original_hwnd)
-            except Exception:
-                original_placement = None
+                os.makedirs(chromium_dir, exist_ok=True)
 
-        for hwnd in hwnds:
-            if self.anti_afk_stop_event.is_set():
-                break
+                # 1. Fetch latest build number
+                print("[INFO] Fetching latest build number...")
+                self._bridge.chromium_progress.emit(0, "Fetching version...")
+                r = requests.get(
+                    "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE",
+                    timeout=30
+                )
+                r.raise_for_status()
+                build = r.text.strip()
+                print(f"[INFO] Latest build: {build}")
 
-            window_spec = f"[HANDLE:0x{hwnd:08X}]"
+                # 2. Download chrome-win.zip (maps to 1–80%)
+                self._bridge.chromium_progress.emit(1, "Downloading...")
+                zip_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build}/chrome-win.zip"
+                zip_path = os.path.join(chromium_dir, "chromium.zip")
+                print(f"[INFO] Downloading from: {zip_url}")
+                dl_resp = requests.get(zip_url, stream=True, timeout=300)
+                dl_resp.raise_for_status()
+                total = int(dl_resp.headers.get("content-length", 0))
+                done = 0
+                last_pct = 0
+                print(f"[INFO] File size: {total // 1024 // 1024} MB")
+                with open(zip_path, "wb") as fh:
+                    for chunk in dl_resp.iter_content(65536):
+                        if chunk:
+                            fh.write(chunk)
+                            done += len(chunk)
+                            if total:
+                                pct = int(done / total * 79) + 1  # 1..80
+                                if pct > last_pct:
+                                    last_pct = pct
+                                    self._bridge.chromium_progress.emit(pct, "")
+
+                print(f"[INFO] Download complete. Extracting...")
+
+                # 3. Extract (maps 80–90%)
+                self._bridge.chromium_progress.emit(80, "Extracting...")
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    names = zf.namelist()
+                    ntotal = len(names)
+                    for i, name in enumerate(names):
+                        zf.extract(name, chromium_dir)
+                        if i % 100 == 0:
+                            pct = 80 + int(i / ntotal * 10)
+                            self._bridge.chromium_progress.emit(pct, "Extracting...")
+                os.remove(zip_path)
+                print("[INFO] Extraction complete.")
+
+                # Rename folder
+                extracted = os.path.join(chromium_dir, "chrome-win")
+                target64 = os.path.join(chromium_dir, "chrome-win64")
+                if os.path.exists(extracted) and not os.path.exists(target64):
+                    os.rename(extracted, target64)
+                    print(f"[INFO] Renamed chrome-win -> chrome-win64")
+
+                # 4. Download chromedriver (maps 90–98%)
+                self._bridge.chromium_progress.emit(90, "ChromeDriver...")
+                cd_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build}/chromedriver_win32.zip"
+                cd_path = os.path.join(chromium_dir, "chromedriver.zip")
+                print(f"[INFO] Downloading ChromeDriver from: {cd_url}")
+                cd_resp = requests.get(cd_url, stream=True, timeout=120)
+                cd_resp.raise_for_status()
+                cd_total = int(cd_resp.headers.get("content-length", 0))
+                cd_done = 0
+                cd_last = 90
+                with open(cd_path, "wb") as fh:
+                    for chunk in cd_resp.iter_content(65536):
+                        if chunk:
+                            fh.write(chunk)
+                            cd_done += len(chunk)
+                            if cd_total:
+                                pct = 90 + int(cd_done / cd_total * 8)  # 90..98
+                                if pct > cd_last:
+                                    cd_last = pct
+                                    self._bridge.chromium_progress.emit(pct, "ChromeDriver...")
+                with zipfile.ZipFile(cd_path, "r") as zf:
+                    zf.extractall(chromium_dir)
+                os.remove(cd_path)
+                print("[INFO] ChromeDriver extracted.")
+
+                cd_src = os.path.join(chromium_dir, "chromedriver-win32", "chromedriver.exe")
+                cd_dst = os.path.join(target64, "chromedriver.exe")
+                if os.path.exists(cd_src):
+                    shutil.copy2(cd_src, cd_dst)
+                    shutil.rmtree(os.path.join(chromium_dir, "chromedriver-win32"), ignore_errors=True)
+                    print(f"[INFO] chromedriver.exe placed at: {cd_dst}")
+
+                self._bridge.chromium_progress.emit(100, "")
+                self._bridge.chromium_done.emit(True, "")
+
+            except Exception as exc:
+                print(f"[INFO] Worker exception: {exc}")
+                self._bridge.chromium_done.emit(False, str(exc))
+
+        threading.Thread(target=_worker, daemon=True, name="chromium-dl").start()
+
+    def _on_sett_switch_encryption(self):
+        reply = QMessageBox.question(
+            self, "Switch Encryption Method",
+            "Switching encryption will require you to re-import all accounts\n"
+            "from scratch. Existing encrypted data will be removed.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # Reset encryption config and show the built-in Setup page
+            data_folder = "AccountManagerData"
+            cfg_path = os.path.join(data_folder, "encryption_config.json")
             try:
-                window_placement = None
-                try:
-                    window_placement = win32gui.GetWindowPlacement(hwnd)
-                except Exception:
-                    window_placement = None
+                os.remove(cfg_path)
+            except FileNotFoundError:
+                pass
+            self._setup_needed = True
+            self._setup_stack.setCurrentIndex(0)
+            for b in self._normal_nav_btns:
+                b.hide()
+            self._setup_nav_btn.show()
+            self._setup_nav_btn.setChecked(True)
+            self._page_stack.setCurrentIndex(7)
 
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    try:
-                        win32gui.ShowWindow(hwnd, 9)
-                        win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass
-
-                time.sleep(0.12)
-
-                try:
-                    autoit.win_maximize(window_spec)
-                except Exception:
-                    try:
-                        win32gui.ShowWindow(hwnd, 3)
-                    except Exception:
-                        pass
-
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    pass
-
-                time.sleep(0.12)
-
-                for _ in range(max(1, int(press_count))):
-                    if self.anti_afk_stop_event.is_set():
-                        break
-                    self._anti_afk_perform_action(action_key)
-                    time.sleep(0.1)
-
-                time.sleep(0.08)
-
-                if window_placement:
-                    try:
-                        win32gui.SetWindowPlacement(hwnd, window_placement)
-                    except Exception:
-                        pass
-
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    try:
-                        if window_placement and len(window_placement) > 1 and window_placement[1] == 3:
-                            win32gui.ShowWindow(hwnd, 3)
-                        else:
-                            win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass
+    def _on_sett_wipe_data(self):
+        reply = QMessageBox.warning(
+            self, "Wipe All Data",
+            "This will permanently delete ALL saved accounts, settings,\n"
+            "and cached data. This action CANNOT be undone.\n\n"
+            "Are you absolutely sure?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            data_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "AccountManagerData"
+            )
+            try:
+                shutil.rmtree(data_dir, ignore_errors=True)
+                QMessageBox.information(
+                    self, "Done",
+                    "All data wiped. The application will now close."
+                )
+                QApplication.quit()
             except Exception as e:
-                print(f"[Anti-AFK] Error on window {hwnd}: {e}")
+                QMessageBox.critical(self, "Error", f"Wipe failed:\n{e}")
 
-        if original_placement and win32gui.IsWindow(original_hwnd):
-            hwnd = original_hwnd
-            window_spec = f"[HANDLE:0x{hwnd:08X}]"
+    def _on_sett_developer_mode(self, enabled: bool):
+        self._sett_copycookie_chk.setEnabled(enabled)
+        self._sett_ws_chk.setEnabled(enabled)
+        self._sett_ws_pw_chk.setEnabled(enabled and self._sett_ws_chk.isChecked())
+        if not enabled:
+            self._sett_copycookie_chk.setChecked(False)
+            self._sett_ws_chk.setChecked(False)
+            actions.save_ui_setting("enable_copy_cookie", False)
+            actions.save_ui_setting("websocket_enabled", False)
+            self._stop_ws_server()
+
+    def _on_sett_ws_changed(self, enabled: bool):
+        self._sett_ws_pw_chk.setEnabled(
+            enabled and actions.load_ui_settings().get("developer_mode", False)
+        )
+        if enabled:
+            self._start_ws_server()
+        else:
+            self._stop_ws_server()
+
+    def _start_ws_server(self) -> None:
+        if self._ws_server:
+            self._ws_server.start()
+
+    def _stop_ws_server(self) -> None:
+        if self._ws_server:
+            self._ws_server.stop()
+
+    def _on_dc_save(self, *_):
+        try:
+            dc = actions.load_ui_settings().get("discord_webhook", {})
+            dc["enabled"] = self._sett_dc_enabled_chk.isChecked()
+            dc["url"] = self._sett_dc_url_edit.text().strip()
+            dc["enable_ping"] = self._sett_dc_ping_chk.isChecked()
+            dc["ping_user_id"] = self._sett_dc_pingid_edit.text().strip()
+            dc["ping_on_error"] = self._sett_dc_pingerr_chk.isChecked()
+            dc["screenshot_enabled"] = self._sett_dc_ss_chk.isChecked()
+            dc["screenshot_interval_minutes"] = self._sett_dc_ss_spin.value()
+            for key, cb in self._sett_dc_log_chks.items():
+                dc[key] = cb.isChecked()
+            actions.save_ui_setting("discord_webhook", dc)
+        except Exception as e:
+            print(f"[Discord] Failed to save settings: {e}")
+
+    def _on_dc_test(self):
+        url = self._sett_dc_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Missing URL", "Enter a Webhook URL first.")
+            return
+        def _do():
             try:
-                try:
-                    win32gui.SetWindowPlacement(hwnd, original_placement)
-                except Exception:
-                    pass
+                payload = {
+                    "embeds": [{
+                        "title": "Roblox Account Manager Test",
+                        "description": "Discord webhook integration is working correctly!",
+                        "color": 0x2ECC71,
+                        "footer": {"text": "Evanovar's Roblox Account Manager"},
+                    }]
+                }
+                resp = requests.post(
+                    url, json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10,
+                )
+                if resp.status_code in (200, 204):
+                    print("[SUCCESS] Discord test webhook sent.")
+                else:
+                    print(f"[ERROR] Discord test failed: HTTP {resp.status_code} | {resp.text[:120]}")
+            except Exception as e:
+                print(f"[ERROR] Discord test exception: {e}")
+        threading.Thread(target=_do, daemon=True).start()
 
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    try:
-                        win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass
+    def _maybe_send_webhook_embed(self, title: str, description: str, color: int, ping_user_id: str | None = None) -> None:
+        try:
+            dc = actions.load_ui_settings().get("discord_webhook", {})
+            url = str(dc.get("url", "") or "").strip()
+            if dc.get("enabled") and url:
+                ping = ping_user_id
+                if ping is None and dc.get("enable_ping") and dc.get("ping_user_id"):
+                    ping = dc["ping_user_id"]
+                webhook.send_embed(url, title, description, color, ping_user_id=ping)
+        except Exception:
+            pass
+
+    _AR_ACTIVE_COLOR = "#4CAF50"
+    _AR_INACTIVE_COLOR = "#EF5350"
+
+    def _ar_refresh_list(self):
+        if self._ar_list is None:
+            return
+
+        cur = self._ar_selected_account()
+        self._ar_list.clear()
+        if not hasattr(self, "_ar_avatar_labels"):
+            self._ar_avatar_labels: dict[str, QLabel] = {}
+        self._ar_avatar_labels.clear()
+
+        AV = avatars.AVATAR_SIZE
+        ITEM_H = AV + 6
+
+        if not self._ar_configs:
+            empty = QListWidgetItem("No accounts monitored, Press Add Account.")
+            empty.setForeground(QColor(MUTED))
+            empty.setFlags(empty.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self._ar_list.addItem(empty)
+            return
+
+        for account, cfg in self._ar_configs.items():
+            worker = self._ar_workers.get(account)
+            active = worker is not None and worker.is_alive()
+
+            item = QListWidgetItem("")
+            item.setSizeHint(QSize(0, ITEM_H))
+            item.setData(Qt.ItemDataRole.UserRole, account)
+
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(4, 0, 6, 0)
+            row_lay.setSpacing(6)
+
+            # Avatar
+            av_lbl = QLabel()
+            av_lbl.setFixedSize(AV, AV)
+            av_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+            av_lbl.setPixmap(self._make_placeholder_pixmap(AV))
+            row_lay.addWidget(av_lbl)
+            self._ar_avatar_labels[account] = av_lbl
+
+            # Username
+            name_lbl = QLabel(account)
+            name_lbl.setObjectName("accountName")
+            name_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            row_lay.addWidget(name_lbl)
+
+            # status
+            sep = QLabel("|")
+            sep.setObjectName("noteSep")
+            sep.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            row_lay.addWidget(sep)
+
+            status_str = "active"   if active else "inactive"
+            status_color = self._AR_ACTIVE_COLOR if active else self._AR_INACTIVE_COLOR
+            status_lbl = QLabel(status_str)
+            status_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            status_lbl.setStyleSheet(f"color: {status_color}; font-size: 10px;")
+            row_lay.addWidget(status_lbl)
+
+            row_lay.addStretch(1)
+
+            pid_lbl = QLabel(f"Place: {cfg.get('place_id', '?')}")
+            pid_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            pid_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+            row_lay.addWidget(pid_lbl)
+
+            row.setFixedHeight(ITEM_H)
+            self._ar_list.addItem(item)
+            self._ar_list.setItemWidget(item, row)
+
+        # Restore selection
+        if cur:
+            for i in range(self._ar_list.count()):
+                it = self._ar_list.item(i)
+                if it and it.data(Qt.ItemDataRole.UserRole) == cur:
+                    self._ar_list.setCurrentItem(it)
+                    break
+        if self._ar_list.count() > 0 and not self._ar_list.currentItem():
+            self._ar_list.setCurrentRow(0)
+
+        self._ar_load_avatars_async()
+
+    def _ar_load_avatars_async(self): # Load avatar for auto rejoin accounts
+        ar_labels = getattr(self, "_ar_avatar_labels", {})
+        for account in list(ar_labels.keys()):
+            acc_data = self.manager.accounts.get(account, {})
+            if not isinstance(acc_data, dict):
+                continue
+            user_id = str(acc_data.get("user_id") or "")
+            if not user_id or user_id == "0":
+                continue
+            avatars.fetch_avatar_async(
+                user_id, account,
+                on_done=lambda u, b: self._bridge.avatar_ready.emit(u, b),
+            )
+
+    def _on_rejoin_status(self, account: str, status: str) -> None:
+        self._ar_refresh_list()
+
+    def _ar_selected_account(self) -> str | None: # get selected account
+        item = self._ar_list.currentItem() if self._ar_list else None
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _ar_start_worker(self, account: str) -> None: # start worker for an account
+        if account in self._ar_workers and self._ar_workers[account].is_alive():
+            return
+        cfg = self._ar_configs.get(account)
+        if not cfg:
+            return
+        worker = ar.AutoRejoinWorker(
+            account, cfg, self.manager,
+            on_status=lambda u, s: self._bridge.rejoin_status.emit(u, s),
+        )
+        self._ar_workers[account] = worker
+        worker.start()
+
+    def _ar_on_context_menu(self, pos): # Context menu for auto rejoin accounts
+        # Start: start worker to monitor and auto-rejoin for this account
+        # Stop: stop worker and auto-rejoin for this account
+        # Edit: edit the account's auto-rejoin configuration
+        # Remove: stop worker if active, remove account from auto-rejoin list and erase configuration
+        item = self._ar_list.itemAt(pos)
+        if item is None:
+            return
+        account = item.data(Qt.ItemDataRole.UserRole)
+        if not account:
+            return
+
+        self._ar_list.setCurrentItem(item)
+        worker = self._ar_workers.get(account)
+        active = worker is not None and worker.is_alive()
+
+        menu = QMenu(self)
+        act_start = menu.addAction("Start") if not active else None
+        act_stop = menu.addAction("Stop") if active else None
+        act_edit = menu.addAction("Edit")
+        menu.addSeparator()
+        act_remove = menu.addAction("Remove")
+
+        chosen = menu.exec(self._ar_list.mapToGlobal(pos))
+        if act_start  and chosen == act_start:
+            self._ar_on_start()
+        elif act_stop  and chosen == act_stop:
+            self._ar_on_stop()
+        elif chosen == act_edit:
+            self._ar_on_edit()
+        elif chosen == act_remove:
+            self._ar_on_remove()
+
+    # Auto-Rejoin button slots
+    def _ar_on_add(self):
+        win = _AutoRejoinAddWindow(self.manager, self)
+        if win.exec() == QDialog.DialogCode.Accepted:
+            for account, cfg in win.result_configs.items():
+                self._ar_configs[account] = cfg
+            ar.save_configs(self._ar_configs)
+            self._ar_refresh_list()
+
+    def _ar_on_edit(self): # Edit config for the selected account
+        account = self._ar_selected_account()
+        if not account:
+            _show_error(self, "No Selection", "Select an account to edit.")
+            return
+        cfg = self._ar_configs.get(account)
+        if not cfg:
+            return
+        # pre fill the add/edit form with the existing config for this account
+        win = _AutoRejoinAddWindow(self.manager, self, edit_account=account, edit_config=cfg)
+        if win.exec() == QDialog.DialogCode.Accepted:
+            for acc, config in win.result_configs.items():
+                self._ar_configs[acc] = config
+            ar.save_configs(self._ar_configs)
+            self._ar_refresh_list()
+
+    def _ar_on_start(self):
+        account = self._ar_selected_account()
+        if not account:
+            _show_error(self, "No Selection", "Select an account to start.")
+            return
+        self._ar_start_worker(account)
+        self._ar_show_launching_status(account)
+        QTimer.singleShot(500, self._ar_refresh_list)
+
+    def _ar_show_launching_status(self, account: str):
+        for i in range(self._ar_list.count()):
+            item = self._ar_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == account:
+                widget = self._ar_list.itemWidget(item)
+                if widget:
+                    # Find and update the status label
+                    for child in widget.children():
+                        if isinstance(child, QLabel):
+                            style = child.styleSheet()
+                            if "active" in style or "inactive" in style:
+                                child.setText("launching")
+                                child.setStyleSheet(f"color: {NOTE}; font-size: 10px;")
+                                break
+                break 
+
+    def _ar_on_stop(self):
+        account = self._ar_selected_account()
+        if not account:
+            _show_error(self, "No Selection", "Select an account to stop.")
+            return
+        worker = self._ar_workers.pop(account, None)
+        if worker:
+            worker.stop()
+        self._ar_refresh_list()
+
+    def _ar_on_start_all(self):
+        for account in list(self._ar_configs.keys()):
+            self._ar_start_worker(account)
+        for account in list(self._ar_configs.keys()):
+            self._ar_show_launching_status(account)
+        QTimer.singleShot(500, self._ar_refresh_list)
+
+    def _ar_on_stop_all(self):
+        for worker in list(self._ar_workers.values()):
+            worker.stop()
+        self._ar_workers.clear()
+        self._ar_refresh_list()
+
+    def closeEvent(self, event):
+        try:
+            for worker in list(self._ar_workers.values()):
+                worker.stop()
+        except Exception:
+            pass
+        # Stop WebSocket server
+        try:
+            if self._ws_server:
+                self._ws_server.stop()
+        except Exception:
+            pass
+        # Stop screenshot loop
+        try:
+            webhook.stop_screenshot_loop()
+        except Exception:
+            pass
+        # Stop presence scanner
+        try:
+            self._stop_presence_scanner()
+        except Exception:
+            pass
+        # Cleanup drag-drop filter
+        try:
+            if hasattr(self, "_drag_filter"):
+                self._drag_filter.cleanup()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def _ar_on_remove(self):
+        account = self._ar_selected_account()
+        if not account:
+            _show_error(self, "No Selection", "Select an account to remove.")
+            return
+        reply = QMessageBox.question(
+            self, "Remove Auto-Rejoin",
+            f"Remove auto-rejoin for '{account}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        worker = self._ar_workers.pop(account, None)
+        if worker:
+            worker.stop()
+        self._ar_configs.pop(account, None)
+        ar.save_configs(self._ar_configs)
+        self._ar_refresh_list()
+
+    def closeEvent(self, event):
+        for worker in self._ar_workers.values():
+            try:
+                worker.stop(join_timeout=1.0)
             except Exception:
                 pass
+        super().closeEvent(event)
 
-    def _anti_afk_perform_action(self, action_key):
-        mouse_actions = {
-            "lmb": "left",
-            "rmb": "right",
-            "mmb": "middle",
+    def _build_right_panel(self) -> QFrame: # Right panel actions
+        panel = QFrame()
+        panel.setObjectName("rightPanel")
+        panel.setFixedWidth(228)
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        title = QLabel("Actions")
+        title.setObjectName("sectionTitle")
+        lay.addWidget(title)
+
+        # Current place label
+        self._game_name_label = QLabel("")
+        self._game_name_label.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        lay.addWidget(self._game_name_label)
+
+        # Place ID
+        place_lbl = QLabel("Place ID")
+        place_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        lay.addWidget(place_lbl)
+
+        self._place_id_edit = QLineEdit()
+        self._place_id_edit.setPlaceholderText("e.g. 10449761463") # This game is fun
+        self._place_id_edit.textChanged.connect(self._on_place_id_changed)
+        lay.addWidget(self._place_id_edit)
+
+        # Private server
+        priv_lbl = QLabel("Private Server Link (Optional)")
+        priv_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        lay.addWidget(priv_lbl)
+
+        self._private_server_edit = QLineEdit()
+        self._private_server_edit.setPlaceholderText("VIP Link or Link Code")
+        self._private_server_edit.textChanged.connect(
+            lambda: actions.save_ui_setting("last_private_server",
+                                            self._private_server_edit.text())
+        )
+        lay.addWidget(self._private_server_edit)
+
+        # join button
+        join_btn = QPushButton("Join Place ID")
+        join_btn.setStyleSheet(
+            f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
+            f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
+            f"QPushButton:hover   {{ background: #3A3A3A; }}"
+            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+        )
+        join_btn.clicked.connect(self._on_join_place)
+
+        self._join_menu = QMenu(self)
+        act_join_user = self._join_menu.addAction("Join User")
+        act_job_id = self._join_menu.addAction("Job ID")
+        act_small_srv = self._join_menu.addAction("Small Server")
+        act_join_user.triggered.connect(self._on_join_user)
+        act_job_id.triggered.connect(self._on_join_job_id)
+        act_small_srv.triggered.connect(self._on_join_small_server)
+
+        self._join_arrow = QToolButton()
+        self._join_arrow.setObjectName("splitArrow")
+        self._join_arrow.setText("v")
+        self._join_arrow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._join_arrow.setMenu(self._join_menu)
+        self._join_arrow.setFixedWidth(26)
+        self._join_arrow.setFixedHeight(30)
+
+        join_row = QHBoxLayout()
+        join_row.setSpacing(4)
+        join_row.addWidget(join_btn, 1)
+        join_row.addWidget(self._join_arrow)
+        lay.addLayout(join_row)
+
+        recent_header = QHBoxLayout()
+        recent_header.setContentsMargins(0, 0, 0, 0)
+        recent_header.setSpacing(0)
+
+        recent_lbl = QLabel("Recent games")
+        recent_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        recent_header.addWidget(recent_lbl)
+        recent_header.addStretch(1)
+
+        _discord_path = os.path.join(_ROOT_DIR, "AccountManagerData", "discordlogo.png")
+        discord_btn = QPushButton()
+        discord_btn.setObjectName("discordBtn")
+        discord_btn.setFixedSize(18, 18)
+        discord_btn.setToolTip("Join Discord server")
+        discord_btn.setFlat(True)
+        discord_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        discord_btn.setStyleSheet(
+            "QPushButton#discordBtn { background: transparent; border: 0; padding: 0; }"
+            "QPushButton#discordBtn:hover { background: transparent; }"
+        )
+        if os.path.exists(_discord_path):
+            _dpix = QPixmap(_discord_path).scaled(
+                16, 16,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            discord_btn.setIcon(QIcon(_dpix))
+            discord_btn.setIconSize(QSize(16, 16))
+        discord_btn.clicked.connect(
+            lambda: webbrowser.open("https://discord.gg/SZaZU8zwZA")
+        )
+        recent_header.addWidget(discord_btn)
+
+        lay.addLayout(recent_header)
+
+
+        self._recent_list = QListWidget()
+        self._recent_list.setFixedHeight(90)
+        self._recent_list.itemDoubleClicked.connect(self._on_recent_game_double_click)
+        lay.addWidget(self._recent_list)
+
+        # Quick action buttons
+        for label, slot in [
+            ("Edit Note",           self._on_edit_note),
+            ("Refresh List",        self._refresh_account_list),
+            ("Launch Roblox Home",  self._on_launch_home),
+        ]:
+            btn = QPushButton(label)
+            btn.setStyleSheet(
+                f"QPushButton {{ text-align: center; color: {TEXT}; }}"
+            )
+            btn.clicked.connect(slot)
+            lay.addWidget(btn)
+
+        lay.addStretch(1)
+        return panel
+
+    @staticmethod
+    def _make_circular_pixmap(data: bytes, size: int = avatars.AVATAR_SIZE) -> QPixmap: # Avatar helpers
+        src = QPixmap()
+        src.loadFromData(data)
+        if src.isNull():
+            return QPixmap()
+        src = src.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        result = QPixmap(size, size)
+        result.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addEllipse(0, 0, size, size)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, src)
+        painter.end()
+        return result
+
+    @staticmethod
+    def _make_placeholder_pixmap(size: int = avatars.AVATAR_SIZE) -> QPixmap: # Gray icon
+        result = QPixmap(size, size)
+        result.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("#2A2A2A"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        painter.end()
+        return result
+
+    def _get_selected_username(self) -> str | None:
+        item = self._account_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _get_selected_usernames(self) -> list[str]:
+        items = self._account_list.selectedItems()
+        names = []
+        for it in items:
+            u = it.data(Qt.ItemDataRole.UserRole)
+            if u:  # skip group-header rows which have no UserRole data
+                names.append(u)
+        return names
+
+    def _confirm_launch(self, action_label: str, accounts: list[str]) -> bool:
+        if not actions.load_ui_settings().get("confirm_before_launch", False):
+            return True
+        if len(accounts) == 1:
+            msg = f"Launch {action_label} for {accounts[0]}?"
+        else:
+            names_preview = ", ".join(accounts[:5])
+            if len(accounts) > 5:
+                names_preview += f" (+{len(accounts)-5} more)"
+            msg = f"Launch {action_label} for {len(accounts)} accounts:\n{names_preview}"
+        reply = QMessageBox.question(
+            self, "Confirm Launch", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _refresh_account_list(self): # Main account list population and refresh
+        if hasattr(self, "_drag_filter"):
+            self._drag_filter.abort()
+        self._account_list.clear()
+        self._avatar_labels.clear()
+        self._presence_dots.clear()
+        self._invalid_badges.clear()
+        account_items = list(self.manager.accounts.items())
+
+        # Filter by groups
+        if self._current_group is not None:
+            account_items = [
+                (u, d) for u, d in account_items
+                if groups.get_account_group(u) == self._current_group
+            ]
+
+        if not account_items:
+            item = QListWidgetItem("No accounts, use 'Add Account' to add one.")
+            item.setForeground(QColor(MUTED))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self._account_list.addItem(item)
+            self._rebuild_group_bar()
+            return
+
+        AV = avatars.AVATAR_SIZE
+        ITEM_H = AV + 6
+
+        for username, data in account_items:
+            note = data.get("note", "") if isinstance(data, dict) else ""
+
+            item = QListWidgetItem("")
+            item.setSizeHint(QSize(0, ITEM_H))
+            item.setData(Qt.ItemDataRole.UserRole, username)
+
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(4, 0, 6, 0)
+            row_lay.setSpacing(6)
+
+            av_container = QWidget()
+            av_container.setFixedSize(AV, AV)
+
+            av_lbl = QLabel(av_container)
+            av_lbl.setFixedSize(AV, AV)
+            av_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+            )
+            av_lbl.setPixmap(self._make_placeholder_pixmap(AV))
+
+            DOT_SIZE = 6
+            RING = 1
+            dot_lbl = QLabel(av_container)
+            dot_lbl.setFixedSize(DOT_SIZE + RING * 2, DOT_SIZE + RING * 2)
+            dot_lbl.move(AV - DOT_SIZE - RING, AV - DOT_SIZE - RING)
+            dot_lbl.setStyleSheet(f"""
+                QLabel {{
+                    background: #2ECC71;
+                    border-radius: {(DOT_SIZE + RING * 2) // 2}px;
+                    border: {RING}px solid {BG};
+                }}
+            """)
+            is_online = username in self._online_usernames
+            dot_lbl.setVisible(is_online)
+            self._presence_dots[username] = dot_lbl
+
+            row_lay.addWidget(av_container)
+            self._avatar_labels[username] = av_lbl
+
+            flagged = self._cv_mod.is_flagged(data) if isinstance(data, dict) else False
+
+            if flagged:
+                BAD_SIZE = 6
+                BAD_RING = 1
+                bad_lbl = QLabel(av_container)
+                bad_lbl.setFixedSize(BAD_SIZE + BAD_RING * 2, BAD_SIZE + BAD_RING * 2)
+                bad_lbl.move(0, 0)
+                bad_lbl.setStyleSheet(f"""
+                    QLabel {{
+                        background: #E8A020;
+                        border-radius: {(BAD_SIZE + BAD_RING * 2) // 2}px;
+                        border: {BAD_RING}px solid {BG};
+                    }}
+                """)
+                bad_lbl.setToolTip(
+                    "Invalid account, this cookie has expired or been revoked.\n"
+                    "This account cannot be launched.\n"
+                    "Remove it and add it again to fix."
+                )
+                bad_lbl.setVisible(True)
+                self._invalid_badges[username] = bad_lbl
+
+            name_lbl = QLabel(username)
+            name_lbl.setObjectName("accountName")
+            name_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            if flagged:
+                name_lbl.setStyleSheet("color: #E8A020; font-style: italic;")
+                name_lbl.setToolTip(
+                    "Invalid account, cookie expired or revoked.\n"
+                    "Remove and re-add this account."
+                )
+            row_lay.addWidget(name_lbl)
+
+            if note: # Note display
+                sep = QLabel("|")
+                sep.setObjectName("noteSep")
+                sep.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                note_lbl = QLabel(note)
+                note_lbl.setObjectName("noteText")
+                note_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                row_lay.addWidget(sep)
+                row_lay.addWidget(note_lbl)
+
+            row_lay.addStretch(1)
+            row.setFixedHeight(ITEM_H)
+
+            if flagged:
+                row.setStyleSheet(
+                    "QWidget { background: rgba(200, 50, 50, 0.06); }"
+                )
+
+            self._account_list.addItem(item)
+            self._account_list.setItemWidget(item, row)
+
+        if self._account_list.count() > 0:
+            self._account_list.setCurrentRow(0)
+
+        self._rebuild_group_bar()
+        self._load_avatars_async()
+
+
+    def _rebuild_group_bar(self):
+        if self._group_bar_lay is None:
+            return
+        
+        while self._group_bar_lay.count():
+            child = self._group_bar_lay.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # [All] group
+        all_btn = QPushButton("All")
+        all_btn.setObjectName("groupTab")
+        all_btn.setCheckable(True)
+        all_btn.setChecked(self._current_group is None)
+        all_btn.clicked.connect(lambda: self._on_group_tab_clicked(None))
+        self._group_bar_lay.addWidget(all_btn)
+
+        for gname in groups.get_group_names():
+            btn = QPushButton(gname)
+            btn.setObjectName("groupTab")
+            btn.setCheckable(True)
+            btn.setChecked(self._current_group == gname)
+            btn.clicked.connect(lambda _=False, n=gname: self._on_group_tab_clicked(n))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, n=gname, b=btn: self._on_group_tab_context(pos, n, b)
+            )
+            self._group_bar_lay.addWidget(btn)
+
+        # + button to add new group
+        plus_btn = QPushButton("+")
+        plus_btn.setObjectName("groupTab")
+        plus_btn.setFixedWidth(24)
+        plus_btn.setToolTip("Create new group")
+        plus_btn.clicked.connect(self._on_add_group)
+        self._group_bar_lay.addWidget(plus_btn)
+
+        self._group_bar_lay.addStretch(1)
+
+    def _on_group_tab_clicked(self, group_name: str | None):
+        self._current_group = group_name
+        self._rebuild_group_bar()
+        self._refresh_account_list()
+
+    def _on_group_tab_context(self, pos, group_name: str, btn: QPushButton):
+        # Context menu for group tabs
+        # Rename: change the group's name
+        # Delete: remove the group, accounts become ungrouped
+        menu = QMenu(self)
+        act_rename = menu.addAction("Rename")
+        act_delete = menu.addAction("Delete")
+        chosen = menu.exec(btn.mapToGlobal(pos))
+        if chosen == act_rename:
+            self._on_rename_group(group_name)
+        elif chosen == act_delete:
+            self._on_delete_group(group_name)
+
+    def _on_add_group(self):
+        name, ok = QInputDialog.getText(self, "New Group", "Group name:")
+        if not ok or not name.strip():
+            return
+        if not groups.create_group(name.strip()):
+            _show_error(self, "Error", f"Group '{name.strip()}' already exists.")
+            return
+        self._rebuild_group_bar()
+
+    def _on_rename_group(self, old_name: str):
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Group", "New name:", text=old_name
+        )
+        if not ok or not new_name.strip():
+            return
+        if not groups.rename_group(old_name, new_name.strip()):
+            _show_error(self, "Error", "Could not rename, name may already exist.")
+            return
+        if self._current_group == old_name:
+            self._current_group = new_name.strip()
+        self._rebuild_group_bar()
+        self._refresh_account_list()
+
+    def _on_delete_group(self, name: str):
+        reply = QMessageBox.question(
+            self, "Delete Group",
+            f"Delete group '{name}'?\nAccounts in this group will become ungrouped.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        groups.delete_group(name)
+        if self._current_group == name:
+            self._current_group = None
+        self._rebuild_group_bar()
+        self._refresh_account_list()
+
+    def _on_assign_to_group(self, username: str, group_name: str):
+        groups.set_account_group(username, group_name)
+        self._refresh_account_list()
+
+    def _on_remove_from_group(self, username: str):
+        groups.set_account_group(username, None)
+        self._refresh_account_list()
+
+    def _load_avatars_async(self):
+        # Check cache, if not cached fetch from network and update
+        for username, data in self.manager.accounts.items():
+            if not isinstance(data, dict):
+                continue
+            user_id = str(data.get("user_id") or "")
+            if not user_id or user_id == "0":
+                continue
+            avatars.fetch_avatar_async(
+                user_id, username,
+                on_done=lambda u, b: self._bridge.avatar_ready.emit(u, b),
+            )
+
+    def _on_avatar_ready(self, username: str, img_bytes: object):
+        # Convert byte to circular pixmap
+        try:
+            pix = self._make_circular_pixmap(bytes(img_bytes), avatars.AVATAR_SIZE)
+            if pix.isNull():
+                return
+            lbl = self._avatar_labels.get(username)
+            if lbl is not None:
+                lbl.setPixmap(pix)
+            ar_lbl = getattr(self, "_ar_avatar_labels", {}).get(username)
+            if ar_lbl is not None:
+                ar_lbl.setPixmap(pix)
+            # Feed avatar into drag floating label if user is being dragged
+            df = getattr(self, "_drag_filter", None)
+            if df and df._dragging and df._username == username:
+                df.update_float_avatar(pix)
+        except Exception:
+            pass
+
+    # Recent games
+    def _refresh_recent_games(self):
+        self._recent_list.clear()
+        for entry in actions.load_recent_games():
+            pid = entry.get("place_id", "")
+            name = entry.get("name", pid)
+            is_private = entry.get("private", False)
+
+            label = name if (name and name != pid) else pid
+
+            if is_private:
+                label = f"[P] {label}"
+
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, pid)
+            self._recent_list.addItem(item)
+
+    def _on_recent_game_double_click(self, item: QListWidgetItem):
+        pid = item.data(Qt.ItemDataRole.UserRole) or ""
+        if pid:
+            self._place_id_edit.setText(pid)
+
+    def _update_encryption_badge(self):
+        text, color = actions.get_encryption_status(self.manager)
+        self._enc_label.setText(text)
+        self._enc_label.setStyleSheet(
+            f"color: {color};"
+        )
+
+    def _on_place_id_changed(self, text: str):
+        actions.save_ui_setting("last_place_id", text)
+        self._game_name_label.setText("")
+        self._game_name_timer.start(350)
+
+    def _schedule_game_name_fetch(self):
+        self._game_name_timer.start(350)
+
+    def _do_fetch_game_name(self):
+        place_id = self._place_id_edit.text().strip()
+        if not place_id.isdigit():
+            self._game_name_label.setText("")
+            return
+
+        def _cb(name):
+            if name:
+                truncated = name if len(name) <= 28 else name[:26] + ".."
+                display = f"Current: {truncated}"
+            else:
+                display = ""
+
+            self._bridge.game_name_ready.emit(display) # emit to main thread
+
+        actions.fetch_game_name_async(place_id, _cb)
+
+    def _on_add_account_browser(self):
+        actions.add_account_browser(
+            self.manager,
+            on_done=self._on_add_done,
+        )
+
+    def _on_import_cookie(self):
+        dlg = _ImportCookieDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.cookie_value:
+            actions.import_cookie(
+                self.manager,
+                dlg.cookie_value,
+                on_done=self._on_add_done,
+            )
+
+    def _on_add_javascript(self):
+        dlg = _AddJavascriptDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            actions.add_account_browser(
+                self.manager,
+                on_done=self._on_add_done,
+                javascript=dlg.js_value,
+            )
+
+    def _on_add_done(self, success: bool, message: str):
+        self._bridge.account_added.emit(success, message)
+
+    def _on_add_done_main(self, success: bool, message: str):
+        if success:
+            # Auto-refresh the account list
+            self._refresh_account_list()
+            _show_info(self, "Success", f"Successfully added account: {message}")
+        else:
+            _show_error(self, "Error", message)
+
+    def _on_account_reorder(self, from_row: int, insert_before_row: int): # Reoder accounts
+        items = list(self.manager.accounts.items())
+        if from_row < 0 or from_row >= len(items):
+            return
+
+        moved = items.pop(from_row)
+
+        # Adjust target index after removal
+        target = insert_before_row
+        if insert_before_row > from_row:
+            target -= 1
+        target = max(0, min(target, len(items)))
+
+        items.insert(target, moved)
+        self.manager.accounts = dict(items)
+
+        try:
+            self.manager.save_accounts()
+        except Exception as e:
+            print(f"[WARNING] Could not save account order: {e}")
+
+        self._refresh_account_list()
+        print(f"[INFO] Moved '{moved[0]}' to position {target + 1}.")
+
+    # Remove account
+    def _on_remove_account(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account to remove.")
+            return
+        reply = QMessageBox.question(
+            self, "Confirm Removal",
+            f"Remove account '{username}'? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            ok, msg = actions.remove_account(self.manager, username)
+            if ok:
+                self._refresh_account_list()
+            else:
+                _show_error(self, "Error", msg)
+
+    # Join Place ID
+    def _on_join_place(self):
+        usernames = self._get_selected_usernames()
+        if not usernames:
+            _show_error(self, "No selection", "Please select at least one account first.")
+            return
+        if not self._guard_invalid(usernames):
+            return
+        place_id = self._place_id_edit.text().strip()
+        if not place_id:
+            _show_error(self, "Missing Place ID", "Please enter a Place ID.")
+            return
+        if not self._confirm_launch("Join Place ID", usernames):
+            return
+        private = self._private_server_edit.text().strip()
+        if len(usernames) == 1:
+            print(f"[INFO] Joining place {place_id} for {usernames[0]}")
+            actions.join_place(
+                self.manager, usernames[0], place_id, private,
+                on_done=self._emit_launch_done,
+            )
+        else:
+            print(f"[INFO] Joining place {place_id} for {len(usernames)} accounts")
+            actions.join_place_all(
+                self.manager, usernames, place_id, private,
+                on_done=self._emit_launch_done,
+            )
+
+    # Join User
+    def _on_join_user(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account first.")
+            return
+        if not self._guard_invalid([username]):
+            return
+        target, ok = QInputDialog.getText(
+            self, "Join User", "Enter the Roblox username to join:"
+        )
+        if not ok or not target.strip():
+            return
+        if not self._confirm_launch(f"Join User ({target.strip()})", [username]):
+            return
+        print(f"[INFO] Joining user {target.strip()} for {username}")
+        actions.join_user(
+            self.manager, username, target.strip(),
+            on_done=self._emit_launch_done,
+        )
+
+    # Join Job ID
+    def _on_join_job_id(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account first.")
+            return
+        if not self._guard_invalid([username]):
+            return
+        place_id = self._place_id_edit.text().strip()
+        if not place_id:
+            _show_error(self, "Missing Place ID", "Enter a Place ID first.")
+            return
+        job_id, ok = QInputDialog.getText(
+            self, "Job ID", "Enter the Job ID (game instance ID):"
+        )
+        if not ok or not job_id.strip():
+            return
+        if not self._confirm_launch("Join Job ID", [username]):
+            return
+        print(f"[INFO] Joining job {job_id.strip()} in place {place_id} for {username}")
+        actions.join_job_id(
+            self.manager, username, place_id, job_id.strip(),
+            on_done=self._emit_launch_done,
+        )
+
+    # Join Small Server
+    def _on_join_small_server(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account first.")
+            return
+        if not self._guard_invalid([username]):
+            return
+        place_id = self._place_id_edit.text().strip()
+        if not place_id:
+            _show_error(self, "Missing Place ID", "Enter a Place ID first.")
+            return
+        if not self._confirm_launch("Join Small Server", [username]):
+            return
+        print(f"[INFO] Joining smallest server for place {place_id} with {username}")
+        actions.join_small_server(
+            self.manager, username, place_id,
+            on_done=self._emit_launch_done,
+        )
+
+    # Edit Account
+    def _on_edit_account(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account first.")
+            return
+        current_note = actions.get_note(self.manager, username)
+        current_group = groups.get_account_group(username) or ""
+        dlg = _EditAccountDialog(username, current_note, current_group, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # Update note
+            actions.set_note(self.manager, username, dlg.note_value)
+            # Update group
+            new_group = dlg.group_value
+            if new_group:
+                groups.set_account_group(username, new_group)
+            else:
+                groups.set_account_group(username, None)
+            self._refresh_account_list()
+            self._rebuild_group_bar()
+
+    # Edit Note
+    def _on_edit_note(self):
+        usernames = self._get_selected_usernames()
+        if not usernames:
+            _show_error(self, "No selection", "Please select at least one account first.")
+            return
+        # Use first selected username as the dialog reference
+        first = usernames[0]
+        current = actions.get_note(self.manager, first) if len(usernames) == 1 else ""
+        dlg = _EditNoteDialog(first if len(usernames) == 1 else f"{len(usernames)} accounts", current, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            for u in usernames:
+                actions.set_note(self.manager, u, dlg.note_value)
+            print(f"[INFO] Note updated for {len(usernames)} account(s)")
+            self._refresh_account_list()
+
+    # Launch Roblox Home
+    def _on_launch_home(self):
+        username = self._get_selected_username()
+        if not username:
+            _show_error(self, "No selection", "Please select an account first.")
+            return
+        if not self._guard_invalid([username]):
+            return
+        if not self._confirm_launch("Launch Roblox Home", [username]):
+            return
+        print(f"[INFO] Launching Roblox Home for {username}")
+        actions.launch_home(
+            self.manager, username,
+            on_done=self._emit_launch_done,
+        )
+
+    def _emit_launch_done(self, success: bool, message: str):
+        self._bridge.launch_done.emit(success, message)
+
+    def _on_launch_and_refresh(self, success: bool, message: str):
+        self._refresh_recent_games()
+        if not success:
+            if message == "EXPIRED_COOKIE":
+                QMessageBox.warning(
+                    self, "Account Expired",
+                    "The account is expired.\n\nPlease remove it and add it again."
+                )
+            elif message:
+                _show_error(self, "Launch Error", message)
+
+    # def _on_launch_done(self, success: bool, message: str):
+    #     if not success and message:
+    #         _show_error(self, "Launch Error", message)
+
+    # Right-click context menu on account list
+    def _on_account_context_menu(self, pos):
+        item = self._account_list.itemAt(pos)
+        if item is None:
+            return
+        username = item.data(Qt.ItemDataRole.UserRole)
+        if not username:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {PANEL}; border: 1px solid {LINE};"
+            f"  color: {TEXT}; font-size: 11px; }}"
+            f"QMenu::item:selected {{ background: {SELECT}; }}"
+            f"QMenu::item:disabled {{ color: {MUTED}; }}"
+        )
+
+        S = actions.load_ui_settings()
+        multi_sel = self._get_selected_usernames()
+        is_multi = len(multi_sel) > 1
+
+        act_join = menu.addAction("Join Place ID")
+        act_note = menu.addAction("Edit Note")
+        menu.addSeparator()
+
+        # Copy Contents submenu
+        copy_menu = menu.addMenu("Copy Contents")
+        copy_menu.setStyleSheet(
+            f"QMenu {{ background: {PANEL}; border: 1px solid {LINE};"
+            f"  color: {TEXT}; font-size: 11px; }}"
+            f"QMenu::item:selected {{ background: {SELECT}; }}"
+        )
+        act_copy_user = copy_menu.addAction("Copy Username")
+        act_copy_pass = copy_menu.addAction("Copy Password")
+        act_copy_up = copy_menu.addAction("Copy User:Pass")
+        copy_cookie_enabled = S.get("enable_copy_cookie", False)
+        act_copy_cookie = copy_menu.addAction("Copy Cookie")
+        act_copy_cookie.setEnabled(copy_cookie_enabled)
+
+        menu.addSeparator()
+
+        move_menu = menu.addMenu("Move to Group")
+        move_menu.setStyleSheet(
+            f"QMenu {{ background: {PANEL}; border: 1px solid {LINE};"
+            f"  color: {TEXT}; font-size: 11px; }}"
+            f"QMenu::item:selected {{ background: {SELECT}; }}"
+        )
+        group_list = groups.get_group_names()
+        if group_list:
+            for gname in group_list:
+                act_grp = move_menu.addAction(gname)
+                act_grp.triggered.connect(
+                    lambda _=False, u=username, g=gname: self._on_assign_to_group(u, g)
+                )
+            move_menu.addSeparator()
+        act_ungrp = move_menu.addAction("Remove from Group")
+        act_ungrp.triggered.connect(lambda: self._on_remove_from_group(username))
+
+        menu.addSeparator()
+        act_remove = menu.addAction("Remove Account")
+
+        chosen = menu.exec(self._account_list.mapToGlobal(pos))
+        if chosen == act_join:
+            self._account_list.setCurrentItem(item)
+            self._on_join_place()
+        elif chosen == act_note:
+            self._account_list.setCurrentItem(item)
+            self._on_edit_note()
+        elif chosen == act_remove:
+            self._account_list.setCurrentItem(item)
+            self._on_remove_account()
+        elif chosen in (act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie):
+            self._on_copy_contents(chosen, act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie, username, is_multi, multi_sel)
+
+    def _on_copy_contents(self, chosen, act_user, act_pass, act_up, act_cookie, username: str, is_multi: bool, multi_sel):
+        def _get_data(u):
+            d = self.manager.accounts.get(u, {})
+            return {"username": u, "password": d.get("password", ""), "cookie": d.get("cookie", "")}
+        targets = multi_sel if is_multi else [username]
+        if chosen == act_user:
+            field, fmt = "username", lambda d: d["username"]
+        elif chosen == act_pass:
+            field, fmt = "password", lambda d: d["password"]
+        elif chosen == act_up:
+            field, fmt = "user_pass", lambda d: d["username"] + ":" + d["password"]
+        else:
+            field, fmt = "cookie", lambda d: d["cookie"]
+        lines = [fmt(_get_data(u)) for u in targets]
+        if is_multi:
+            filter_str = "Text Files (*.txt);;All Files (*)"
+            default_name = "export_" + field + ".txt"
+            path2, _ = QFileDialog.getSaveFileName(self, "Save Export", default_name, filter_str)
+            if path2:
+                try:
+                    with open(path2, "w", encoding="utf-8") as fp:
+                        fp.write("\n".join(lines))
+                    print("[SUCCESS] Exported " + str(len(lines)) + " entries to " + os.path.basename(path2))
+                    QMessageBox.information(self, "Export Done",
+                        "Exported " + str(len(lines)) + " account(s) to:\n" + path2)
+                except Exception as e:
+                    print("[ERROR] Export failed: " + str(e))
+        else:
+            QApplication.clipboard().setText(lines[0] if lines else "")
+            print("[INFO] Copied " + field + " for " + username + " to clipboard")
+
+    def _drain_console_queue(self):
+        q = getattr(self, "_console_queue", None)
+        if not q:
+            return
+        widget = getattr(self, "_console_view", None)
+        if widget is None:
+            return
+        batch: list[tuple[str, str | None]] = []
+        for _ in range(50):
+            try:
+                batch.append(q.popleft())
+            except IndexError:
+                break
+        if not batch:
+            return
+        cursor = widget.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        for text, color in batch:
+            fmt = QTextCharFormat()
+            if color:
+                fmt.setForeground(QColor(color))
+            else:
+                fmt.clearForeground()
+            cursor.setCharFormat(fmt)
+            cursor.insertText(text + "\n")
+        widget.setTextCursor(cursor)
+        widget.ensureCursorVisible()
+
+    _DONATION_URL = "https://www.roblox.com/games/718090786/donation#!/store" # donate!!
+
+    def _build_donations_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("settingsPanel")
+
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addStretch(1)
+
+        card = QFrame()
+        card.setObjectName("donationCard")
+        card.setStyleSheet(f"""
+            #donationCard {{
+                background: {PANEL};
+                border: 1px solid {LINE};
+                border-radius: 10px;
+            }}
+        """)
+        card.setMaximumWidth(420)
+        card.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
+        )
+
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(32, 32, 32, 32)
+        card_lay.setSpacing(18)
+        card_lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+
+        title_lbl = QLabel("Support the Creator")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        title_lbl.setStyleSheet(
+            f"font-size: 15px; font-weight: 700; color: {TEXT}; background: transparent;"
+        )
+        card_lay.addWidget(title_lbl)
+
+        desc_lbl = QLabel("Support the creator by donating via Robux!")
+        desc_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet(
+            f"font-size: 11px; color: {MUTED}; background: transparent;"
+        )
+        card_lay.addWidget(desc_lbl)
+
+        copy_btn = QPushButton("Copy Link")
+        copy_btn.setFixedHeight(34)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {FG_ACCENT};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: #1a8fe0;
+            }}
+            QPushButton:pressed {{
+                background: #006dc4;
+            }}
+        """)
+
+        def _copy_link():
+            QApplication.clipboard().setText(self._DONATION_URL)
+            copy_btn.setText("Copied!")
+            QTimer.singleShot(2000, lambda: copy_btn.setText("Copy Link"))
+
+        copy_btn.clicked.connect(_copy_link)
+        card_lay.addWidget(copy_btn)
+
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(card)
+        h.addStretch(1)
+        outer.addLayout(h)
+
+        outer.addStretch(1)
+        return panel
+
+    def _build_console_panel(self) -> QFrame: # Console panel
+        panel = QFrame()
+        panel.setObjectName("centerPanel")
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        ttl = QLabel("Console")
+        ttl.setObjectName("sectionTitle")
+        hdr.addWidget(ttl)
+        hdr.addStretch(1)
+        lay.addLayout(hdr)
+
+        self._console_view = QTextEdit()
+        self._console_view.setReadOnly(True)
+        self._console_view.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background: {INPUT};"
+            f"  border: 1px solid {LINE};"
+            f"  color: {TEXT};"
+            f"  font-family: Consolas, 'Courier New', monospace;"
+            f"  font-size: 11px;"
+            f"  padding: 4px;"
+            f"}}"
+        )
+        lay.addWidget(self._console_view, 1)
+
+        _BTN_STYLE = (
+            f"QPushButton {{"
+            f"  background: {INPUT}; border: 1px solid {LINE};"
+            f"  color: {TEXT}; font-size: 11px; min-height: 26px; padding: 2px 8px;"
+            f"}}"
+            f"QPushButton:hover   {{ background: {SELECT}; }}"
+            f"QPushButton:pressed {{ background: {SELECT}; }}"
+        )
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+
+        copy_btn = QPushButton("Copy")
+        copy_btn.setStyleSheet(_BTN_STYLE)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(
+            self._console_view.toPlainText()
+        ))
+        btn_row.addWidget(copy_btn)
+
+        clr_btn = QPushButton("Clear")
+        clr_btn.setStyleSheet(_BTN_STYLE)
+        clr_btn.clicked.connect(self._console_view.clear)
+        btn_row.addWidget(clr_btn)
+
+        lay.addLayout(btn_row)
+
+        return panel
+
+# Dialogs
+_DLG_STYLE = f"""
+    QDialog   {{ background: {BG}; }}
+    QLabel    {{ color: {TEXT}; font-size: 11px; }}
+    QLineEdit {{ background: {INPUT}; border: 1px solid {LINE};
+                color: {TEXT}; padding: 4px 6px; min-height: 24px; }}
+    QTextEdit {{ background: {INPUT}; border: 1px solid {LINE};
+                color: {TEXT}; font-family: Consolas, monospace; font-size: 11px; }}
+    QPushButton {{
+        background: {INPUT}; border: 1px solid {LINE};
+        color: {TEXT}; min-height: 26px; padding: 2px 12px; font-size: 11px;
+    }}
+    QPushButton:hover   {{ background: {SELECT}; }}
+    QPushButton:pressed {{ background: {SELECT}; }}
+"""
+
+
+class _ImportCookieDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.cookie_value = ""
+        self.setWindowTitle("Import Cookie")
+        self.setFixedSize(480, 200)
+        self.setStyleSheet(_DLG_STYLE)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("Import Account from Cookie"))
+        lay.addWidget(QLabel("Paste your .ROBLOSECURITY cookie(s) below:"))
+
+        self._text = QTextEdit()
+        self._text.setPlaceholderText("_|WARNING:-DO-NOT-SHARE-THIS...")
+        self._text.setFixedHeight(70)
+        lay.addWidget(self._text)
+
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Import")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _accept(self):
+        self.cookie_value = self._text.toPlainText().strip()
+        if self.cookie_value:
+            self.accept()
+
+
+class _AddJavascriptDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.js_value = ""
+        self.setWindowTitle("Add via Javascript")
+        self.setFixedSize(480, 260)
+        self.setStyleSheet(_DLG_STYLE)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel(
+            "A browser will open for login.\n"
+            "Optionally paste Javascript to execute after the page loads:"
+        ))
+
+        self._edit = QTextEdit()
+        self._edit.setPlaceholderText("// optional JS\nconsole.log('hello');")
+        lay.addWidget(self._edit, 1)
+
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Open Browser")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _accept(self):
+        self.js_value = self._edit.toPlainText()
+        self.accept()
+
+
+class _EditNoteDialog(QDialog):
+    def __init__(self, username: str, current_note: str, parent):
+        super().__init__(parent)
+        self.note_value = current_note
+        self.setWindowTitle(f"Edit Note - {username}")
+        self.setFixedSize(380, 150)
+        self.setStyleSheet(_DLG_STYLE)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel(f"Note for {username}:"))
+
+        self._entry = QLineEdit(current_note)
+        self._entry.setPlaceholderText("Enter a note…")
+        lay.addWidget(self._entry)
+
+        btn_row = QHBoxLayout()
+        clr_btn = QPushButton("Clear")
+        clr_btn.clicked.connect(self._entry.clear)
+        ok_btn = QPushButton("Save")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addWidget(clr_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _accept(self):
+        self.note_value = self._entry.text()
+        self.accept()
+
+
+class _EditAccountDialog(QDialog):
+    def __init__(self, username: str, current_note: str, current_group: str, parent):
+        super().__init__(parent)
+        self.note_value = current_note
+        self.group_value = current_group
+        self.setWindowTitle(f"Edit Account - {username}")
+        self.setFixedSize(400, 220)
+        self.setStyleSheet(_DLG_STYLE)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel(f"Account: {username}"))
+
+        note_lbl = QLabel("Note:")
+        lay.addWidget(note_lbl)
+        self._note_entry = QLineEdit(current_note)
+        self._note_entry.setPlaceholderText("Enter a note…")
+        lay.addWidget(self._note_entry)
+
+        group_lbl = QLabel("Group:")
+        lay.addWidget(group_lbl)
+        self._group_combo = QComboBox()
+        self._group_combo.setStyleSheet(
+            f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; }}"
+            f"QComboBox::drop-down {{ border: 0; width: 20px; }}"
+        )
+        self._group_combo.addItem("(No Group)", "")
+        for gname in groups.get_group_names():
+            self._group_combo.addItem(gname, gname)
+        if current_group:
+            idx = self._group_combo.findData(current_group)
+            if idx >= 0:
+                self._group_combo.setCurrentIndex(idx)
+        lay.addWidget(self._group_combo)
+
+        btn_row = QHBoxLayout()
+        clr_btn = QPushButton("Clear Note")
+        clr_btn.clicked.connect(self._note_entry.clear)
+        ok_btn = QPushButton("Save")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addWidget(clr_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _accept(self):
+        self.note_value = self._note_entry.text()
+        self.group_value = self._group_combo.currentData()
+        self.accept()
+
+
+class _AutoRejoinAddWindow(QDialog):
+    # Panel for adding accounts to auto rejoin and edit accounts
+    # Left side: List of accounts
+    # Right side: config form
+    def __init__(self, manager, parent=None, edit_account=None, edit_config=None):
+        super().__init__(parent)
+        self.manager = manager
+        self.result_configs: dict = {}
+        self._edit_mode = edit_account is not None
+        self._edit_account = edit_account
+        self._edit_config = edit_config or {}
+
+        self.setWindowTitle("Edit Auto-Rejoin" if self._edit_mode else "Add Account to Auto-Rejoin")
+        # Size to tweak i keep forgetting
+        # the 225 one is for edit
+        # the other one is for add
+        self.setFixedSize(225 if self._edit_mode else 550, 420)
+        self.setSizeGripEnabled(False)
+        self.setStyleSheet(_DLG_STYLE + f"""
+            QListWidget {{
+                background: {INPUT}; border: 1px solid {LINE};
+                font-size: 11px; color: {TEXT};
+            }}
+            QListWidget::item:selected {{ background: {SELECT}; }}
+            QPushButton#groupTab {{
+                background: transparent; border: 1px solid {LINE};
+                color: {MUTED}; font-size: 10px; padding: 2px 8px;
+                min-height: 20px;
+            }}
+            QPushButton#groupTab:checked {{ background: {SELECT}; color: {TEXT}; }}
+            QPushButton#groupTab:hover   {{ background: {SELECT}; }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(8)
+
+        # Title bar row
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        lbl = QLabel("Edit Auto-Rejoin" if self._edit_mode else "Add Account to Auto-Rejoin")
+        lbl.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: bold;")
+        title_row.addWidget(lbl)
+        title_row.addStretch(1)
+        close_btn = QPushButton("\u2715")
+        close_btn.setFixedSize(22, 22)
+        close_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; color: {MUTED}; font-size: 13px; }}"
+            f"QPushButton:hover {{ color: {TEXT}; }}"
+        )
+        close_btn.clicked.connect(self.reject)
+        title_row.addWidget(close_btn)
+        root.addLayout(title_row)
+
+        # Sub-title hint directly below the title
+        self._hint_label = QLabel("Ctrl / Shift to select multiple accounts")
+        self._hint_label.setStyleSheet(f"color: {MUTED}; font-size: 9px;")
+        root.addWidget(self._hint_label)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+
+        # Left side
+        self._left_widget = QWidget()
+        left = QVBoxLayout(self._left_widget)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(4)
+
+        self._current_group: str | None = None
+
+        # Group scroll bar
+        self._gscroll = QScrollArea()
+        self._gscroll.setWidgetResizable(True)
+        self._gscroll.setFixedHeight(28)
+        self._gscroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._gscroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._gscroll.setStyleSheet("background: transparent; border: none;")
+
+        _gbar_widget = QWidget()
+        _gbar_widget.setStyleSheet("background: transparent;")
+        self._gbar_lay = QHBoxLayout(_gbar_widget)
+        self._gbar_lay.setContentsMargins(0, 0, 0, 0)
+        self._gbar_lay.setSpacing(4)
+        self._gscroll.setWidget(_gbar_widget)
+        left.addWidget(self._gscroll)
+
+        self._acc_list = QListWidget()
+        self._acc_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        left.addWidget(self._acc_list, 1)
+
+        body.addWidget(self._left_widget, 1)
+
+        # Right side
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(6)
+        right.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        _LBL = f"color: {MUTED}; font-size: 10px;"
+        _INP = (
+            f"QLineEdit {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 3px 5px; font-size: 11px; }}"
+        )
+        _SPN = (
+            f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 2px 4px; font-size: 11px; }}"
+        )
+        _CHK = (
+            f"QCheckBox {{ color: {TEXT}; font-size: 11px; }}"
+            f"QCheckBox::indicator {{ width: 13px; height: 13px; }}"
+        )
+
+        cfg_hdr = QLabel("Configuration")
+        cfg_hdr.setStyleSheet(f"color: {TEXT}; font-size: 11px; font-weight: bold;")
+        right.addWidget(cfg_hdr)
+
+        # Account label for edit mode
+        self._account_lbl = QLabel()
+        self._account_lbl.setStyleSheet(f"color: {TEXT}; font-size: 11px; font-weight: bold;")
+        right.addWidget(self._account_lbl)
+
+        right.addWidget(QLabel("Place ID:", styleSheet=_LBL))
+        self._place = QLineEdit()
+        self._place.setPlaceholderText("e.g. 8562822414")
+        self._place.setStyleSheet(_INP)
+        self._place.setFixedWidth(200)
+        right.addWidget(self._place)
+
+        right.addWidget(QLabel("Private Server ID:", styleSheet=_LBL))
+        self._ps = QLineEdit()
+        self._ps.setPlaceholderText("optional")
+        self._ps.setStyleSheet(_INP)
+        self._ps.setFixedWidth(200)
+        right.addWidget(self._ps)
+
+        right.addWidget(QLabel("Job ID:", styleSheet=_LBL))
+        self._job = QLineEdit()
+        self._job.setPlaceholderText("optional")
+        self._job.setStyleSheet(_INP)
+        self._job.setFixedWidth(200)
+        right.addWidget(self._job)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Interval:", styleSheet=_LBL))
+        self._interval = QSpinBox()
+        self._interval.setRange(5, 300)
+        self._interval.setValue(10)
+        self._interval.setSingleStep(5)
+        self._interval.setSuffix(" s")
+        self._interval.setStyleSheet(_SPN)
+        self._interval.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row1.addWidget(self._interval)
+        right.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Retries:", styleSheet=_LBL))
+        self._retries = QSpinBox()
+        self._retries.setRange(1, 50)
+        self._retries.setValue(5)
+        self._retries.setStyleSheet(_SPN)
+        self._retries.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row2.addWidget(self._retries)
+        right.addLayout(row2)
+
+        self._presence_chk = QCheckBox("Check player presence")
+        self._presence_chk.setChecked(True)
+        self._presence_chk.setStyleSheet(_CHK)
+        right.addWidget(self._presence_chk)
+
+        self._internet_chk = QCheckBox("Check internet before launch")
+        self._internet_chk.setChecked(True)
+        self._internet_chk.setStyleSheet(_CHK)
+        right.addWidget(self._internet_chk)
+
+        right.addStretch(1)
+
+        # Save changes if edit mode
+        # Add account if add mode
+        self._add_btn = QPushButton("Save Changes" if self._edit_mode else "Add Account")
+        self._add_btn.setFixedHeight(30)
+        self._add_btn.setFixedWidth(200)
+        self._add_btn.setStyleSheet(
+            f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
+            f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
+            f"QPushButton:hover   {{ background: #3A3A3A; }}"
+            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+        )
+        self._add_btn.clicked.connect(self._on_add)
+        right.addWidget(self._add_btn)
+
+        body.addLayout(right)
+        root.addLayout(body, 1)
+
+        if self._edit_mode:
+            self._apply_edit_mode()
+        else:
+            self._rebuild_group_bar()
+            self._populate_list()
+
+    def _apply_edit_mode(self):
+        # Hide left panel for single account editing
+        self._left_widget.hide()
+        self._hint_label.hide()
+        self._account_lbl.hide()
+
+        # Pre-fill config values for the account being edited
+        cfg = self._edit_config
+        self._place.setText(cfg.get("place_id", ""))
+        self._ps.setText(cfg.get("private_server", ""))
+        self._job.setText(cfg.get("job_id", ""))
+        self._interval.setValue(int(cfg.get("check_interval", 10)))
+        self._retries.setValue(int(cfg.get("max_retries", 5)))
+        self._presence_chk.setChecked(bool(cfg.get("check_presence", True)))
+        self._internet_chk.setChecked(bool(cfg.get("check_internet", True)))
+
+    def _rebuild_group_bar(self):
+        while self._gbar_lay.count():
+            child = self._gbar_lay.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        for gval, glabel in [(None, "All")] + [(g, g) for g in groups.get_group_names()]:
+            btn = QPushButton(glabel)
+            btn.setObjectName("groupTab")
+            btn.setCheckable(True)
+            btn.setChecked(self._current_group == gval)
+            btn.clicked.connect(lambda _=False, g=gval: self._set_group(g))
+            self._gbar_lay.addWidget(btn)
+        self._gbar_lay.addStretch(1)
+
+    def _set_group(self, group_name):
+        self._current_group = group_name
+        self._rebuild_group_bar()
+        self._populate_list()
+    
+    # Account list population
+    def _populate_list(self):
+        self._acc_list.clear()
+        AV = avatars.AVATAR_SIZE
+        ITEM_H = AV + 6
+
+        items = list(self.manager.accounts.items())
+        if self._current_group is not None:
+            items = [(u, d) for u, d in items if groups.get_account_group(u) == self._current_group]
+
+        for username, data in items:
+            note = data.get("note", "") if isinstance(data, dict) else ""
+            item = QListWidgetItem("")
+            item.setSizeHint(QSize(0, ITEM_H))
+            item.setData(Qt.ItemDataRole.UserRole, username)
+
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(4, 0, 6, 0)
+            rl.setSpacing(6)
+
+            # Avatar
+            av = QLabel()
+            av.setFixedSize(AV, AV)
+            av.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+
+            # Use cached pixmap from main account list
+            par = self.parent()
+            cached_pix = None
+            if par and hasattr(par, "_avatar_labels"):
+                src_lbl = par._avatar_labels.get(username)
+                if src_lbl:
+                    cached_pix = src_lbl.pixmap()
+            if cached_pix and not cached_pix.isNull():
+                av.setPixmap(cached_pix)
+            else:
+                if par and hasattr(par, "_make_placeholder_pixmap"):
+                    av.setPixmap(par._make_placeholder_pixmap(AV))
+            rl.addWidget(av)
+
+            name_lbl = QLabel(username)
+            name_lbl.setObjectName("accountName")
+            name_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            rl.addWidget(name_lbl)
+
+            if note:
+                sep = QLabel("|")
+                sep.setObjectName("noteSep")
+                sep.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                rl.addWidget(sep)
+                note_lbl = QLabel(note)
+                note_lbl.setObjectName("noteText")
+                note_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                rl.addWidget(note_lbl)
+
+            rl.addStretch(1)
+            row.setFixedHeight(ITEM_H)
+
+            self._acc_list.addItem(item)
+            self._acc_list.setItemWidget(item, row)
+
+    def _on_add(self):
+        place_id = self._place.text().strip()
+        if not place_id:
+            QMessageBox.warning(self, "Missing Place ID", "Enter a Place ID to monitor.")
+            return
+        if not place_id.isdigit():
+            QMessageBox.critical(self, "Invalid Place ID", "Place ID must be a number.")
+            return
+
+        cfg = {
+            "place_id": place_id,
+            "private_server": self._ps.text().strip(),
+            "job_id": self._job.text().strip(),
+            "check_interval": self._interval.value(),
+            "max_retries": self._retries.value(),
+            "check_presence": self._presence_chk.isChecked(),
+            "check_internet": self._internet_chk.isChecked(),
         }
 
-        if action_key in mouse_actions:
-            button = mouse_actions[action_key]
-            autoit.mouse_down(button)
-            time.sleep(0.1)
-            autoit.mouse_up(button)
-            return
-
-        if action_key == "scroll_up":
-            autoit.mouse_wheel("up", 1)
-            return
-
-        if action_key == "scroll_down":
-            autoit.mouse_wheel("down", 1)
-            return
-
-        autoit.send(f"{{{action_key.upper()} down}}")
-        time.sleep(0.1)
-        autoit.send(f"{{{action_key.upper()} up}}")
-    
-    def send_key_to_roblox_windows(self, action):
-        try:
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            
-            KEYEVENTF_KEYUP = 0x0002
-            SW_RESTORE = 9
-            SW_MINIMIZE = 6
-            MOUSEEVENTF_LEFTDOWN = 0x0002
-            MOUSEEVENTF_LEFTUP = 0x0004
-            MOUSEEVENTF_RIGHTDOWN = 0x0008
-            MOUSEEVENTF_RIGHTUP = 0x0010
-            
-            vk_codes = {
-                'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
-                'space': 0x20, ' ': 0x20,
-                'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
-            }
-            
-            is_mouse = action.upper() in ['LMB', 'RMB']
-            
-            if not is_mouse:
-                action_lower = action.lower()
-                if action_lower in vk_codes:
-                    vk_code = vk_codes[action_lower]
-                elif len(action) == 1:
-                    vk_code = ord(action.upper())
-                else:
-                    print(f"[Anti-AFK] Unknown action: {action}")
-                    return
-            
-            roblox_pids = set()
-            for proc in psutil.process_iter(['pid', 'name']):
-                try:
-                    if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                        pid = proc.info['pid']
-                        if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                            roblox_pids.add(pid)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            
-            if not roblox_pids:
-                return
-            
-            roblox_windows = []
-            
-            def enum_windows_callback(hwnd, lParam):
-                if user32.IsWindowVisible(hwnd):
-                    pid = wintypes.DWORD()
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value in roblox_pids:
-                        roblox_windows.append((hwnd, pid.value))
-                return True
-            
-            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
-            
-            if not roblox_windows:
-                return
-            
-            original_hwnd = user32.GetForegroundWindow()
-            current_thread_id = kernel32.GetCurrentThreadId()
-            
-            for hwnd, pid in roblox_windows:
-                try:
-                    was_minimized = user32.IsIconic(hwnd)
-                    if was_minimized:
-                        user32.ShowWindow(hwnd, SW_RESTORE)
-                        time.sleep(0.05)
-                    
-                    target_thread_id = user32.GetWindowThreadProcessId(hwnd, None)
-                    user32.AttachThreadInput(current_thread_id, target_thread_id, True)
-                    user32.BringWindowToTop(hwnd)
-                    user32.SetForegroundWindow(hwnd)
-                    user32.AttachThreadInput(current_thread_id, target_thread_id, False)
-                    time.sleep(0.1)
-                    
-                    if is_mouse:
-                        if action.upper() == 'LMB':
-                            user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                            time.sleep(0.05)
-                            user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                        elif action.upper() == 'RMB':
-                            user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-                            time.sleep(0.05)
-                            user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-                    else:
-                        scan_code = user32.MapVirtualKeyW(vk_code, 0)
-                        user32.keybd_event(vk_code, scan_code, 0, 0)
-                        time.sleep(0.05)
-                        user32.keybd_event(vk_code, scan_code, KEYEVENTF_KEYUP, 0)
-                    
-                    if was_minimized:
-                        user32.ShowWindow(hwnd, SW_MINIMIZE)
-                    
-                    time.sleep(0.1)
-                    
-                except Exception as e:
-                    print(f"[Anti-AFK] Error on PID {pid}: {e}")
-            
-            if original_hwnd:
-                try:
-                    prev_thread_id = user32.GetWindowThreadProcessId(original_hwnd, None)
-                    user32.AttachThreadInput(current_thread_id, prev_thread_id, True)
-                    user32.BringWindowToTop(original_hwnd)
-                    user32.SetForegroundWindow(original_hwnd)
-                    user32.AttachThreadInput(current_thread_id, prev_thread_id, False)
-                except:
-                    pass
-            
-        except Exception as e:
-            print(f"[Anti-AFK] Failed to send action: {e}")
-    
-    def send_key_to_roblox_windows_staggered(self, action, window_timers, current_time):
-        """Send key presses to Roblox windows"""
-        try:
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            
-            vk_codes = {
-                'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
-                'space': 0x20, ' ': 0x20,
-                'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12
-            }
-            
-            KEYEVENTF_KEYUP = 0x0002
-            SW_RESTORE = 9
-            SW_MINIMIZE = 6
-            
-            is_mouse = action.upper() in ['LMB', 'RMB']
-            
-            if not is_mouse:
-                action_lower = action.lower()
-                if action_lower in vk_codes:
-                    vk_code = vk_codes[action_lower]
-                elif len(action) == 1:
-                    vk_code = ord(action.upper())
-                else:
-                    print(f"[Anti-AFK] Unknown action: {action}")
-                    return
-            
-            roblox_windows = []
-            
-            roblox_pids = set()
-            for proc in psutil.process_iter(['pid', 'name']):
-                try:
-                    if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                        pid = proc.info['pid']
-                        if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                            roblox_pids.add(pid)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            
-            if not roblox_pids:
-                print("[Anti-AFK] No RobloxPlayerBeta.exe processes found")
-                return
-            
-            def enum_windows_callback(hwnd, lParam):
-                if user32.IsWindowVisible(hwnd):
-                    pid = wintypes.DWORD()
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value in roblox_pids:
-                        roblox_windows.append(hwnd)
-                return True
-            
-            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
-            
-            if not roblox_windows:
-                print("[Anti-AFK] No Roblox game windows found")
-                return
-            
-            original_hwnd = user32.GetForegroundWindow()
-            current_thread_id = kernel32.GetCurrentThreadId()
-            
-            for idx, hwnd in enumerate(roblox_windows):
-                try:
-                    was_minimized = user32.IsIconic(hwnd)
-                    if was_minimized:
-                        user32.ShowWindow(hwnd, SW_RESTORE)
-                        time.sleep(0.05)
-                    
-                    user32.SetForegroundWindow(hwnd)
-                    time.sleep(0.05)
-                    
-                    for repeat in range(3):
-                        if is_mouse:
-                            MOUSEEVENTF_LEFTDOWN = 0x0002
-                            MOUSEEVENTF_LEFTUP = 0x0004
-                            MOUSEEVENTF_RIGHTDOWN = 0x0008
-                            MOUSEEVENTF_RIGHTUP = 0x0010
-                            
-                            if action.upper() == 'LMB':
-                                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                time.sleep(0.015)
-                                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                            elif action.upper() == 'RMB':
-                                user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-                                time.sleep(0.015)
-                                user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-                        else:
-                            scan_code = user32.MapVirtualKeyW(vk_code, 0)
-                            user32.keybd_event(vk_code, scan_code, 0, 0)
-                            time.sleep(0.015)
-                            user32.keybd_event(vk_code, scan_code, KEYEVENTF_KEYUP, 0)
-                    
-                    print(f"[Anti-AFK] Sent '{action}' to Roblox instance {idx + 1}")
-                    
-                    if was_minimized:
-                        user32.ShowWindow(hwnd, SW_MINIMIZE)
-                    
-                except Exception as e:
-                    print(f"[Anti-AFK] Error on instance {idx + 1}: {e}")
-            
-            if original_hwnd:
-                prev_thread_id = user32.GetWindowThreadProcessId(original_hwnd, None)
-                user32.AttachThreadInput(current_thread_id, prev_thread_id, True)
-                user32.BringWindowToTop(original_hwnd)
-                user32.SetForegroundWindow(original_hwnd)
-                user32.AttachThreadInput(current_thread_id, prev_thread_id, False)
-            
-        except Exception as e:
-            print(f"[Anti-AFK] Failed: {e}")
-            traceback.print_exc()
-    
-    def apply_and_lock_roblox_settings(self):
-        """Apply local Roblox settings and lock file"""
-        try:
-            local_settings_path = os.path.join(self.data_folder, "roblox_settings.xml")
-            roblox_settings_path = os.path.join(
-                os.environ.get("LOCALAPPDATA", ""),
-                "Roblox",
-                "GlobalBasicSettings_13.xml"
-            )
-            
-            if not os.path.exists(local_settings_path):
-                if os.path.exists(roblox_settings_path):
-                    shutil.copy2(roblox_settings_path, local_settings_path)
-                    print(f"[INFO] Created local Roblox settings file")
-                else:
-                    print(f"[WARNING] Roblox settings file not found, skipping auto-apply")
-                    return
-            
-            try:
-                os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
-            except:
-                pass
-            
-            shutil.copy2(local_settings_path, roblox_settings_path)
-            print(f"[INFO] Applied local settings to Roblox")
-            
-            os.chmod(roblox_settings_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-            print(f"[INFO] Locked Roblox settings to read-only")
-            
-        except Exception as e:
-            print(f"[ERROR] Failed to apply and lock Roblox settings: {e}")
-    
-    def open_roblox_settings_window(self):
-        """Open Roblox Settings window to view/edit GlobalBasicSettings_13.xml"""
-        settings_window = tk.Toplevel(self.root)
-        self.apply_window_icon(settings_window)
-        settings_window.title("Roblox Settings")
-        settings_window.geometry("500x400")
-        settings_window.configure(bg=self.BG_DARK)
-        settings_window.resizable(False, False)
-        settings_window.minsize(600, 400)
-        
-        if self.settings.get("enable_topmost", False):
-            settings_window.attributes("-topmost", True)
-        
-        settings_window.transient(self.root)
-        
-        roblox_settings_path = os.path.join(
-            os.environ.get("LOCALAPPDATA", ""),
-            "Roblox",
-            "GlobalBasicSettings_13.xml"
-        )
-        
-        local_settings_path = os.path.join(self.data_folder, "roblox_settings.xml")
-        
-        settings_data = {}
-        xml_tree = None
-        
-        def ensure_local_settings_file():
-            """Create local settings file if it doesn't exist by copying from Roblox"""
-            if not os.path.exists(local_settings_path):
-                if os.path.exists(roblox_settings_path):
-                    try:
-                        shutil.copy2(roblox_settings_path, local_settings_path)
-                        print(f"[INFO] Created local Roblox settings file: {local_settings_path}")
-                    except Exception as e:
-                        print(f"[ERROR] Failed to create local settings file: {e}")
-        
-        def parse_settings():
-            """Parse the local XML settings file"""
-            nonlocal settings_data, xml_tree
-            settings_data.clear()
-            
-            ensure_local_settings_file()
-            
-            if not os.path.exists(local_settings_path):
-                return False
-            
-            try:
-                xml_tree = ET.parse(local_settings_path)
-                root = xml_tree.getroot()
-                
-                properties = root.find(".//Properties")
-                if properties is None:
-                    return False
-                
-                for child in properties:
-                    tag = child.tag
-                    name = child.get("name", "")
-                    
-                    if name:
-                        if tag == "Vector2":
-                            x_elem = child.find("X")
-                            y_elem = child.find("Y")
-                            value = f"{x_elem.text if x_elem is not None else '0'}, {y_elem.text if y_elem is not None else '0'}"
-                        else:
-                            value = child.text if child.text else ""
-                        
-                        settings_data[name] = {
-                            "type": tag,
-                            "value": value,
-                            "element": child
-                        }
-                
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to parse settings: {e}")
-                return False
-        
-        def refresh_list(filter_text=""):
-            """Refresh the settings list, optionally filtering by search text"""
-            settings_list.delete(0, tk.END)
-            
-            for name, data in sorted(settings_data.items()):
-                if filter_text.lower() in name.lower() or filter_text.lower() in str(data["value"]).lower():
-                    display = f"{name}: {data['value']}"
-                    if len(display) > 60:
-                        display = display[:57] + "..."
-                    settings_list.insert(tk.END, display)
-        
-        def on_search(*args):
-            """Filter list based on search input"""
-            refresh_list(search_var.get())
-        
-        def on_select(event):
-            """Handle list selection"""
-            selection = settings_list.curselection()
-            if not selection:
-                return
-            
-            selected_text = settings_list.get(selection[0])
-            selected_name = selected_text.split(":")[0]
-            
-            if selected_name in settings_data:
-                data = settings_data[selected_name]
-                selected_name_label.config(text=f"Selected: {selected_name}")
-                type_label.config(text=f"Type: {data['type']}")
-                value_entry.delete(0, tk.END)
-                value_entry.insert(0, data["value"])
-        
-        def set_value():
-            """Set value locally (in memory)"""
-            selection = settings_list.curselection()
-            if not selection:
-                messagebox.showwarning("No Selection", "Please select a setting first.")
-                return
-            
-            selected_text = settings_list.get(selection[0])
-            selected_name = selected_text.split(":")[0]
-            new_value = value_entry.get()
-            
-            if selected_name in settings_data:
-                data = settings_data[selected_name]
-                element = data["element"]
-                
-                if data["type"] == "Vector2":
-                    parts = new_value.split(",")
-                    if len(parts) == 2:
-                        x_elem = element.find("X")
-                        y_elem = element.find("Y")
-                        if x_elem is not None:
-                            x_elem.text = parts[0].strip()
-                        if y_elem is not None:
-                            y_elem.text = parts[1].strip()
-                else:
-                    element.text = new_value
-                
-                settings_data[selected_name]["value"] = new_value
-                save_settings_to_local()
-                refresh_list(search_var.get())
-                messagebox.showinfo("Set", f"Value for '{selected_name}' set and saved to local file.")
-        
-        def refresh_settings():
-            """Reload settings from local XML file"""
-            if parse_settings():
-                refresh_list(search_var.get())
-                messagebox.showinfo("Refreshed", "Settings reloaded from local file.")
-            else:
-                messagebox.showerror("Error", f"Could not load settings from:\n{local_settings_path}")
-        
-        def save_settings_to_local():
-            """Save settings to local XML file"""
-            nonlocal xml_tree
-            if xml_tree is None:
-                messagebox.showerror("Error", "No settings loaded to save.")
-                return False
-            
-            try:
-                xml_tree.write(local_settings_path, encoding="utf-8", xml_declaration=True)
-                print(f"[INFO] Settings saved to local file: {local_settings_path}")
-                return True
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save settings: {e}")
-                return False
-        
-        def apply_settings_to_roblox():
-            """Apply local settings to Roblox's GlobalBasicSettings_13.xml"""
-            if not os.path.exists(local_settings_path):
-                messagebox.showerror("Error", "No local settings file found.")
-                return False
-            
-            try:
-                try:
-                    os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
-                except:
-                    pass
-                
-                shutil.copy2(local_settings_path, roblox_settings_path)
-                print(f"[INFO] Applied settings to Roblox: {roblox_settings_path}")
-                return True
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to apply settings: {e}")
-                return False
-        
-        def lock_roblox_settings():
-            """Lock Roblox settings file to read-only"""
-            if not os.path.exists(roblox_settings_path):
-                print(f"[WARNING] Roblox settings file not found: {roblox_settings_path}")
-                return False
-            
-            try:
-                os.chmod(roblox_settings_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-                print(f"[INFO] Locked Roblox settings to read-only")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to lock settings: {e}")
-                return False
-        
-        def unlock_roblox_settings():
-            """Unlock Roblox settings file"""
-            if not os.path.exists(roblox_settings_path):
-                print(f"[WARNING] Roblox settings file not found: {roblox_settings_path}")
-                return False
-            
-            try:
-                os.chmod(roblox_settings_path, stat.S_IWRITE | stat.S_IREAD)
-                print(f"[INFO] Unlocked Roblox settings (writable)")
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to unlock settings: {e}")
-                return False
-        
-        def toggle_lock_settings():
-            """Handle Lock Settings checkbox toggle"""
-            enabled = lock_settings_var.get()
-            self.settings["lock_roblox_settings"] = enabled
-            self.save_settings()
-            
-            if enabled:
-                if save_settings_to_local():
-                    if apply_settings_to_roblox():
-                        if lock_roblox_settings():
-                            messagebox.showinfo("Locked", "Settings applied and locked to read-only!")
-                        else:
-                            messagebox.showwarning("Warning", "Settings applied but failed to lock.")
-            else:
-                if unlock_roblox_settings():
-                    messagebox.showinfo("Unlocked", "Roblox settings file is now writable!")
-        
-        main_frame = ttk.Frame(settings_window, style="Dark.TFrame")
-        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
-        
-        lock_settings_var = tk.BooleanVar(value=self.settings.get("lock_roblox_settings", False))
-        
-        search_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        search_frame.pack(fill="x", pady=(0, 10))
-        
-        ttk.Label(search_frame, text="Search:", style="Dark.TLabel").pack(side="left", padx=(0, 5))
-        
-        search_var = tk.StringVar()
-        search_var.trace("w", on_search)
-        search_entry = ttk.Entry(search_frame, textvariable=search_var, style="Dark.TEntry")
-        search_entry.pack(side="left", fill="x", expand=True)
-        
-        content_frame = ttk.Frame(main_frame, style="Dark.TFrame")
-        content_frame.pack(fill="both", expand=True)
-        
-        list_frame = ttk.Frame(content_frame, style="Dark.TFrame")
-        list_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
-        ttk.Label(list_frame, text="Roblox Settings", style="Dark.TLabel", 
-                  font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 5))
-        
-        list_container = ttk.Frame(list_frame, style="Dark.TFrame")
-        list_container.pack(fill="both", expand=True)
-        
-        settings_list = tk.Listbox(
-            list_container,
-            bg=self.BG_MID,
-            fg=self.FG_TEXT,
-            selectbackground=self.FG_ACCENT,
-            selectforeground="white",
-            font=(self.FONT_FAMILY, 9),
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=1,
-            highlightcolor=self.BG_LIGHT,
-            highlightbackground=self.BG_LIGHT,
-            exportselection=False
-        )
-        settings_list.pack(side="left", fill="both", expand=True)
-        settings_list.bind("<<ListboxSelect>>", on_select)
-        
-        list_scrollbar = ttk.Scrollbar(list_container, command=settings_list.yview)
-        list_scrollbar.pack(side="right", fill="y")
-        settings_list.config(yscrollcommand=list_scrollbar.set)
-        
-        edit_frame = ttk.Frame(content_frame, style="Dark.TFrame", width=200)
-        edit_frame.pack(side="right", fill="y", padx=(10, 0))
-        edit_frame.pack_propagate(False)
-        
-        ttk.Label(edit_frame, text="Edit Setting", style="Dark.TLabel",
-                  font=(self.FONT_FAMILY, 10, "bold")).pack(anchor="w", pady=(0, 10))
-        
-        selected_name_label = ttk.Label(edit_frame, text="Selected: (none)", style="Dark.TLabel",
-                                         font=(self.FONT_FAMILY, 9))
-        selected_name_label.pack(anchor="w", pady=(0, 5))
-        
-        type_label = ttk.Label(edit_frame, text="Type: -", style="Dark.TLabel",
-                               font=(self.FONT_FAMILY, 9))
-        type_label.pack(anchor="w", pady=(0, 10))
-        
-        ttk.Label(edit_frame, text="Set Value:", style="Dark.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        value_entry = ttk.Entry(edit_frame, style="Dark.TEntry")
-        value_entry.pack(fill="x", pady=(0, 10))
-        
-        ttk.Button(edit_frame, text="Set", style="Dark.TButton", command=set_value).pack(fill="x", pady=(0, 5))
-        ttk.Button(edit_frame, text="Refresh", style="Dark.TButton", command=refresh_settings).pack(fill="x", pady=(0, 5))
-        ttk.Button(edit_frame, text="Apply to Roblox", style="Dark.TButton", command=lambda: apply_settings_to_roblox() and messagebox.showinfo("Applied", "Settings applied to Roblox!")).pack(fill="x", pady=(0, 5))
-        
-        ttk.Checkbutton(
-            edit_frame,
-            text="Lock settings (auto-apply)",
-            variable=lock_settings_var,
-            command=toggle_lock_settings,
-            style="Dark.TCheckbutton"
-        ).pack(anchor="w", pady=(10, 0))
-
-        if parse_settings():
-            refresh_list()
+        if self._edit_mode:
+            self.result_configs[self._edit_account] = cfg
         else:
-            settings_list.insert(tk.END, "Could not load settings file.")
-            settings_list.insert(tk.END, "Make sure Roblox has been run at least once.")
+            # In add mode, require account selection
+            selected = [
+                self._acc_list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self._acc_list.count())
+                if self._acc_list.item(i).isSelected()
+            ]
+            if not selected:
+                QMessageBox.warning(self, "No Selection", "Select at least one account from the list.")
+                return
+            for account in selected:
+                self.result_configs[account] = cfg.copy()
+        self.accept()
+
+# Tiny message helpers
+def _show_error(parent, title: str, msg: str):
+    if not msg:
+        return
+    dlg = QMessageBox(parent)
+    dlg.setWindowTitle(title)
+    dlg.setText(msg)
+    dlg.setIcon(QMessageBox.Icon.Critical)
+    dlg.setStyleSheet(f"QMessageBox {{ background: {BG}; color: {TEXT}; }}")
+    dlg.exec()
+
+
+def _show_info(parent, title: str, msg: str):
+    dlg = QMessageBox(parent)
+    dlg.setWindowTitle(title)
+    dlg.setText(msg)
+    dlg.setIcon(QMessageBox.Icon.Information)
+    dlg.setStyleSheet(f"QMessageBox {{ background: {BG}; color: {TEXT}; }}")
+    dlg.exec()
+
+
+# Palette
+def apply_palette(app: QApplication) -> None:
+    p = QPalette()
+    p.setColor(QPalette.ColorRole.Window, QColor(BG))
+    p.setColor(QPalette.ColorRole.WindowText, QColor(TEXT))
+    p.setColor(QPalette.ColorRole.Base, QColor(INPUT))
+    p.setColor(QPalette.ColorRole.AlternateBase, QColor(PANEL))
+    p.setColor(QPalette.ColorRole.Text, QColor(TEXT))
+    p.setColor(QPalette.ColorRole.Button, QColor(INPUT))
+    p.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT))
+    p.setColor(QPalette.ColorRole.Highlight, QColor(SELECT))
+    p.setColor(QPalette.ColorRole.HighlightedText, QColor(TEXT))
+    app.setPalette(p)
+
+
+class _PasswordDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.password_value = ""
+        self.setWindowTitle("Password Required")
+        self.setFixedSize(360, 130)
+        self.setStyleSheet(_DLG_STYLE)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.MSWindowsFixedSizeDialogHint)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("Enter your password to unlock:"))
+
+        self._entry = QLineEdit()
+        self._entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self._entry.setPlaceholderText("Password")
+        self._entry.returnPressed.connect(self._on_accept)
+        lay.addWidget(self._entry)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        ok_btn = QPushButton("Unlock")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._on_accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _on_accept(self):
+        self.password_value = self._entry.text()
+        self.accept()
+
+
+def main(icon_path: str | None = None) -> int:
+    # QApplication MUST exist before any QWidget / QDialog is created.
+    # Create it first, before setup_encryption() and before _PasswordDialog.
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("Roblox Account Manager")
+    app.setFont(QFont("Segoe UI", 10))
+    apply_palette(app)
+
+    password = None
+    try:
+        data_folder = "AccountManagerData"
+        os.makedirs(data_folder, exist_ok=True)
+        enc_cfg = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
+
+        if (enc_cfg.is_encryption_enabled()
+                and enc_cfg.get_encryption_method() == "password"):
+            dlg = _PasswordDialog()
+            if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.password_value:
+                _show_error(None, "Error", "Password is required.")
+                return 1
+            password = dlg.password_value
+    except Exception as exc:
+        print(f"[WARNING] Encryption check skipped: {exc}")
+
+    try:
+        manager = RobloxAccountManager(password=password)
+    except ValueError:
+        _show_error(None, "Error", "Invalid password. Please try again.")
+        return 1
+    except Exception as exc:
+        print(f"[ERROR] Failed to initialise manager: {exc}")
+        return 1
+
+    if not icon_path or not os.path.exists(icon_path):
+        icon_path = os.path.join(_ROOT_DIR, "icon.ico")
+        if not os.path.exists(icon_path):
+            _alt = os.path.join("AccountManagerData", "icon.ico")
+            icon_path = _alt if os.path.exists(_alt) else None
+
+    window = AccountManagerUIQt(manager, icon_path=icon_path)
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

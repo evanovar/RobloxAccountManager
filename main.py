@@ -1,129 +1,81 @@
 """
 Roblox Account Manager
-Main entry point for the application
+Main entry point for the application.
 """
 
 # if you find this tool helpful, consider starring the repo!
 
 import os
-import warnings
-import tkinter as tk
-from tkinter import messagebox, simpledialog
-import requests
+import sys
 import threading
+import requests
 
-warnings.filterwarnings("ignore")
+from utils.ui import main as _ui_main
 
-from classes import RobloxAccountManager
-from classes.encryption import EncryptionConfig
-from utils.encryption_setup import setup_encryption
-from utils.ui import AccountManagerUI
+DATA_FOLDER = "AccountManagerData"
+
+def _ensure_data_folder():
+    os.makedirs(DATA_FOLDER, exist_ok=True)
 
 
-def setup_icon(data_folder):
-    icon_path = os.path.join(data_folder, "icon.ico")
-    
+def setup_icon() -> str | None:
+    icon_path = os.path.join(DATA_FOLDER, "icon.ico")
     if os.path.exists(icon_path):
         return icon_path
     
+    root_icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    if os.path.exists(root_icon):
+        return root_icon
     try:
         print("[INFO] Downloading application icon...")
-        icon_url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/icon.ico"
-        response = requests.get(icon_url, timeout=5)
-        
-        if response.status_code == 200:
-            with open(icon_path, 'wb') as f:
-                f.write(response.content)
-                print("[SUCCESS] Icon downloaded successfully.")
+        url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/icon.ico"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            with open(icon_path, "wb") as f:
+                f.write(resp.content)
+            print("[SUCCESS] Icon downloaded successfully.")
             return icon_path
         else:
-            print(f"[ERROR] Failed to download icon: HTTP {response.status_code}")
-            return None
+            print(f"[ERROR] Failed to download icon: HTTP {resp.status_code}")
     except Exception as e:
         print(f"[ERROR] Error downloading icon: {e}")
-        return None
-
-
-def setup_discord_logo(data_folder):
-    # Discord logo/download removed since bot integration is disabled
     return None
 
 
-def apply_icon_to_window(window, icon_path):
-    if icon_path and os.path.exists(icon_path):
-        try:
-            window.iconbitmap(icon_path)
-        except Exception as e:
-            print(f"[ERROR] Could not set window icon: {e}")
+def setup_discord_logo() -> str | None:
+    logo_path = os.path.join(DATA_FOLDER, "discordlogo.png")
+    if os.path.exists(logo_path):
+        return logo_path
+    try:
+        url = (
+            "https://raw.githubusercontent.com/evanovar/RobloxAccountManager"
+            "/main/discordlogo.png"
+        )
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            with open(logo_path, "wb") as f:
+                f.write(resp.content)
+            print("[INFO] Discord logo downloaded.")
+            return logo_path
+    except Exception as e:
+        print(f"[WARNING] Discord logo download failed: {e}")
+    return None
 
-
-def apply_icon_async(root, data_folder):
-    icon_path = os.path.join(data_folder, "icon.ico")
-    discord_logo_path = os.path.join(data_folder, "discordlogo.png")
-    
-    if os.path.exists(icon_path):
-        apply_icon_to_window(root, icon_path)
-    
-    needs_icon = not os.path.exists(icon_path)
-    needs_discord = not os.path.exists(discord_logo_path)
-
-    if needs_icon or needs_discord:
-        def download_assets():
-            if needs_icon:
-                try:
-                    setup_icon(data_folder)
-                except:
-                    pass
-            if needs_discord:
-                try:
-                    setup_discord_logo(data_folder)
-                except:
-                    pass
-        threading.Thread(target=download_assets, daemon=True).start()
-
-    return icon_path if os.path.exists(icon_path) else None, \
-           discord_logo_path
-
+def _download_assets_async():
+    threading.Thread(
+        target=lambda: (setup_icon(), setup_discord_logo()),
+        daemon=True,
+        name="AssetDownload",
+    ).start()
 
 def main():
-    """Main application entry point"""
-    password = setup_encryption()
-    
-    data_folder = "AccountManagerData"
-    if not os.path.exists(data_folder):
-        os.makedirs(data_folder)
-        
-    encryption_config = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
-    
-    if encryption_config.is_encryption_enabled() and encryption_config.get_encryption_method() == 'password':
-        if password is None:
-            root = tk.Tk()
-            root.withdraw()
-            password = simpledialog.askstring("Password Required", "Enter your password to unlock:", show='*')
-            root.destroy()
-            
-            if password is None:
-                messagebox.showerror("Error", "Password is required to access encrypted accounts.")
-                return
-    
-    try:
-        manager = RobloxAccountManager(password=password)
-    except ValueError as e:
-        messagebox.showerror("Error", "Password is invalid. Please try again.")
-        return
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to initialize: {e}")
-        return
-    
-    root = tk.Tk()
-    root.withdraw()
-    
-    icon_path, _ = apply_icon_async(root, data_folder)
-    app = AccountManagerUI(root, manager, icon_path=icon_path, discord_logo_path=None)
-    
-    root.deiconify()
-    root.mainloop()
+    _ensure_data_folder()
 
+    icon_path = setup_icon()
+
+    threading.Thread(target=setup_discord_logo, daemon=True, name="DiscordLogoDownload").start()
+
+    return _ui_main(icon_path=icon_path)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

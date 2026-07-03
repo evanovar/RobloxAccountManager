@@ -431,33 +431,53 @@ class RobloxAccountManager:
             print("[INFO] Fetching account info from browser...")
             try:
                 account_json = driver.execute_script("""
-                    return fetch('/my/account/json')
+                    var infoPromise = fetch('/my/account/json')
                         .then(r => r.json())
                         .then(data => JSON.stringify(data))
                         .catch(() => null);
+
+                    var avatarPromise = infoPromise
+                        .then(raw => {
+                            if (!raw) return null;
+                            var uid = JSON.parse(raw).UserId;
+                            if (!uid) return null;
+                            return fetch(
+                                'https://thumbnails.roblox.com/v1/users/avatar-headshot'
+                                + '?userIds=' + uid
+                                + '&size=100x100&format=Png&isCircular=true'
+                            ).then(r => r.json())
+                             .then(d => (d.data && d.data[0]) ? d.data[0].imageUrl : null)
+                             .catch(() => null);
+                        });
+
+                    return Promise.all([infoPromise, avatarPromise])
+                        .then(results => JSON.stringify({info: results[0], avatar: results[1]}))
+                        .catch(() => null);
                 """)
-                
+
                 if account_json:
-                    account_data = json.loads(account_json)
+                    combined    = json.loads(account_json)
+                    account_data = json.loads(combined.get("info") or "{}")
+                    avatar_url   = combined.get("avatar") or ""
                     username = account_data.get("Name", "Unknown")
-                    user_id = account_data.get("UserId", 0)
+                    user_id  = account_data.get("UserId", 0)
                     print(f"[SUCCESS] Username: {username} (ID: {user_id})")
-                    return username, roblosecurity_cookie, user_id, captured_password
+                    return username, roblosecurity_cookie, user_id, captured_password, avatar_url
             except Exception as e:
                 print(f"[ERROR] Browser fetch failed: {e}, falling back to API")
             
             print("[INFO] Getting username from API...")
             username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
-            
+
             if not username:
                 username = "Unknown"
-            
+
             print(f"[SUCCESS] Username: {username}")
-            return username, roblosecurity_cookie, 0, captured_password
-            
+            return username, roblosecurity_cookie, 0, captured_password, ""
+
         except Exception as e:
             print(f"[ERROR] Error extracting user info: {e}")
-            return None, None, None, None
+            return None, None, None, None, ""
     
     def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
         """
@@ -541,19 +561,20 @@ class RobloxAccountManager:
                 driver = drivers[driver_index]
                 try:
                     if self.wait_for_login(driver):
-                        username, cookie, user_id, password = self.extract_user_info(driver)
-                        
+                        username, cookie, user_id, password, avatar_url = self.extract_user_info(driver)
+
                         if username and cookie:
                             self.accounts[username] = {
-                                'username': username,
-                                'cookie': cookie,
-                                'user_id': user_id or 0,
-                                'password': password or '',
+                                'username':   username,
+                                'cookie':     cookie,
+                                'user_id':    user_id or 0,
+                                'password':   password or '',
                                 'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                'note': ''
+                                'note':       '',
+                                'avatar_url': avatar_url or '',
                             }
                             self.save_accounts()
-                            
+
                             print(f"[SUCCESS] Successfully added account: {username}")
                             nonlocal success_count
                             success_count += 1
@@ -608,23 +629,43 @@ class RobloxAccountManager:
             if not username or username == "Unknown":
                 print("[ERROR] Failed to get username from cookie")
                 return False, None
-            
+
             is_valid = RobloxAPI.validate_account(username, cookie)
             if not is_valid:
                 print("[ERROR] Cookie is invalid or expired")
                 return False, None
-            
+
+            user_id   = 0
+            avatar_url = ""
+            try:
+                uid = RobloxAPI.get_user_id_from_username(username)
+                if uid:
+                    user_id = uid
+                    import requests as _req
+                    api = (
+                        "https://thumbnails.roblox.com/v1/users/avatar-headshot"
+                        f"?userIds={uid}&size=100x100&format=Png&isCircular=true"
+                    )
+                    r = _req.get(api, timeout=6)
+                    d = r.json()
+                    if d.get("data") and d["data"][0].get("imageUrl"):
+                        avatar_url = d["data"][0]["imageUrl"]
+            except Exception:
+                pass
+
             self.accounts[username] = {
-                'username': username,
-                'cookie': cookie,
+                'username':   username,
+                'cookie':     cookie,
+                'user_id':    user_id,
                 'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'note': ''
+                'note':       '',
+                'avatar_url': avatar_url,
             }
             self.save_accounts()
-            
+
             print(f"[SUCCESS] Successfully imported account: {username}")
             return True, username
-            
+
         except Exception as e:
             print(f"[ERROR] Failed to import account: {e}")
             return False, None
