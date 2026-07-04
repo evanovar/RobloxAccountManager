@@ -140,7 +140,7 @@ def fetch_avatar_image(username: str, on_done: Callable[[str, bytes | None], Non
 def launch_roblox_home(manager, username: str, on_done: Callable[[bool, str], None]) -> None:
     def _worker():
         try:
-            ok = manager.launch_roblox(username)
+            ok = manager.launch_roblox(username, "", "")
             on_done(ok, "" if ok else "Failed to launch Roblox.")
         except Exception as e:
             on_done(False, str(e))
@@ -324,7 +324,7 @@ def get_encryption_status(manager) -> tuple[str, str]:
 def launch_home(manager, username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
     def _worker():
         try:
-            ok = manager.launch_roblox(username)
+            ok = manager.launch_roblox(username, "", "")
             on_done(ok, "" if ok else "Failed to launch Roblox.")
         except Exception as e:
             on_done(False, str(e))
