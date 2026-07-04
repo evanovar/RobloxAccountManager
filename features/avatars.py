@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 import requests
 from utils.app_paths import get_data_dir
+from classes.roblox_api import RobloxAPI
 
 _CACHE_DIR = os.path.join(get_data_dir(), "avatar_cache")
 
@@ -91,3 +92,58 @@ def fetch_avatar_async(user_id: str, username: str, on_done: Callable[[str, byte
             pass
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def sync_missing_avatar_cache(accounts: dict[str, dict], on_avatar_ready: Callable[[str, bytes], None] | None = None, on_complete: Callable[[], None] | None = None,) -> None:
+    def _worker():
+        changed = False
+
+        for username, data in list(accounts.items()):
+            if not isinstance(data, dict):
+                continue
+
+            raw_user_id = data.get("user_id") or 0
+            user_id = str(raw_user_id).strip()
+
+            if not user_id or user_id == "0":
+                try:
+                    resolved_id = RobloxAPI.get_user_id_from_username(username)
+                except Exception:
+                    resolved_id = None
+                if resolved_id:
+                    user_id = str(resolved_id)
+                    data["user_id"] = resolved_id
+                    changed = True
+
+            if not user_id or user_id == "0":
+                continue
+
+            cached = load_cached_bytes(user_id)
+            if cached:
+                if on_avatar_ready:
+                    on_avatar_ready(username, cached)
+                continue
+
+            image_url = fetch_avatar_url(user_id)
+            if not image_url:
+                continue
+
+            try:
+                resp = requests.get(image_url, timeout=8)
+                if resp.status_code == 200 and resp.content:
+                    _save_to_cache(user_id, resp.content)
+                    if data.get("avatar_url") != image_url:
+                        data["avatar_url"] = image_url
+                        changed = True
+                    if on_avatar_ready:
+                        on_avatar_ready(username, resp.content)
+            except Exception:
+                pass
+
+        if changed and on_complete:
+            try:
+                on_complete()
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True, name="AvatarCacheSync").start()

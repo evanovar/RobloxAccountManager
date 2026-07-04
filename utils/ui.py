@@ -492,6 +492,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
 
         self._refresh_account_list()
+        QTimer.singleShot(750, self._sync_missing_avatars_async)
         self._refresh_recent_games()
         self._update_encryption_badge()
 
@@ -3713,6 +3714,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 user_id, username,
                 on_done=lambda u, b: self._bridge.avatar_ready.emit(u, b),
             )
+
+    def _sync_missing_avatars_async(self):
+        avatars.sync_missing_avatar_cache(
+            self.manager.accounts,
+            on_avatar_ready=lambda u, b: self._bridge.avatar_ready.emit(u, b),
+            on_complete=lambda: self.manager.save_accounts(),
+        )
 
     def _on_avatar_ready(self, username: str, img_bytes: object):
         # Convert byte to circular pixmap
