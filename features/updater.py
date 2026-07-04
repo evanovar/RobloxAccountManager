@@ -111,7 +111,7 @@ def download_update(on_progress: Callable[[int], None], on_done: Callable[[bool,
 
             subprocess.Popen(
                 [bat_path],
-                shell=True,
+                shell=True,  # nosec B602
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
 

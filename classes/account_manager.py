@@ -118,16 +118,37 @@ class RobloxAccountManager:
             'accounts': self.accounts,
             'secure_settings': self.secure_settings,
         }
-        with open(self.accounts_file, 'w', encoding='utf-8') as f:
-            if self.encryptor:
-                encrypted_package = self.encryptor.encrypt_data(payload)
-                encrypted_data = {
-                    'encrypted': True,
-                    'data': encrypted_package
-                }
-                json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
-            else:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+        temp_file = self.accounts_file + ".tmp"
+        try:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                if self.encryptor:
+                    encrypted_package = self.encryptor.encrypt_data(payload)
+                    encrypted_data = {
+                        'encrypted': True,
+                        'data': encrypted_package
+                    }
+                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
+                else:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+            os.replace(temp_file, self.accounts_file)
+        except Exception as e:
+            print(f"[WARNING] Safe atomic save failed: {e}. Falling back to original direct write.")
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            # Original direct write fallback
+            with open(self.accounts_file, 'w', encoding='utf-8') as f:
+                if self.encryptor:
+                    encrypted_package = self.encryptor.encrypt_data(payload)
+                    encrypted_data = {
+                        'encrypted': True,
+                        'data': encrypted_package
+                    }
+                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
+                else:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
 
     def get_secure_setting(self, key, default=""):
         """Read a sensitive setting stored alongside encrypted account data."""
@@ -217,22 +238,23 @@ class RobloxAccountManager:
                 service = Service(ChromeDriverManager().install(), log_path=os.devnull)
             
             original_stderr = sys.stderr
-            sys.stderr = open(os.devnull, 'w')
-            
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            driver.set_page_load_timeout(120)
-            driver.implicitly_wait(10)
-            
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            sys.stderr.close()
-            sys.stderr = original_stderr
-            
-            return driver
-        except Exception as e:
-            if 'original_stderr' in locals():
+            devnull_f = open(os.devnull, 'w')
+            sys.stderr = devnull_f
+            try:
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+                driver.set_page_load_timeout(120)
+                driver.implicitly_wait(10)
+                
+                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                return driver
+            finally:
                 sys.stderr = original_stderr
+                try:
+                    devnull_f.close()
+                except Exception:
+                    pass
+        except Exception as e:
             print(f"[ERROR] Error setting up Chrome driver: {e}")
             print("[INFO] Please make sure Google Chrome is installed on your system")
             traceback.print_exc()
@@ -467,13 +489,18 @@ class RobloxAccountManager:
                 print(f"[ERROR] Browser fetch failed: {e}, falling back to API")
             
             print("[INFO] Getting username from API...")
-            username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
+            try:
+                username, user_id = RobloxAPI.get_user_info_from_api(roblosecurity_cookie)
+            except Exception as e:
+                print(f"[WARNING] get_user_info_from_api failed: {e}. Falling back to legacy method.")
+                username = RobloxAPI.get_username_from_api(roblosecurity_cookie)
+                user_id = 0
 
             if not username:
                 username = "Unknown"
 
-            print(f"[SUCCESS] Username: {username}")
-            return username, roblosecurity_cookie, 0, captured_password, ""
+            print(f"[SUCCESS] Username: {username} (ID: {user_id})")
+            return username, roblosecurity_cookie, user_id, captured_password, ""
 
         except Exception as e:
             print(f"[ERROR] Error extracting user info: {e}")
@@ -625,7 +652,13 @@ class RobloxAccountManager:
             return False, None
         
         try:
-            username = RobloxAPI.get_username_from_api(cookie)
+            try:
+                username, user_id_val = RobloxAPI.get_user_info_from_api(cookie)
+            except Exception as e:
+                print(f"[WARNING] get_user_info_from_api failed: {e}. Falling back to legacy method.")
+                username = RobloxAPI.get_username_from_api(cookie)
+                user_id_val = 0
+
             if not username or username == "Unknown":
                 print("[ERROR] Failed to get username from cookie")
                 return False, None
@@ -635,10 +668,10 @@ class RobloxAccountManager:
                 print("[ERROR] Cookie is invalid or expired")
                 return False, None
 
-            user_id   = 0
+            user_id   = user_id_val
             avatar_url = ""
             try:
-                uid = RobloxAPI.get_user_id_from_username(username)
+                uid = user_id if user_id else RobloxAPI.get_user_id_from_username(username)
                 if uid:
                     user_id = uid
                     import requests as _req

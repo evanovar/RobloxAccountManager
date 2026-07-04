@@ -128,7 +128,8 @@ class WebSocketServer:
                 if max_len > 0 and len(message) > max_len:
                     resp = {"ok": False, "error": f"Message too long (max {max_len} chars)"}
                 else:
-                    resp = self._execute(message)
+                    loop = asyncio.get_running_loop()
+                    resp = await loop.run_in_executor(None, self._execute, message)
                 await websocket.send(json.dumps(resp, ensure_ascii=False))
         except Exception as exc:
             print(f"[ERROR] WebSocket client error: {exc}")

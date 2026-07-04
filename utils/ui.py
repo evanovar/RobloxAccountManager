@@ -388,35 +388,6 @@ class _FloatingTooltip(QWidget):
         except Exception:
             pass
 
-class _StderrToConsole:
-    def __init__(self, orig_stderr, stdout_interceptor):
-        self._orig = orig_stderr
-        self._stdout = stdout_interceptor # WebhookStdoutInterceptor
-        self._buf = ""
-
-    def write(self, text: str) -> None:
-        if self._orig is not None:
-            self._orig.write(text)
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.rstrip("\r")
-            if line.strip():
-                if not any(line.startswith(p) for p in
-                           ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
-                    line = f"[ERROR] {line}"
-                self._stdout.write(line + "\n")
-
-    def flush(self) -> None:
-        if self._orig is not None:
-            self._orig.flush()
-
-    def fileno(self) -> int:
-        try:
-            return self._orig.fileno()
-        except Exception:
-            return -1
-
 class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
@@ -438,13 +409,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._game_name_timer.setSingleShot(True)
         self._game_name_timer.timeout.connect(self._do_fetch_game_name)
 
-        if sys.stdout is not None and not isinstance(sys.stdout, webhook.WebhookStdoutInterceptor):
-            sys.stdout = webhook.WebhookStdoutInterceptor(
-                sys.stdout,
-                get_cfg=lambda: actions.load_ui_settings().get("discord_webhook", {}),
-            )
-        if sys.stderr is not None and not isinstance(sys.stderr, _StderrToConsole):
-            sys.stderr = _StderrToConsole(sys.stderr, sys.stdout)
+        webhook.install_console_capture(lambda: actions.load_ui_settings().get("discord_webhook", {}))
 
         self._console_queue = (
             sys.stdout._console_queue

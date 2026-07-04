@@ -13,7 +13,17 @@ import subprocess
 import shutil
 import threading
 from pathlib import Path
-from tkinter import messagebox
+
+class messagebox:
+    @staticmethod
+    def showerror(title: str, message: str):
+        try:
+            import ctypes
+            # MB_OK | MB_ICONERROR | MB_SYSTEMMODAL = 0x1010
+            ctypes.windll.user32.MessageBoxW(0, str(message), str(title), 0x1010)
+        except Exception:
+            print(f"[ERROR] {title}: {message}")
+
 
 
 class RobloxAPI:
@@ -186,8 +196,8 @@ class RobloxAPI:
         return None, None
 
     @staticmethod
-    def get_username_from_api(roblosecurity_cookie):
-        """Get username using Roblox API"""
+    def get_user_info_from_api(roblosecurity_cookie) -> tuple[str, int]:
+        """Get username and user ID using Roblox API"""
         try:
             headers = {
                 'Cookie': f'.ROBLOSECURITY={roblosecurity_cookie}'
@@ -201,12 +211,18 @@ class RobloxAPI:
             
             if response.status_code == 200:
                 user_data = response.json()
-                return user_data.get('name', 'Unknown')
+                return user_data.get('name', 'Unknown'), user_data.get('id', 0)
             
         except Exception as e:
-            print(f"[ERROR] Error getting username from API: {e}")
+            print(f"[ERROR] Error getting user info from API: {e}")
         
-        return "Unknown"
+        return "Unknown", 0
+
+    @staticmethod
+    def get_username_from_api(roblosecurity_cookie):
+        """Get username using Roblox API"""
+        name, _ = RobloxAPI.get_user_info_from_api(roblosecurity_cookie)
+        return name
     
     @staticmethod
     def get_game_name(place_id):
@@ -283,7 +299,11 @@ class RobloxAPI:
                         print(f"[WARNING] No user data found for username '{username}'")
                         return None
                 elif response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', 2 ** attempt))
+                    retry_header = response.headers.get('Retry-After')
+                    try:
+                        retry_after = int(retry_header) if retry_header else (2 ** attempt)
+                    except (ValueError, TypeError):
+                        retry_after = 2 ** attempt
                     print(f"[WARNING] Rate limited getting user ID for '{username}'. Retrying in {retry_after}s... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue

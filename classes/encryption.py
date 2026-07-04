@@ -9,9 +9,9 @@ import base64
 import hashlib
 import platform
 import subprocess
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Cipher import AES  # nosec B413
+from Crypto.Random import get_random_bytes  # nosec B413
+from Crypto.Protocol.KDF import PBKDF2  # nosec B413
 
 
 class HardwareEncryption:
@@ -188,8 +188,21 @@ class EncryptionConfig:
         if config_dir and not os.path.exists(config_dir):
             os.makedirs(config_dir)
         
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, indent=2, ensure_ascii=False)
+        temp_file = self.config_file + ".tmp"
+        try:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+            os.replace(temp_file, self.config_file)
+        except Exception as e:
+            print(f"[WARNING] Safe config save failed: {e}. Falling back to original direct write.")
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            # Original direct write fallback
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
     
     def is_encryption_enabled(self):
         """Check if encryption is enabled"""

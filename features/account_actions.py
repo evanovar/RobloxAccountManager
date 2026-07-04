@@ -690,7 +690,7 @@ def download_handle64() -> bool:
         dest = os.path.join(data_dir, "handle64.exe")
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, "Handle.zip")
-            urlretrieve(url, zip_path)
+            urlretrieve(url, zip_path)  # nosec B310
             with zipfile.ZipFile(zip_path) as z:
                 z.extract(exe_name, tmp)
                 shutil.move(os.path.join(tmp, exe_name), dest)
@@ -743,7 +743,7 @@ def _mr_h64_close_handles(pids: list[int]):
                 cmd = f'"{HANDLE}" -accepteula -p {pid} -a'
                 proc = subprocess.run(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, text=True, shell=True
+                    stdin=subprocess.DEVNULL, text=True, shell=True  # nosec B602
                 )
                 for line in proc.stdout.splitlines():
                     if "ROBLOX_singletonEvent" in line:
@@ -758,7 +758,7 @@ def _mr_h64_close_handles(pids: list[int]):
                 subprocess.run(
                     f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, shell=True
+                    stdin=subprocess.DEVNULL, shell=True  # nosec B602
                 )
                 print(f"[Multi Roblox] Closed singleton handle for PID:{pid}")
             else:

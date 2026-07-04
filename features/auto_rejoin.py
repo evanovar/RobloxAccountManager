@@ -33,11 +33,24 @@ def load_configs() -> dict:
 
 def save_configs(configs: dict) -> None:
     os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+    temp_file = _CONFIG_FILE + ".tmp"
     try:
-        with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
+        with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(configs, f, indent=2)
-    except Exception:
-        pass
+        os.replace(temp_file, _CONFIG_FILE)
+    except Exception as e:
+        print(f"[WARNING] Safe configs save failed: {e}. Falling back to original direct write.")
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+        # Original direct write fallback
+        try:
+            with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(configs, f, indent=2)
+        except Exception:
+            pass
 
 def _has_internet(timeout: int = 3) -> bool:
     for url in ("https://www.google.com/generate_204",
@@ -159,7 +172,8 @@ class AutoRejoinWorker:
             if not ok:
                 return False
 
-            time.sleep(5)
+            if self._stop.wait(5):
+                return False
 
             pids_after = _get_roblox_pids()
             new_pids = pids_after - pids_before
@@ -211,7 +225,15 @@ class AutoRejoinWorker:
 
         acc_data = self.manager.accounts[self.account]
         cookie = acc_data.get("cookie", "")
-        user_id = acc_data.get("user_id") or RobloxAPI.get_user_id_from_username(self.account)
+        user_id = acc_data.get("user_id")
+        if not user_id:
+            user_id = RobloxAPI.get_user_id_from_username(self.account)
+            if user_id:
+                acc_data["user_id"] = user_id
+                try:
+                    self.manager.save_accounts()
+                except Exception:
+                    pass
 
         if not user_id:
             self._emit("ERROR: cannot resolve user ID")
@@ -280,7 +302,7 @@ class AutoRejoinWorker:
 
                     if self._pid:
                         _kill_pid(self._pid)
-                        time.sleep(1)
+                        self._stop.wait(1)
                         self._pid = None
 
                     while not self._stop.is_set() and not self._can_launch():

@@ -10,6 +10,9 @@ import os
 import subprocess
 import tempfile
 import threading
+import sys
+
+
 import time
 import requests
 import re
@@ -311,3 +314,111 @@ class WebhookStdoutInterceptor:
             except Exception:
                 pass
         threading.Thread(target=_post, daemon=True, name="webhook-ar").start()
+
+
+class WebhookStderrInterceptor:
+    def __init__(self, orig, stdout_interceptor):
+        self._orig = orig
+        self._stdout = stdout_interceptor
+        self._buf = ""
+
+    def write(self, text: str) -> None:
+        if self._orig is not None:
+            self._orig.write(text)
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.rstrip("\r")
+            if line.strip():
+                if not any(line.startswith(prefix) for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
+                    line = f"[ERROR] {line}"
+                if self._stdout is not None:
+                    self._stdout.write(line + "\n")
+
+    def flush(self) -> None:
+        if self._orig is not None:
+            self._orig.flush()
+
+    def fileno(self) -> int:
+        try:
+            return self._orig.fileno()
+        except Exception:
+            return -1
+
+
+def install_console_capture(get_cfg: Callable[[], dict]):
+    stdout = sys.stdout
+    if isinstance(stdout, WebhookStdoutInterceptor):
+        stdout._get_cfg = get_cfg
+    else:
+        stdout = WebhookStdoutInterceptor(
+            stdout if stdout is not None else getattr(sys, "__stdout__", None),
+            get_cfg,
+        )
+        sys.stdout = stdout
+
+    stderr = sys.stderr
+    if isinstance(stderr, WebhookStderrInterceptor):
+        stderr._stdout = stdout
+    else:
+        stderr = WebhookStderrInterceptor(
+            stderr if stderr is not None else getattr(sys, "__stderr__", None),
+            stdout,
+        )
+        sys.stderr = stderr
+
+    return stdout, stderr
+
+
+class WebhookStderrInterceptor:
+    def __init__(self, orig, stdout_interceptor):
+        self._orig = orig
+        self._stdout = stdout_interceptor
+        self._buf = ""
+
+    def write(self, text: str) -> None:
+        if self._orig is not None:
+            self._orig.write(text)
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.rstrip("\r")
+            if line.strip():
+                if not any(line.startswith(prefix) for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
+                    line = f"[ERROR] {line}"
+                if self._stdout is not None:
+                    self._stdout.write(line + "\n")
+
+    def flush(self) -> None:
+        if self._orig is not None:
+            self._orig.flush()
+
+    def fileno(self) -> int:
+        try:
+            return self._orig.fileno()
+        except Exception:
+            return -1
+
+
+def install_console_capture(get_cfg: Callable[[], dict]):
+    stdout = sys.stdout
+    if isinstance(stdout, WebhookStdoutInterceptor):
+        stdout._get_cfg = get_cfg
+    else:
+        stdout = WebhookStdoutInterceptor(
+            stdout if stdout is not None else getattr(sys, "__stdout__", None),
+            get_cfg,
+        )
+        sys.stdout = stdout
+
+    stderr = sys.stderr
+    if isinstance(stderr, WebhookStderrInterceptor):
+        stderr._stdout = stdout
+    else:
+        stderr = WebhookStderrInterceptor(
+            stderr if stderr is not None else getattr(sys, "__stderr__", None),
+            stdout,
+        )
+        sys.stderr = stderr
+
+    return stdout, stderr

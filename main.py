@@ -10,6 +10,8 @@ import sys
 import threading
 import requests
 
+from features import account_actions as actions
+from features import webhook
 from utils.ui import main as _ui_main
 
 DATA_FOLDER = "AccountManagerData"
@@ -69,6 +71,7 @@ def _download_assets_async():
     ).start()
 
 def main():
+    webhook.install_console_capture(lambda: actions.load_ui_settings().get("discord_webhook", {}))
     _ensure_data_folder()
 
     icon_path = setup_icon()
