@@ -21,8 +21,7 @@ A powerful tool for managing multiple Roblox accounts with secure cookie extract
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
 Or support the creator by donating via [Robux](https://www.roblox.com/games/718090786/donation#store) ♥️
 
-<img width="447" height="544" alt="image" src="https://github.com/user-attachments/assets/7296d21f-4026-486b-a9fd-ea75515be930" />
-<img width="295" height="412" alt="image" src="https://github.com/user-attachments/assets/7a5acb0d-3b65-470e-ac90-7d022570df5b" />
+<img width="795" height="651" alt="image" src="https://github.com/user-attachments/assets/6dab4d69-11fd-47d0-9348-db2aef5211fb" />
 
 ## 📑 Table of Contents
 
@@ -150,14 +149,13 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Browser Login** | Add accounts by logging in manually through Chrome | Click "Add Account" → browser opens → login to Roblox |
 | **Cookie Import** | Import accounts using `.ROBLOSECURITY` cookie | Click "Add Account" dropdown → "Import Cookie" → paste cookie |
 | **Multiple Cookie Import** | Import multiple accounts at once | Click "Add Account" dropdown → "Import Cookie" → paste multiple cookies |
-| **JavaScript Automation** | Bulk add accounts with custom JavaScript execution (up to 10 instances) | Click "Add Account" dropdown → "Javascript" → choose amount, website, and code |
+| **JavaScript Automation** | Bulk add accounts with custom JavaScript execution (up to 10 instances) | Click "Add Account" dropdown → "Javascript"|
 | **Password Capture** | Automatically captures and saves passwords during browser login | Automatic during browser login; right-click account → "Copy Password" |
 | **Cookie Validity Indicator** | Warning icon next to accounts with expired or invalid cookies | Automatically shown in the account list |
 | **Account Notes** | Add custom notes/tags to accounts for organization | Right-click account → "Edit Note" |
 | **Account Deletion** | Remove accounts from your saved list | Right-click account → "Delete" → confirm |
 | **Multi-Select Mode** | Select and manage multiple accounts at once | Enable in Settings → Use Ctrl+Click to select multiple |
 | **Drag & Drop Reordering** | Reorder accounts by dragging and dropping in the list | Click & hold account for 0.5s, then drag to new position |
-| **Keyboard Shortcuts** | Delete selected accounts with the Delete key | Select account(s) → press Delete |
 
 ### Game Launching
 
@@ -165,17 +163,14 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | :--- | :--- | :--- |
 | **Single Game Launch** | Launch Roblox game with one account | Enter Place ID → Click "Join Place" |
 | **Multi-Account Launch** | Launch the same game with multiple accounts simultaneously | Enable Multi-Select → Select accounts → Enter Place ID → Click "Join Place" |
-| **Auto Window Tiling** | Automatically arranges Roblox windows in a tiled grid when launching multiple instances | Automatic when launching 2+ accounts simultaneously |
 | **Private Server Support** | Save and launch private servers (marked with [P]) | Enter Private Server ID → Game automatically joins private server |
 | **VIP Link Parsing** | Paste a full Roblox VIP URL into the Private Server field to auto-extract Place ID and server code | Paste VIP URL into "Private Server" field |
 | **Join User** | Join a specific user's current game; last-used account saved across sessions | Select account → "Join Place" dropdown → "Join User" → enter username |
 | **Join by Job-ID** | Join a specific server instance using Job-ID | Enter Place ID & Job-ID → "Join Place" dropdown → "Job-ID" |
 | **Join Smallest Server** | Automatically join the server with the lowest player count | "Join Place" dropdown → "Small Server" |
-| **Favorite Games** | Save and quickly launch favorite games with optional notes | Click ⭐ next to Recent Games → add favorites |
 | **Game List (Recently Played)** | Auto-save recently played games for quick access | Games auto-save on launch (configurable 5-50 games) |
 | **Game Name Lookup** | Auto-fetch and display game names from Place IDs | Automatic when Place ID changes |
-| **Launch Popup Disable** | Disable success notification popups | Settings → General tab → "Disable Launch Popups" |
-| **Roblox Launcher Selection** | Choose your preferred Roblox launcher | Settings → Roblox tab → select Default, Bloxstrap, Fishstrap, Froststrap, or Roblox Client |
+| **Roblox Launcher Selection** | Choose your preferred Roblox launcher | Settings → Roblox → select Default, Bloxstrap, Fishstrap, Froststrap, or Roblox Client |
 
 ### Multi Roblox
 
@@ -193,45 +188,23 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | Feature | Description | How to Use |
 | :--- | :--- | :--- |
 | **Auto-Rejoin Setup** | Configure automatic game rejoin for accounts | Click "Auto-Rejoin" → "Add" → select account & Place ID |
-| **Rejoin Configuration** | Set check interval, private server ID, job ID, and max retries | In Auto-Rejoin window → "Edit" existing config |
-| **Presence Check Toggle** | Optionally rejoin only when player is not in the target Place ID | In Auto-Rejoin config → enable "Check if player is in target Place ID" |
-| **Multi-Select Auto-Rejoin** | Select multiple accounts at once in the Auto-Rejoin window | Hold Ctrl or Shift to select multiple accounts |
-| **Start/Stop Individual** | Control rejoin status per account | Select account → "Start Selected" / "Stop Selected" |
+| **Start/Stop Individual** | Control rejoin status per account | Select account → Right click → "Start Selected" / "Stop Selected" |
 | **Start/Stop All** | Bulk start/stop all rejoin configurations | Click "Start All" / "Stop All" buttons |
 | **Active Status Display** | See which accounts are actively monitored | [ACTIVE] / [INACTIVE] status shown in list |
-| **Remove Configuration** | Delete rejoin setup for an account | Select account → "Remove" |
-| **Webhook Notifications** | Send Discord webhook alerts on rejoin events, errors, and failures | Configure webhook URL in Settings → Integrations |
-| **Hourly Screenshot Webhook** | Automatically sends a screenshot to Discord every hour while auto-rejoin is active | Configure in webhook settings |
-| **Ping on Error** | Ping a specific Discord user when a rejoin failure occurs | Set User ID in webhook settings |
 
 ### Settings & Tools
 
 | Feature | Description | How to Use |
 | :--- | :--- | :--- |
-| **Active Instances Window** | View all running Roblox instances in real time with username, Place ID, and PID | Settings → Tool tab → "Active Instances" |
-| **Roblox Settings Editor** | Edit Roblox's local settings file directly from the app | Settings → Tool tab → "Roblox Setting" |
-| **Lock Roblox Settings** | Sets the Roblox settings file read-only on every launch to prevent Roblox overwriting it | Settings → Tool tab → Roblox Settings → enable "Lock settings" |
-| **Roblox Version Downloader** | Download and install any Roblox version by version hash | Settings → Tool tab → "Roblox Version" |
-| **Switch Encryption Method** | Seamlessly switch between Hardware and Password encryption | Settings → Tool tab → "Switch Encryption Method" |
-| **Wipe Data** | Securely overwrite all data in `AccountManagerData` | Settings → Tool tab → "Wipe Data" |
-| **Window Position Memory** | Saves and restores the position of main window, Settings, Favorites, Auto-Rejoin, and Console Output | Automatic |
-| **Start Menu Shortcut** | Add or remove a Windows Start Menu shortcut for the app | Settings → General tab → "Add to Start Menu" |
-| **Rename Roblox Windows** | Automatically renames Roblox window titles to the account's username | Settings → Roblox tab → "Rename Roblox Windows with Account Name" |
-| **Console Output** | Real-time color-coded log of all operations with timestamps | Settings → "Console Output" button; supports Copy All & Clear |
-| **Update Checker** | Auto-checks for new releases on startup | Automatic; shows notification if update is available |
+| **Switch Encryption Method** | Seamlessly switch between Hardware and Password encryption | Settings → Misc → "Switch Encryption Method" |
+| **Wipe Data** | Securely overwrite all data in `AccountManagerData` | Settings → Misc → "Wipe Data" |
+| **Start Menu Shortcut** | Add or remove a Windows Start Menu shortcut for the app | Settings → General → "Add to Start Menu" |
+| **Rename Roblox Windows** | Automatically renames Roblox window titles to the account's username | Settings → Roblox → "Rename Roblox Windows to username" |
+| **Console Output** | Real-time color-coded log of all operations with timestamps | Console Category |
+| **Update Checker** | Auto-checks for new releases on startup | Automatic; to disable, Settings → Uncheck "Check for Updates on Startup" |
 | **Auto Update** | Download and install the latest version automatically | Click "Auto Update" in the update notification |
-| **About Tab** | View app version and access Discord/GitHub links | Settings → About tab |
+| **Roblox RAM Trim** | Clears the working set of newly detected Roblox processes | Settings → Roblox → enable **Optimize Roblox Ram** |
 
-### UI Customization
-
-| Feature | Description | How to Use |
-| :--- | :--- | :--- |
-| **Dark Theme System** | Fully customizable dark theme | Settings → Theme tab |
-| **Color Customization** | 5 color pickers: Background Dark/Mid/Light, Text, Accent | Settings → Theme tab → click color picker icons |
-| **Font Selection** | Choose from 7 preset fonts (Segoe UI, Arial, Calibri, etc.) | Settings → Theme tab → font dropdown |
-| **Font Size Adjustment** | Adjust font size (8–16px) | Settings → Theme tab → size controls |
-| **Always on Top** | Keep the window above all other windows | Settings → General tab → "Always on Top" |
-| **Discord Quick Link** | Project Discord invite link (no in-app button) | Visit the Discord server link in the About tab or README |
 
 ### Encryption & Data Security
 
@@ -242,15 +215,14 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **No Encryption** | Store accounts unencrypted (not recommended) | Setup Wizard → choose "No Encryption" |
 | **Encryption Status Indicator** | Shows encryption type in the UI | Displayed as [HARDWARE ENCRYPTED] / [PASSWORD ENCRYPTED] / [NOT ENCRYPTED] |
 | **Password Prompt** | Prompts for password on startup when using password encryption | Automatic |
-| **Portable Chromium** | Built-in Chromium browser download for environments without Chrome | Settings → Tools → "Browser Engine" → download Chromium |
+| **Portable Chromium** | Built-in Chromium browser download for environments without Chrome | Settings → Misc → Browser Engine → download Chromium |
 
 ### Anti-AFK
 
 | Feature | Description | How to Use |
 | :--- | :--- | :--- |
-| **Anti-AFK Window** | Opens a dedicated maintenance window for anti-AFK controls | Roblox tab → click **Anti-AFK** |
-| **Key Recording** | Record any keyboard or mouse input as the maintenance action | Anti-AFK window → click the action key button |
-| **Press Time** | Set how long the chosen input is held during maintenance | Anti-AFK window → set press time |
-| **Configurable Interval** | Set how often maintenance runs | Anti-AFK window → set interval |
-| **30s Countdown Tooltip** | Shows a countdown before each maintenance cycle | Automatic while Anti-AFK is enabled |
-| **Roblox RAM Trim** | Clears the working set of newly detected Roblox processes | Roblox tab → enable **Optimize Roblox Ram** |
+| **Anti-AFK Window** | Opens a dedicated maintenance window for anti-AFK controls | Anti AFK Category |
+| **Key Recording** | Record any keyboard or mouse input as the maintenance action | Anti AFK category → click the action key button |
+| **Press Count** | Set how much the chosen input is pressed during maintenance | Anti AFK category → press count |
+| **Configurable Interval** | Set how often maintenance runs | Anti AFK category → set interval |
+| **30s Countdown Tooltip** | Shows a countdown before each maintenance cycle | Anti AFK category → Show countdown tooltip |
