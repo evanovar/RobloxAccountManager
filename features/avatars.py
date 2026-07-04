@@ -10,9 +10,9 @@ import threading
 from typing import Callable, Optional
 
 import requests
+from utils.app_paths import get_data_dir
 
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CACHE_DIR = os.path.join(_ROOT_DIR, "AccountManagerData", "avatar_cache")
+_CACHE_DIR = os.path.join(get_data_dir(), "avatar_cache")
 
 AVATAR_SIZE = 22
 

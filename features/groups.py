@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import os
 from typing import Optional
+from utils.app_paths import get_data_dir
 
-_ROOT_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_GROUPS_FILE = os.path.join(_ROOT_DIR, "AccountManagerData", "groups.json")
+_GROUPS_FILE = os.path.join(get_data_dir(), "groups.json")
 
 def _load() -> dict:
     if os.path.exists(_GROUPS_FILE):
@@ -25,7 +25,7 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    os.makedirs(os.path.dirname(_GROUPS_FILE), exist_ok=True)
+    os.makedirs(get_data_dir(), exist_ok=True)
     try:
         with open(_GROUPS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)

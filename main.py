@@ -12,9 +12,10 @@ import requests
 
 from features import account_actions as actions
 from features import webhook
+from utils.app_paths import get_data_dir
 from utils.ui import main as _ui_main
 
-DATA_FOLDER = "AccountManagerData"
+DATA_FOLDER = get_data_dir()
 
 def _ensure_data_folder():
     os.makedirs(DATA_FOLDER, exist_ok=True)

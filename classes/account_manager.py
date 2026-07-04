@@ -24,12 +24,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
 from .roblox_api import RobloxAPI
+from utils.app_paths import get_data_dir
 
 
 class RobloxAccountManager:
     
     def __init__(self, password=None):
-        self.data_folder = "AccountManagerData"
+        self.data_folder = get_data_dir()
         if not os.path.exists(self.data_folder):
             os.makedirs(self.data_folder)
         

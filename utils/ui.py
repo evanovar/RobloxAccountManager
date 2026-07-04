@@ -20,8 +20,10 @@ import time
 import webbrowser
 import zipfile
 
+from utils.app_paths import get_app_dir, get_data_dir
+
 _UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
-_ROOT_DIR = os.path.dirname(_UTILS_DIR)
+_ROOT_DIR = get_app_dir()
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
@@ -469,7 +471,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._apply_stylesheet()
         self._build_ui()
 
-        _data_folder = "AccountManagerData"
+        _data_folder = get_data_dir()
         _enc_cfg = EncryptionConfig(os.path.join(_data_folder, "encryption_config.json"))
         self._setup_needed = not _enc_cfg.is_setup_complete()
         if self._setup_needed:
@@ -962,7 +964,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self._setup_stack.setCurrentIndex(1)
 
         def _do_hardware():
-            data_folder = "AccountManagerData"
+            data_folder = get_data_dir()
             enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
             enc.enable_hardware_encryption()
             _show_info(self, "Hardware Encryption Enabled",
@@ -980,7 +982,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 QMessageBox.StandardButton.No,
             )
             if res == QMessageBox.StandardButton.Yes:
-                data_folder = "AccountManagerData"
+                data_folder = get_data_dir()
                 enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
                 enc.disable_encryption()
                 self._on_setup_complete()
@@ -994,7 +996,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             if pw1 != pw2:
                 self._setup_pw_err.setText("Passwords do not match.")
                 return
-            data_folder = "AccountManagerData"
+            data_folder = get_data_dir()
             enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
             temp = PasswordEncryption(pw1)
             enc.enable_password_encryption(
@@ -2891,10 +2893,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            data_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "AccountManagerData"
-            )
+            data_dir = get_data_dir()
             try:
                 shutil.rmtree(data_dir, ignore_errors=True)
                 QMessageBox.information(
@@ -4905,7 +4904,7 @@ def main(icon_path: str | None = None) -> int:
 
     password = None
     try:
-        data_folder = "AccountManagerData"
+        data_folder = get_data_dir()
         os.makedirs(data_folder, exist_ok=True)
         enc_cfg = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
 
@@ -4931,7 +4930,7 @@ def main(icon_path: str | None = None) -> int:
     if not icon_path or not os.path.exists(icon_path):
         icon_path = os.path.join(_ROOT_DIR, "icon.ico")
         if not os.path.exists(icon_path):
-            _alt = os.path.join("AccountManagerData", "icon.ico")
+            _alt = os.path.join(get_data_dir(), "icon.ico")
             icon_path = _alt if os.path.exists(_alt) else None
 
     window = AccountManagerUIQt(manager, icon_path=icon_path)

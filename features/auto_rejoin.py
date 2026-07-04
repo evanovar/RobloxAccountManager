@@ -15,9 +15,9 @@ import psutil
 import requests
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
+from utils.app_paths import get_data_dir
 
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CONFIG_FILE = os.path.join(_ROOT_DIR, "AccountManagerData", "auto_rejoin.json")
+_CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
 
 def load_configs() -> dict:
     if os.path.exists(_CONFIG_FILE):
@@ -32,7 +32,7 @@ def load_configs() -> dict:
 
 
 def save_configs(configs: dict) -> None:
-    os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+    os.makedirs(get_data_dir(), exist_ok=True)
     temp_file = _CONFIG_FILE + ".tmp"
     try:
         with open(temp_file, "w", encoding="utf-8") as f:

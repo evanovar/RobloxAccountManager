@@ -30,11 +30,12 @@ from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
 from classes.encryption import EncryptionConfig
 import features.auto_rejoin as ar
+from utils.app_paths import get_app_dir, get_data_dir
 
 # Paths
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_RECENT_GAMES_FILE = os.path.join(_ROOT_DIR, "AccountManagerData", "recent_games.json")
-_SETTINGS_FILE = os.path.join(_ROOT_DIR, "AccountManagerData", "ui_settings.json")
+_DATA_DIR = get_data_dir()
+_RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
+_SETTINGS_FILE = os.path.join(_DATA_DIR, "ui_settings.json")
 
 # Recent games
 def load_recent_games() -> list[dict]:
@@ -56,7 +57,7 @@ def save_recent_game(place_id: str, name: str) -> None:
     games = [g for g in games if str(g.get("place_id")) != str(place_id)]
     games.insert(0, {"place_id": place_id, "name": name})
     games = games[:20]
-    os.makedirs(os.path.dirname(_RECENT_GAMES_FILE), exist_ok=True)
+    os.makedirs(_DATA_DIR, exist_ok=True)
     with open(_RECENT_GAMES_FILE, "w", encoding="utf-8") as f:
         json.dump(games, f, indent=2)
 
@@ -77,7 +78,7 @@ def load_ui_settings() -> dict:
 def save_ui_setting(key: str, value) -> None:
     settings = load_ui_settings()
     settings[key] = value
-    os.makedirs(os.path.dirname(_SETTINGS_FILE), exist_ok=True)
+    os.makedirs(_DATA_DIR, exist_ok=True)
     with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
@@ -667,11 +668,12 @@ _mr_h64_path: str | None = None
 
 
 def find_handle64() -> str | None:
-    data_dir = os.path.join(_ROOT_DIR, "AccountManagerData")
+    data_dir = _DATA_DIR
+    app_dir = get_app_dir()
     candidates = [
         os.path.join(data_dir, "handle64.exe"),
-        os.path.join(_ROOT_DIR, "handle64.exe"),
-        os.path.join(_ROOT_DIR, "handle", "handle64.exe"),
+        os.path.join(app_dir, "handle64.exe"),
+        os.path.join(app_dir, "handle", "handle64.exe"),
     ]
     for p in candidates:
         if os.path.exists(p):
@@ -685,7 +687,7 @@ def download_handle64() -> bool:
         
         url = "https://download.sysinternals.com/files/Handle.zip"
         exe_name = "handle64.exe" if platform.architecture()[0] == "64bit" else "handle.exe"
-        data_dir = os.path.join(_ROOT_DIR, "AccountManagerData")
+        data_dir = _DATA_DIR
         os.makedirs(data_dir, exist_ok=True)
         dest = os.path.join(data_dir, "handle64.exe")
         with tempfile.TemporaryDirectory() as tmp:
