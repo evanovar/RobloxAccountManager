@@ -8,7 +8,8 @@
 
 > [!IMPORTANT]
 > Before you see this as a **"Virus"** or **"Unofficial,"** please read:
-> - **Project Status:** This is the current active version of the Evanovar's Roblox Account Manager. While the original C# tool by **ic3w0lf22** is a classic, it has been discontinued. I (evanovar) have built this in Python to keep the project alive and updated.<br><br>
+
+> - **Project Status:** This project was inspired by the original Roblox Account Manager by ic3w0lf22. I recreated it in Python as a personal project because I thought it would be fun to build and learn from. It is not intended to be an official continuation of the original project.<br><br>
 > - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
 > - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
 
@@ -25,17 +26,17 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 
 ## 📑 Table of Contents
 
-- [Installation](#-installation)
-- [Requirements](#-requirements)
-- [Disclaimer](#-disclaimer)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Disclaimer](#disclaimer)
 - [Privacy Policy](#privacy-policy)
 - [System Changes and Uninstallation](#system-changes-and-uninstallation)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Support](#-support)
-- [Features](#-features)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support](#support)
+- [Features](#features)
 
-## 🛠️ Installation
+## Installation
 
 ### Method 1: Direct EXE (Recommended for Users)
 
@@ -47,6 +48,7 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 4. Double-click to run - that's it!
 
 **Requirements:**
+
 - **Google Chrome browser**
 - **Windows** (currently optimized for Windows)
 
@@ -55,8 +57,8 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 ### Method 2: Clone Repository (For Developers, or for people that dont trust the EXE)
 
 **Full source code access and customization**
-
 **Requirements:**
+
 - **Python 3.7+**
 - **Google Chrome browser**
 - **Windows** (currently optimized for Windows)
@@ -64,33 +66,40 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 ### Setup
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/evanovar/RobloxAccountManager
    cd RobloxAccountManager
    ```
 
 2. **Install dependencies**
+
    ```bash
    py -m pip install -r requirements.txt
    ```
 
 3. **Run the application**
+
    ```bash
    py main.py
    ```
-   
-## 📋 Requirements
+
+## Requirements
 
 The following Python packages are required:
+
 - `selenium` - Browser automation
 - `requests` - HTTP requests for account validation and game info
 - `webdriver-manager` - Automatic ChromeDriver management
 - `pycryptodome` - Encryption and cookie handling
+- `PySide6` - Main desktop UI framework
 - `pywin32` - Windows API access for Multi Roblox feature
 - `psutil` - Process monitoring for Multi Roblox handle64 mode
 - `pyautoit` - Window rotation and maintenance actions for Anti-AFK
+- `websockets` - WebSocket server support for developer features
+- `PyInstaller` - Required to build the standalone EXE
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 This tool is for educational purposes only. Users are responsible for complying with Roblox's Terms of Service. The developers are not responsible for any consequences resulting from the use of this tool.
 
@@ -128,19 +137,19 @@ Uninstallation:
 3. Delete AccountManagerData if you want to remove local data.
 4. Remove the Start Menu shortcut if it exists.
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## 📄 License
+## License
 
 This project is open source and available under the [GPL 3.0 License](LICENSE).
 
-## 📞 Support
+## Support
 
 Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJXyEhgY)** where the community and developers can assist you!
 
-## ✨ Features
+## Features
 
 ### Account Management
 

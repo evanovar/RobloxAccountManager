@@ -19,7 +19,11 @@ class HardwareEncryption:
     
     def __init__(self):
         self.machine_id = self._get_machine_id()
-        self.key = self._derive_key_from_machine_id()
+        self.legacy_machine_id = self._get_legacy_machine_id()
+        self.key = self._derive_key_from_machine_id(self.machine_id)
+        self.legacy_key = None
+        if self.legacy_machine_id and self.legacy_machine_id != self.machine_id:
+            self.legacy_key = self._derive_key_from_machine_id(self.legacy_machine_id)
     
     def _get_machine_id(self):
         """Generate unique machine ID from hardware identifiers"""
@@ -51,11 +55,16 @@ class HardwareEncryption:
         
         machine_string = "-".join(identifiers)
         return hashlib.sha256(machine_string.encode()).hexdigest()
+
+    def _get_legacy_machine_id(self):
+        identifiers = [platform.node(), platform.machine()]
+        machine_string = "-".join(identifiers)
+        return hashlib.sha256(machine_string.encode()).hexdigest()
     
-    def _derive_key_from_machine_id(self):
+    def _derive_key_from_machine_id(self, machine_id):
         """Derive encryption key from machine ID"""
         salt = b'roblox_account_manager_salt_v1'
-        key = PBKDF2(self.machine_id, salt, dkLen=32, count=100000)
+        key = PBKDF2(machine_id, salt, dkLen=32, count=100000)
         return key
     
     def encrypt_data(self, data):
@@ -80,24 +89,28 @@ class HardwareEncryption:
     
     def decrypt_data(self, encrypted_package):
         """Decrypt data using hardware-based key"""
-        try:
-            nonce = base64.b64decode(encrypted_package['nonce'])
-            tag = base64.b64decode(encrypted_package['tag'])
-            ciphertext = base64.b64decode(encrypted_package['ciphertext'])
-            
-            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
-            
-            data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
-            
-            data_string = data_bytes.decode('utf-8')
-            
+        nonce = base64.b64decode(encrypted_package['nonce'])
+        tag = base64.b64decode(encrypted_package['tag'])
+        ciphertext = base64.b64decode(encrypted_package['ciphertext'])
+
+        keys = [self.key]
+        if self.legacy_key and self.legacy_key != self.key:
+            keys.append(self.legacy_key)
+
+        last_error = None
+        for key in keys:
             try:
-                return json.loads(data_string)
-            except:
-                return data_string
-                
-        except Exception as e:
-            raise Exception("Decryption failed. This program may have been encrypted on a different machine.")
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+                data_string = data_bytes.decode('utf-8')
+                try:
+                    return json.loads(data_string)
+                except Exception:
+                    return data_string
+            except Exception as exc:
+                last_error = exc
+
+        raise Exception("Decryption failed. This program may have been encrypted on a different machine.")
 
 
 class PasswordEncryption:

@@ -38,6 +38,7 @@ class RobloxAccountManager:
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.encryptor = None
         self.secure_settings = {}
+        self._entered_password_hash = None
         
         if self.encryption_config.is_encryption_enabled():
             method = self.encryption_config.get_encryption_method()
@@ -46,13 +47,7 @@ class RobloxAccountManager:
             elif method == 'password':
                 if password is None:
                     raise ValueError("Password required for password-based encryption")
-                
-                stored_hash = self.encryption_config.get_password_hash()
-                if stored_hash:
-                    entered_hash = hashlib.sha256(password.encode()).hexdigest()
-                    if entered_hash != stored_hash:
-                        raise ValueError("Invalid password")
-                
+                self._entered_password_hash = hashlib.sha256(password.encode()).hexdigest()
                 salt = self.encryption_config.get_salt()
                 self.encryptor = PasswordEncryption(password, salt)
         
@@ -71,6 +66,7 @@ class RobloxAccountManager:
                         decrypted_data = self.encryptor.decrypt_data(data['data'])
                         accounts = self._extract_accounts_payload(decrypted_data)
                         self._migrate_accounts(accounts)
+                        self._repair_password_hash_if_needed()
                         return accounts
                     except Exception as e:
                         raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
@@ -89,6 +85,20 @@ class RobloxAccountManager:
                 return {}
         self.secure_settings = {}
         return {}
+
+    def _repair_password_hash_if_needed(self):
+        if not self._entered_password_hash:
+            return
+        stored_hash = self.encryption_config.get_password_hash()
+        if stored_hash == self._entered_password_hash:
+            return
+        if self.encryption_config.get_encryption_method() != 'password':
+            return
+        self.encryption_config.config['password_hash'] = self._entered_password_hash
+        try:
+            self.encryption_config.save_config()
+        except Exception:
+            pass
 
     def _extract_accounts_payload(self, data):
         """Support legacy account-only files and wrapped account+secure-settings files."""
