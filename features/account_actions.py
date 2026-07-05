@@ -322,9 +322,12 @@ def get_encryption_status(manager) -> tuple[str, str]:
 
 # Additional launch/join actions
 def launch_home(manager, username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+    S = load_ui_settings()
+    launcher = S.get("roblox_launcher", "default")
+    custom_path = S.get("custom_roblox_launcher_path", "")
     def _worker():
         try:
-            ok = manager.launch_roblox(username, "", "")
+            ok = manager.launch_roblox(username, "",  "", launcher_preference=launcher, custom_launcher_path=custom_path)
             on_done(ok, "" if ok else "Failed to launch Roblox.")
         except Exception as e:
             on_done(False, str(e))
