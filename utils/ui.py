@@ -3725,12 +3725,18 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._rebuild_group_bar()
         self._refresh_account_list()
 
-    def _on_assign_to_group(self, username: str, group_name: str):
-        groups.set_account_group(username, group_name)
+    def _on_assign_to_group(self, usernames, group_name: str):
+        if isinstance(usernames, str):
+            usernames = [usernames]
+        for username in usernames:
+            groups.set_account_group(username, group_name)
         self._refresh_account_list()
 
-    def _on_remove_from_group(self, username: str):
-        groups.set_account_group(username, None)
+    def _on_remove_from_group(self, usernames):
+        if isinstance(usernames, str):
+            usernames = [usernames]
+        for username in usernames:
+            groups.set_account_group(username, None)
         self._refresh_account_list()
 
     def _load_avatars_async(self):
@@ -3887,21 +3893,35 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     # Remove account
     def _on_remove_account(self):
-        username = self._get_selected_username()
-        if not username:
+        usernames = self._get_selected_usernames()
+        if not usernames:
             _show_error(self, "No selection", "Please select an account to remove.")
             return
-        reply = QMessageBox.question(
-            self, "Confirm Removal",
-            f"Remove account '{username}'? This cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            ok, msg = actions.remove_account(self.manager, username)
-            if ok:
-                self._refresh_account_list()
-            else:
-                _show_error(self, "Error", msg)
+        if len(usernames) == 1:
+            reply = QMessageBox.question(
+                self, "Confirm Removal",
+                f"Remove account '{usernames[0]}'? This cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                ok, msg = actions.remove_account(self.manager, usernames[0])
+                if ok:
+                    self._refresh_account_list()
+                else:
+                    _show_error(self, "Error", msg)
+        else:
+            reply = QMessageBox.question(
+                self, "Confirm Removal",
+                f"Remove {len(usernames)} accounts? This cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                for username in usernames:
+                    ok, msg = actions.remove_account(self.manager, username)
+                    if ok:
+                        self._refresh_account_list()
+                    else:
+                        _show_error(self, "Error", msg)
 
     # Join Place ID
     def _on_join_place(self):
@@ -3924,12 +3944,19 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self.manager, usernames[0], place_id, private,
                 on_done=self._emit_launch_done,
             )
+
+            actions.save_recent_game(place_id, self._game_name_label.text().replace("Current: ", ""))
+            self._refresh_recent_games()
+            
         else:
             print(f"[INFO] Joining place {place_id} for {len(usernames)} accounts")
             actions.join_place_all(
                 self.manager, usernames, place_id, private,
                 on_done=self._emit_launch_done,
             )
+
+            actions.save_recent_game(place_id, self._game_name_label.text().replace("Current: ", ""))
+            self._refresh_recent_games()
 
     # Join User
     def _on_join_user(self):
@@ -4116,15 +4143,22 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QMenu::item:selected {{ background: {SELECT}; }}"
         )
         group_list = groups.get_group_names()
+        usernames = self._get_selected_usernames()
+
         if group_list:
             for gname in group_list:
                 act_grp = move_menu.addAction(gname)
                 act_grp.triggered.connect(
-                    lambda _=False, u=username, g=gname: self._on_assign_to_group(u, g)
+                    lambda _=False, users=list(usernames), g=gname:
+                        self._on_assign_to_group(users, g)
                 )
-            move_menu.addSeparator()
+        move_menu.addSeparator()
         act_ungrp = move_menu.addAction("Remove from Group")
-        act_ungrp.triggered.connect(lambda: self._on_remove_from_group(username))
+        usernames = self._get_selected_usernames()
+
+        act_ungrp.triggered.connect(
+            lambda _=False, users=list(usernames): self._on_remove_from_group(users)
+        )
 
         menu.addSeparator()
         act_remove = menu.addAction("Remove Account")
@@ -4373,10 +4407,10 @@ class _ImportCookieDialog(QDialog):
         lay.setSpacing(10)
 
         lay.addWidget(QLabel("Import Account from Cookie"))
-        lay.addWidget(QLabel("Paste your .ROBLOSECURITY cookie(s) below:"))
+        lay.addWidget(QLabel("Paste one or more .ROBLOSECURITY cookie(s) below:"))
 
         self._text = QTextEdit()
-        self._text.setPlaceholderText("_|WARNING:-DO-NOT-SHARE-THIS...")
+        self._text.setPlaceholderText("_|WARNING:-Cookie1 _|WARNING:-Cookie2")
         self._text.setFixedHeight(70)
         lay.addWidget(self._text)
 

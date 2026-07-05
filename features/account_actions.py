@@ -10,6 +10,7 @@ import os
 import threading
 import time
 import ctypes
+import re
 import autoit
 import psutil
 import platform
@@ -36,6 +37,7 @@ from utils.app_paths import get_app_dir, get_data_dir
 _DATA_DIR = get_data_dir()
 _RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "ui_settings.json")
+_CHROMIUM_DIR = os.path.join(_DATA_DIR, "Chromium", "chrome-win64")
 
 # Recent games
 def load_recent_games() -> list[dict]:
@@ -280,6 +282,30 @@ def add_account(manager, cookie: str, on_done: Callable[[bool, str], None] = lam
     threading.Thread(target=_worker, daemon=True, name="add-account-cookie").start()
 
 
+def _split_cookie_bundle(cookie_blob: str) -> list[str]:
+    marker = "_|WARNING:-"
+    if not cookie_blob:
+        return []
+
+    text = cookie_blob.strip().strip('"').strip("'")
+    if marker not in text:
+        return [text] if text else []
+
+    parts: list[str] = []
+    matches = list(re.finditer(re.escape(marker), text))
+    for idx, match in enumerate(matches):
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        cookie = text[start:end].strip().strip('"').strip("'")
+        if cookie.startswith(marker):
+            parts.append(cookie)
+
+    if parts:
+        return parts
+
+    return [text]
+
+
 def remove_account(manager, username: str) -> tuple[bool, str]:
     try:
         ok = manager.delete_account(username)
@@ -406,13 +432,71 @@ def fetch_game_name_async(place_id: str, on_done: Callable[[str], None] = lambda
 
 
 def import_cookie(manager, cookie: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
-    add_account(manager, cookie, on_done=on_done)
+    cookies = _split_cookie_bundle(cookie)
+    if not cookies:
+        on_done(False, "No cookie data provided.")
+        return
+
+    if len(cookies) == 1:
+        add_account(manager, cookies[0], on_done=on_done)
+        return
+
+    def _worker():
+        success_count = 0
+        imported_users: list[str] = []
+        failures = 0
+
+        for cookie_value in cookies:
+            ok, username = manager.import_cookie_account(cookie_value)
+            if ok and username:
+                success_count += 1
+                imported_users.append(str(username))
+            else:
+                failures += 1
+
+        if success_count:
+            summary = f"Imported {success_count}/{len(cookies)} account(s)."
+            if imported_users:
+                summary += " " + ", ".join(imported_users)
+            on_done(True, summary)
+        else:
+            on_done(False, f"Failed to import {len(cookies)} cookie(s).")
+
+    threading.Thread(target=_worker, daemon=True, name="add-account-cookie-batch").start()
+
+def get_browser_path() -> str | None:
+    S = load_ui_settings()
+    browser_type = S.get("browser_type", "chrome")
+    
+    if browser_type == "chromium":
+        chromium_path = os.path.join(_CHROMIUM_DIR, "chrome.exe")
+        if os.path.exists(chromium_path):
+            return chromium_path
+        browser_type = "chrome"
+    
+    if browser_type == "chrome":
+        candidates = []
+        pf = os.environ.get('ProgramFiles')
+        pfx86 = os.environ.get('ProgramFiles(x86)')
+        localapp = os.environ.get('LOCALAPPDATA')
+        if pf:
+            candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+        if pfx86:
+            candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+        if localapp:
+            candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+        for path in candidates:
+            if path and os.path.exists(path):
+                return path
+    
+    return None
 
 def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *_: None, javascript: str = "") -> None:
+    browser_path = get_browser_path()
     def _worker():
         existing_before = set(manager.accounts.keys())
         try:
-            ok = manager.add_account(javascript=javascript or "")
+            ok = manager.add_account(javascript=javascript or "", browser_path=browser_path)
             if ok:
                 new_names = set(manager.accounts.keys()) - existing_before
                 username = next(iter(new_names)) if new_names else "(unknown)"
