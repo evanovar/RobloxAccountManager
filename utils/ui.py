@@ -396,9 +396,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self.manager = manager
 
         for candidate in [
+            os.path.join(get_data_dir(), "icon.ico"),
             icon_path,
             os.path.join(_ROOT_DIR, "icon.ico"),
-            os.path.join(_ROOT_DIR, "AccountManagerData", "icon.ico"),
         ]:
             if candidate and os.path.exists(candidate):
                 self._icon_path = candidate
@@ -1588,15 +1588,31 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._load_mr_settings()
         return panel
 
+    def _is_admin(self) -> bool:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+
     def _load_mr_settings(self):
         saved = actions.load_ui_settings()
         self._mr_method = saved.get("multi_roblox_method", "default")
         self._mr_enabled = saved.get("multi_roblox_enabled", False)
 
-        if self._mr_method == "handle64":
+        handle64_available = bool(actions.find_handle64())
+        self._mr_handle64_radio.setEnabled(handle64_available)
+
+        self._mr_handle64_radio.blockSignals(True)
+        self._mr_default_radio.blockSignals(True)
+        if self._mr_method == "handle64" and handle64_available:
             self._mr_handle64_radio.setChecked(True)
         else:
+            if self._mr_method == "handle64" and not handle64_available:
+                self._mr_method = "default"
+                actions.save_ui_setting("multi_roblox_method", "default")
             self._mr_default_radio.setChecked(True)
+        self._mr_handle64_radio.blockSignals(False)
+        self._mr_default_radio.blockSignals(False)
 
         self._mr_enabled_chk.setChecked(self._mr_enabled)
         self._update_mr_h64_status()
@@ -1622,6 +1638,19 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_mr_method_changed(self):
         if self._mr_handle64_radio.isChecked():
+            if not self._is_admin():
+                self._mr_ask_restart_as_admin()
+                self._mr_default_radio.blockSignals(True)
+                self._mr_handle64_radio.blockSignals(True)
+                self._mr_default_radio.setChecked(True)
+                self._mr_default_radio.blockSignals(False)
+                self._mr_handle64_radio.blockSignals(False)
+                self._mr_method = "default"
+                actions.save_ui_setting("multi_roblox_method", self._mr_method)
+                if self._mr_enabled:
+                    self._stop_multi_roblox()
+                    self._start_multi_roblox()
+                return
             self._mr_method = "handle64"
         else:
             self._mr_method = "default"
@@ -1661,7 +1690,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "Administrator Required",
             "The program is not running as administrator.\n\n"
             "Handle64 mode requires administrator privileges.\n\n"
-            "Would you like to restart as administrator?",
+            "Do you want to relaunch the app as administrator?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -4936,10 +4965,17 @@ def main(icon_path: str | None = None) -> int:
         return 1
 
     if not icon_path or not os.path.exists(icon_path):
-        icon_path = os.path.join(_ROOT_DIR, "icon.ico")
+        icon_path = os.path.join(get_data_dir(), "icon.ico")
         if not os.path.exists(icon_path):
-            _alt = os.path.join(get_data_dir(), "icon.ico")
+            _alt = os.path.join(_ROOT_DIR, "icon.ico")
             icon_path = _alt if os.path.exists(_alt) else None
+
+    if icon_path and os.path.exists(icon_path):
+        try:
+            app.setApplicationIcon(QIcon(icon_path))
+            app.setWindowIcon(QIcon(icon_path))
+        except Exception:
+            pass
 
     window = AccountManagerUIQt(manager, icon_path=icon_path)
     window.show()
