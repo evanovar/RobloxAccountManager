@@ -8,7 +8,7 @@ from __future__ import annotations
 import collections
 import ctypes
 from ctypes import wintypes
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import os
 import re
@@ -20,7 +20,7 @@ import time
 import webbrowser
 import zipfile
 
-from utils.app_paths import get_app_dir, get_data_dir
+from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 
 _UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = get_app_dir()
@@ -398,7 +398,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         for candidate in [
             os.path.join(get_data_dir(), "icon.ico"),
             icon_path,
-            os.path.join(_ROOT_DIR, "icon.ico"),
+            get_resource_path("icon.ico"),
         ]:
             if candidate and os.path.exists(candidate):
                 self._icon_path = candidate
@@ -3385,7 +3385,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         recent_header.addWidget(recent_lbl)
         recent_header.addStretch(1)
 
-        _discord_path = os.path.join(_ROOT_DIR, "AccountManagerData", "discordlogo.png")
+        _discord_path = os.path.join(get_data_dir(), "discordlogo.png")
+        if not os.path.exists(_discord_path):
+            _discord_path = get_resource_path("discordlogo.png")
         discord_btn = QPushButton()
         discord_btn.setObjectName("discordBtn")
         discord_btn.setFixedSize(18, 18)
@@ -4967,7 +4969,7 @@ def main(icon_path: str | None = None) -> int:
     if not icon_path or not os.path.exists(icon_path):
         icon_path = os.path.join(get_data_dir(), "icon.ico")
         if not os.path.exists(icon_path):
-            _alt = os.path.join(_ROOT_DIR, "icon.ico")
+            _alt = get_resource_path("icon.ico")
             icon_path = _alt if os.path.exists(_alt) else None
 
     if icon_path and os.path.exists(icon_path):

@@ -16,11 +16,6 @@ import requests
 import zipfile
 import io
 from pathlib import Path
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException
-from webdriver_manager.chrome import ChromeDriverManager
 
 from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
 from .roblox_api import RobloxAPI
@@ -191,6 +186,11 @@ class RobloxAccountManager:
     def setup_chrome_driver(self, browser_path=None):
         print(f"[INFO] setup_chrome_driver called with browser_path: {browser_path}")
         profile_dir = self.create_temp_profile()
+        # to make startup faster
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options
+        from webdriver_manager.chrome import ChromeDriverManager
 
         
         chrome_options = Options()
@@ -272,6 +272,7 @@ class RobloxAccountManager:
             return None
     
     def wait_for_login(self, driver, timeout=300):
+        from selenium.common.exceptions import WebDriverException
         print("Please log into your Roblox account")
         
         detector_script = """

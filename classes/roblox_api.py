@@ -5,7 +5,6 @@ Handles authentication, info, and game launching
 
 import os
 import re
-import json
 import time
 import random
 import requests

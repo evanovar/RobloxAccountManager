@@ -9,7 +9,6 @@ import sys
 
 
 def get_project_root() -> str:
-    """Return the project root in source runs or the executable folder in frozen builds."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +16,16 @@ def get_project_root() -> str:
 
 def get_app_dir() -> str:
     return get_project_root()
+
+
+def get_bundle_root() -> str:
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", get_project_root())
+    return get_project_root()
+
+
+def get_resource_path(*parts: str) -> str:
+    return os.path.join(get_bundle_root(), *parts)
 
 
 def get_data_dir() -> str:
