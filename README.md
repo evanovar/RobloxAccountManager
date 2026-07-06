@@ -8,7 +8,6 @@
 
 > [!IMPORTANT]
 > Before you see this as a **"Virus"** or **"Unofficial,"** please read:
-
 > - **Project Status:** This project was inspired by the original Roblox Account Manager by ic3w0lf22. I recreated it in Python as a personal project because I thought it would be fun to build and learn from. It is not intended to be an official continuation of the original project.<br><br>
 > - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
 > - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
