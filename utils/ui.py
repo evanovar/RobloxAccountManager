@@ -1660,32 +1660,43 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._start_multi_roblox()
 
     def _on_mr_enabled_changed(self, state):
-        import traceback
-
-        print("_on_mr_enabled_changed:", state)
-
         try:
             self._mr_enabled = (state == Qt.CheckState.Checked.value)
-            print("SET self._mr_enabled TO:", self._mr_enabled)
-
             actions.save_ui_setting("multi_roblox_enabled", self._mr_enabled)
-            print("SAVED TO SETTINGS")
 
             if self._mr_enabled:
-                print("Starting MR")
-                self._start_multi_roblox()
+                QTimer.singleShot(0, self._start_multi_roblox)
             else:
-                print("Stopping MR")
                 self._stop_multi_roblox()
 
             self._update_mr_status()
-
-        except Exception:
-            print("_on_mr_enabled_changed exc:")
-            traceback.print_exc()
+            
+        except Exception as e:
+            print(f"Error in _on_mr_enabled_changed: {e}")
 
     def _start_multi_roblox(self):
-        print("entered _start_multi_roblox")
+        if self._mr_method == "default":
+            roblox_running = actions.is_roblox_running()
+            if roblox_running:
+                reply = QMessageBox.question(
+                    self,
+                    "Multi Roblox",
+                    "Roblox is currently running.\n"
+                    "Multi Roblox (default) must be enabled before Roblox starts.\n"
+                    "Do you want to close all Roblox processes now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    actions.kill_roblox()
+                else:
+                    self._mr_enabled = False
+                    self._mr_enabled_chk.blockSignals(True)
+                    self._mr_enabled_chk.setChecked(False)
+                    self._mr_enabled_chk.blockSignals(False)
+                    actions.save_ui_setting("multi_roblox_enabled", False)
+                    self._update_mr_status() 
+                    return
+
         ok, msg = actions.enable_multi_roblox(self._mr_method)
         if not ok:
             if msg == "NEEDS_ADMIN":
@@ -1698,6 +1709,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._mr_enabled_chk.setChecked(False)
             self._mr_enabled_chk.blockSignals(False)
             actions.save_ui_setting("multi_roblox_enabled", False)
+            self._update_mr_status()
         else:
             self._update_mr_status()
 
