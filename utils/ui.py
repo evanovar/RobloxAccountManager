@@ -4286,6 +4286,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not username:
             return
 
+        if username not in self._get_selected_usernames():
+            self._account_list.setCurrentItem(item)
+
         menu = QMenu(self)
         menu.setStyleSheet(
             f"QMenu {{ background: {PANEL}; border: 1px solid {LINE};"
@@ -4347,13 +4350,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         chosen = menu.exec(self._account_list.mapToGlobal(pos))
         if chosen == act_join:
-            self._account_list.setCurrentItem(item)
             self._on_join_place()
         elif chosen == act_note:
-            self._account_list.setCurrentItem(item)
             self._on_edit_note()
         elif chosen == act_remove:
-            self._account_list.setCurrentItem(item)
             self._on_remove_account()
         elif chosen in (act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie):
             self._on_copy_contents(chosen, act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie, username, is_multi, multi_sel)
