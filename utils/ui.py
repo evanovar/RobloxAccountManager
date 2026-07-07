@@ -517,6 +517,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if S.get("rename_roblox_windows", False):
             self._start_rename_windows()
 
+        if S.get("roblox_installer_fix", False):
+            try:
+                RobloxAPI.quarantine_installers()
+            except Exception as e:
+                print(f"[ERROR] Failed to quarantine installers: {e}")
+
         if S.get("websocket_enabled") and S.get("developer_mode"):
             self._ws_server.start()
 
@@ -2026,6 +2032,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if actions.load_ui_settings().get("presence_indicator", False):
             self._start_presence_scanner()
 
+        f.addWidget(_sec("FIXES"))
+        self._sett_installer_fix_chk = _chk(
+            "roblox_installer_fix", "Roblox Installer Fix",
+            "Moves RobloxPlayerInstaller.exe out of each Roblox version folder\n"
+            "on launch to stop the installer popup, then restores it on exit.",
+            on_change=self._on_sett_installer_fix,
+        )
+        f.addWidget(self._sett_installer_fix_chk)
+
         f.addWidget(_sec("RAM OPTIMIZATION"))
         self._sett_boost_ram_chk = _chk(
             "optimize_roblox_ram", "Boost Roblox RAM Limit",
@@ -2363,6 +2378,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._start_presence_scanner()
         else:
             self._stop_presence_scanner()
+
+    def _on_sett_installer_fix(self, enabled: bool):
+        try:
+            if enabled:
+                RobloxAPI.quarantine_installers()
+            else:
+                RobloxAPI.restore_installers()
+        except Exception as e:
+            print(f"[ERROR] Roblox Installer Fix toggle failed: {e}")
 
     def _start_update_check(self) -> None:
         if not actions.load_ui_settings().get("check_updates_on_startup", True):
@@ -3324,7 +3348,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def closeEvent(self, event):
         try:
             for worker in list(self._ar_workers.values()):
-                worker.stop()
+                worker.stop(join_timeout=1.0)
         except Exception:
             pass
         # Stop WebSocket server
@@ -3349,6 +3373,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self._drag_filter.cleanup()
         except Exception:
             pass
+        # Restore quarantined installers
+        try:
+            if actions.load_ui_settings().get("roblox_installer_fix", False):
+                RobloxAPI.restore_installers()
+        except Exception as e:
+            print(f"[ERROR] Failed to restore installers: {e}")
         super().closeEvent(event)
 
     def _ar_on_remove(self):
@@ -3369,14 +3399,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._ar_configs.pop(account, None)
         ar.save_configs(self._ar_configs)
         self._ar_refresh_list()
-
-    def closeEvent(self, event):
-        for worker in self._ar_workers.values():
-            try:
-                worker.stop(join_timeout=1.0)
-            except Exception:
-                pass
-        super().closeEvent(event)
 
     def _build_right_panel(self) -> QFrame: # Right panel actions
         panel = QFrame()
