@@ -857,8 +857,17 @@ def _mr_h64_close_handles(pids: list[int]):
 
 
 def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
+    print("enter _enable_multi_roblox method:", method)
     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+    print("before disable")
     disable_multi_roblox() # clean up any existing state
+    print("after disable")
+
+    print("enable multi roblox section")
+    print(f"_mr_handle = {_mr_handle}")
+    print(f"_mr_h64_monitoring = {_mr_h64_monitoring}")
+    print(f"_mr_h64_thread = {_mr_h64_thread}")
+    print(f"_mr_h64_path = {_mr_h64_path}")
 
     use_h64 = (method == "handle64")
 
@@ -887,22 +896,27 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         return True, ""
 
     try:
+        print("enter mutex creation")
         mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
+        print("mutex created")
         if win32api.GetLastError() == 183:
             print("[Multi Roblox] Mutex already existed — took ownership.")
         else:
             print("[Multi Roblox] Mutex created.")
     except Exception as e:
         return False, f"Failed to create mutex: {e}"
-
+    print("before cookie file")
     cookie_file = None
     cookies_path = os.path.join(
         os.getenv("LOCALAPPDATA", ""),
         r"Roblox\LocalStorage\RobloxCookies.dat"
     )
+    print("cookie file path:", cookies_path)
     if os.path.exists(cookies_path):
         try:
+            print("enter cookie file open")
             cookie_file = open(cookies_path, "r+b")
+            print("cookie file opened")
             msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
             print("[Multi Roblox] Error 773 fix applied (cookie lock).")
         except OSError:
@@ -914,9 +928,68 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
     print("[Multi Roblox] Started (default mode)")
     return True, ""
 
+# def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
+#     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+#     disable_multi_roblox() # clean up any existing state
+
+#     use_h64 = (method == "handle64")
+
+#     if use_h64:
+#         # Admin check
+#         try:
+#             is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+#         except Exception:
+#             is_admin = False
+
+#         if not is_admin:
+#             print("[Multi Roblox] handle64 mode requires admin. Not running as admin.")
+#             return False, "NEEDS_ADMIN"
+
+#         h64 = find_handle64()
+#         if not h64:
+#             print("[Multi Roblox] handle64.exe not found. Download it first.")
+#             return False, "handle64.exe not found. Click 'Download Handle64' first."
+
+#         _mr_h64_path = h64
+#         _mr_h64_monitoring = True
+#         _mr_h64_thread = threading.Thread(target=_mr_h64_monitor_worker, daemon=True)
+#         _mr_h64_thread.start()
+#         _mr_handle = {"mutex": None, "file": None}
+#         print("[Multi Roblox] Started (handle64 mode)")
+#         return True, ""
+
+#     try:
+#         mutex = win32event.CreateMutex(None, True, "ROBLOX_singletonEvent")
+#         if win32api.GetLastError() == 183:
+#             print("[Multi Roblox] Mutex already existed — took ownership.")
+#         else:
+#             print("[Multi Roblox] Mutex created.")
+#     except Exception as e:
+#         return False, f"Failed to create mutex: {e}"
+
+#     cookie_file = None
+#     cookies_path = os.path.join(
+#         os.getenv("LOCALAPPDATA", ""),
+#         r"Roblox\LocalStorage\RobloxCookies.dat"
+#     )
+#     if os.path.exists(cookies_path):
+#         try:
+#             cookie_file = open(cookies_path, "r+b")
+#             msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
+#             print("[Multi Roblox] Error 773 fix applied (cookie lock).")
+#         except OSError:
+#             print("[Multi Roblox] Could not lock RobloxCookies.dat (may already be locked).")
+#     else:
+#         print("[Multi Roblox] RobloxCookies.dat not found — 773 fix skipped.")
+
+#     _mr_handle = {"mutex": mutex, "file": cookie_file}
+#     print("[Multi Roblox] Started (default mode)")
+#     return True, ""
 
 def disable_multi_roblox():
+    print("enter disable_multi_roblox")
     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+    print(f"handle = {_mr_handle}, h64_monitoring = {_mr_h64_monitoring}, h64_thread = {_mr_h64_thread}, h64_path = {_mr_h64_path}")
 
     if _mr_h64_monitoring:
         _mr_h64_monitoring = False
@@ -927,24 +1000,33 @@ def disable_multi_roblox():
         print("[Multi Roblox] Handle64 monitor stopped.")
 
     if _mr_handle:
+        print(f"_mr_handle exist, key = {_mr_handle.keys()}")
         f = _mr_handle.get("file")
+        print(f"file = {f}")
         if f:
+            print("cookie file exist")
             try:
                 cookies_path = os.path.join(
                     os.getenv("LOCALAPPDATA", ""),
                     r"Roblox\LocalStorage\RobloxCookies.dat"
                 )
+                print(f"path: {cookies_path}")
                 if os.path.exists(cookies_path):
+                    print("path exist")
                     msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
+                    print("cookie unlocked")
             except Exception as e:
                 print(f"[Multi Roblox] Failed to unlock cookie file: {e}")
             try:
                 f.close()
+                print("cookie file closed")
             except Exception:
                 pass
 
         m = _mr_handle.get("mutex")
+        print(f"mutex = {m}")
         if m:
+            print("mutex exist")
             try:
                 win32event.ReleaseMutex(m)
                 win32api.CloseHandle(m)
@@ -954,3 +1036,43 @@ def disable_multi_roblox():
 
         _mr_handle = None
         print("[Multi Roblox] Stopped.")
+
+# def disable_multi_roblox():
+#     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+
+#     if _mr_h64_monitoring:
+#         _mr_h64_monitoring = False
+#         if _mr_h64_thread:
+#             _mr_h64_thread.join(timeout=2.0)
+#         _mr_h64_thread = None
+#         _mr_h64_path = None
+#         print("[Multi Roblox] Handle64 monitor stopped.")
+
+#     if _mr_handle:
+#         f = _mr_handle.get("file")
+#         if f:
+#             try:
+#                 cookies_path = os.path.join(
+#                     os.getenv("LOCALAPPDATA", ""),
+#                     r"Roblox\LocalStorage\RobloxCookies.dat"
+#                 )
+#                 if os.path.exists(cookies_path):
+#                     msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
+#             except Exception as e:
+#                 print(f"[Multi Roblox] Failed to unlock cookie file: {e}")
+#             try:
+#                 f.close()
+#             except Exception:
+#                 pass
+
+#         m = _mr_handle.get("mutex")
+#         if m:
+#             try:
+#                 win32event.ReleaseMutex(m)
+#                 win32api.CloseHandle(m)
+#                 print("[Multi Roblox] Mutex released.")
+#             except Exception as e:
+#                 print(f"[Multi Roblox] Failed to release mutex: {e}")
+
+#         _mr_handle = None
+#         print("[Multi Roblox] Stopped.")

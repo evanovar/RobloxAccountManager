@@ -1685,6 +1685,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             traceback.print_exc()
 
     def _start_multi_roblox(self):
+        print("entered _start_multi_roblox")
         ok, msg = actions.enable_multi_roblox(self._mr_method)
         if not ok:
             if msg == "NEEDS_ADMIN":
