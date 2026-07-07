@@ -2522,7 +2522,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _start_presence_scanner(self) -> None:
         if self._presence_scanner is not None:
             return
-        self._presence_scanner = self.presence_mod.PresenceScanner(
+        self._presence_scanner = self._presence_mod.PresenceScanner(
             self.manager,
             on_update=lambda online: self._bridge.presence_update.emit(online),
             interval_sec=10,
