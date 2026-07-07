@@ -5,6 +5,7 @@ Handles authentication, info, and game launching
 
 import os
 import re
+import stat
 import time
 import random
 import requests
@@ -117,7 +118,61 @@ class RobloxAPI:
                 pass
         except Exception as e:
             print(f"[ERROR] Error restoring installers: {e}")
-    
+
+    @staticmethod
+    def _framerate_settings_path():
+        # Framerate cap lives in Roblox's GlobalBasicSettings_13.xml
+        local_appdata = os.getenv('LOCALAPPDATA')
+        if not local_appdata:
+            return None
+        return Path(local_appdata) / 'Roblox' / 'GlobalBasicSettings_13.xml'
+
+    @staticmethod
+    def set_framerate_cap(fps: int) -> bool:
+        # Set FramerateCap in GlobalBasicSettings_13.xml and lock the file read-only
+        settings_path = RobloxAPI._framerate_settings_path()
+        if not settings_path or not settings_path.exists():
+            print("[WARNING] GlobalBasicSettings_13.xml not found, cannot set framerate cap")
+            return False
+
+        try:
+            os.chmod(settings_path, stat.S_IWRITE)
+
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            new_content, count = re.subn(
+                r'(<int name="FramerateCap">)-?\d+(</int>)',
+                rf'\g<1>{fps}\g<2>',
+                content,
+            )
+            if count == 0:
+                print("[WARNING] FramerateCap entry not found in GlobalBasicSettings_13.xml")
+                return False
+
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+            os.chmod(settings_path, stat.S_IREAD)
+            print(f"[SUCCESS] Framerate cap set to {fps} and file locked")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to set framerate cap: {e}")
+            return False
+
+    @staticmethod
+    def unlock_framerate_cap() -> None:
+        # Remove the read-only attribute from GlobalBasicSettings_13.xml
+        settings_path = RobloxAPI._framerate_settings_path()
+        if not settings_path or not settings_path.exists():
+            return
+
+        try:
+            os.chmod(settings_path, stat.S_IWRITE)
+            print("[INFO] GlobalBasicSettings_13.xml unlocked")
+        except Exception as e:
+            print(f"[ERROR] Failed to unlock GlobalBasicSettings_13.xml: {e}")
+
     @staticmethod
     def resolve_share_url(url_or_code, cookie=None):
         if not url_or_code:

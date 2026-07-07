@@ -29,7 +29,6 @@ from ctypes import wintypes
 
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
-from classes.encryption import EncryptionConfig
 import features.auto_rejoin as ar
 from utils.app_paths import get_app_dir, get_data_dir
 
@@ -347,10 +346,13 @@ def set_note(manager, username: str, note: str) -> None:
 # Encryption status badge
 def get_encryption_status(manager) -> tuple[str, str]:
     try:
-        cfg = EncryptionConfig.load()
-        if cfg and cfg.is_encrypted:
-            return "Encrypted", "#4CAF50"
-        return "Not Encrypted", "#EF5350"
+        if manager.encryption_config.is_encryption_enabled():
+            method = manager.encryption_config.get_encryption_method()
+            if method == "hardware":
+                return "[HARDWARE ENCRYPTED]", "#90EE90"
+            elif method == "password":
+                return "[PASSWORD ENCRYPTED]", "#87CEEB"
+        return "[NOT ENCRYPTED]", "#FFB6C1"
     except Exception:
         return "", ""
 

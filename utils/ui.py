@@ -523,6 +523,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             except Exception as e:
                 print(f"[ERROR] Failed to quarantine installers: {e}")
 
+        if S.get("framerate_cap_enabled", False):
+            try:
+                RobloxAPI.set_framerate_cap(int(S.get("framerate_cap_value", 60)))
+            except Exception as e:
+                print(f"[ERROR] Failed to apply framerate cap: {e}")
+
         if S.get("websocket_enabled") and S.get("developer_mode"):
             self._ws_server.start()
 
@@ -2041,6 +2047,36 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         f.addWidget(self._sett_installer_fix_chk)
 
+        f.addWidget(_sec("FRAMERATE"))
+        self._sett_framerate_chk = _chk(
+            "framerate_cap_enabled", "Force Framerate Cap",
+            "Overrides the FramerateCap in Roblox's GlobalBasicSettings_13.xml\n"
+            "and locks the file read-only so Roblox cannot change it back.",
+            on_change=self._on_sett_framerate_cap,
+        )
+        f.addWidget(self._sett_framerate_chk)
+
+        fps_row = QHBoxLayout()
+        fps_row.setContentsMargins(20, 0, 0, 0)
+        _fps_lbl = QLabel("Framerate Cap")
+        _fps_lbl.setToolTip(
+            "Target framerate cap applied to Roblox.\n"
+            "Set to the minimum value for Unlimited (-1)."
+        )
+        fps_row.addWidget(_fps_lbl)
+        fps_row.addStretch(1)
+        self._sett_fps_spin = QSpinBox()
+        self._sett_fps_spin.setRange(-1, 999)
+        self._sett_fps_spin.setSpecialValueText("Unlimited")
+        self._sett_fps_spin.setSuffix(" FPS")
+        self._sett_fps_spin.setValue(int(S.get("framerate_cap_value", 60)))
+        self._sett_fps_spin.setFixedWidth(90)
+        self._sett_fps_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_fps_spin.setEnabled(S.get("framerate_cap_enabled", False))
+        self._sett_fps_spin.valueChanged.connect(self._on_sett_framerate_value)
+        fps_row.addWidget(self._sett_fps_spin)
+        f.addLayout(fps_row)
+
         f.addWidget(_sec("RAM OPTIMIZATION"))
         self._sett_boost_ram_chk = _chk(
             "optimize_roblox_ram", "Boost Roblox RAM Limit",
@@ -2387,6 +2423,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 RobloxAPI.restore_installers()
         except Exception as e:
             print(f"[ERROR] Roblox Installer Fix toggle failed: {e}")
+
+    def _on_sett_framerate_cap(self, enabled: bool):
+        if hasattr(self, "_sett_fps_spin"):
+            self._sett_fps_spin.setEnabled(enabled)
+        try:
+            if enabled:
+                fps = actions.load_ui_settings().get("framerate_cap_value", 60)
+                RobloxAPI.set_framerate_cap(int(fps))
+            else:
+                RobloxAPI.unlock_framerate_cap()
+        except Exception as e:
+            print(f"[ERROR] Framerate Cap toggle failed: {e}")
+
+    def _on_sett_framerate_value(self, value: int):
+        actions.save_ui_setting("framerate_cap_value", value)
+        if actions.load_ui_settings().get("framerate_cap_enabled", False):
+            try:
+                RobloxAPI.set_framerate_cap(value)
+            except Exception as e:
+                print(f"[ERROR] Failed to apply framerate cap: {e}")
 
     def _start_update_check(self) -> None:
         if not actions.load_ui_settings().get("check_updates_on_startup", True):
@@ -3379,6 +3435,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 RobloxAPI.restore_installers()
         except Exception as e:
             print(f"[ERROR] Failed to restore installers: {e}")
+        # Unlock framerate cap file
+        try:
+            if actions.load_ui_settings().get("framerate_cap_enabled", False):
+                RobloxAPI.unlock_framerate_cap()
+        except Exception as e:
+            print(f"[ERROR] Failed to unlock framerate cap file: {e}")
         super().closeEvent(event)
 
     def _ar_on_remove(self):
