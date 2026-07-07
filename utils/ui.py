@@ -1660,13 +1660,29 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._start_multi_roblox()
 
     def _on_mr_enabled_changed(self, state):
-        self._mr_enabled = (state == Qt.CheckState.Checked.value)
-        actions.save_ui_setting("multi_roblox_enabled", self._mr_enabled)
-        if self._mr_enabled:
-            self._start_multi_roblox()
-        else:
-            self._stop_multi_roblox()
-        self._update_mr_status()
+        import traceback
+
+        print("_on_mr_enabled_changed:", state)
+
+        try:
+            self._mr_enabled = (state == Qt.CheckState.Checked.value)
+            print("SET self._mr_enabled TO:", self._mr_enabled)
+
+            actions.save_ui_setting("multi_roblox_enabled", self._mr_enabled)
+            print("SAVED TO SETTINGS")
+
+            if self._mr_enabled:
+                print("Starting MR")
+                self._start_multi_roblox()
+            else:
+                print("Stopping MR")
+                self._stop_multi_roblox()
+
+            self._update_mr_status()
+
+        except Exception:
+            print("_on_mr_enabled_changed exc:")
+            traceback.print_exc()
 
     def _start_multi_roblox(self):
         ok, msg = actions.enable_multi_roblox(self._mr_method)
