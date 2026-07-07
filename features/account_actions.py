@@ -52,12 +52,21 @@ def load_recent_games() -> list[dict]:
     return []
 
 
-def save_recent_game(place_id: str, name: str) -> None:
+def save_recent_game(place_id: str, name: str, private_server: str = "") -> None:
     if not place_id:
         return
     games = load_recent_games()
-    games = [g for g in games if str(g.get("place_id")) != str(place_id)]
-    games.insert(0, {"place_id": place_id, "name": name})
+    games = [
+        g for g in games
+        if not (str(g.get("place_id")) == str(place_id)
+                and str(g.get("private_server", "")) == str(private_server))
+    ]
+    games.insert(0, {
+        "place_id": place_id,
+        "name": name,
+        "private_server": private_server,
+        "private": bool(private_server),
+    })
     games = games[:20]
     os.makedirs(_DATA_DIR, exist_ok=True)
     with open(_RECENT_GAMES_FILE, "w", encoding="utf-8") as f:

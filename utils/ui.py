@@ -3874,7 +3874,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         for entry in actions.load_recent_games():
             pid = entry.get("place_id", "")
             name = entry.get("name", pid)
-            is_private = entry.get("private", False)
+            private_server = entry.get("private_server", "")
+            is_private = entry.get("private", bool(private_server))
 
             label = name if (name and name != pid) else pid
 
@@ -3882,13 +3883,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 label = f"[P] {label}"
 
             item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, pid)
+            item.setData(Qt.ItemDataRole.UserRole, {"place_id": pid, "private_server": private_server})
             self._recent_list.addItem(item)
 
     def _on_recent_game_double_click(self, item: QListWidgetItem):
-        pid = item.data(Qt.ItemDataRole.UserRole) or ""
+        data = item.data(Qt.ItemDataRole.UserRole) or {}
+        pid = data.get("place_id", "")
+        private_server = data.get("private_server", "")
         if pid:
             self._place_id_edit.setText(pid)
+            self._private_server_edit.setText(private_server)
 
     def _update_encryption_badge(self):
         text, color = actions.get_encryption_status(self.manager)
@@ -4035,7 +4039,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 on_done=self._emit_launch_done,
             )
 
-            actions.save_recent_game(place_id, self._game_name_label.text().replace("Current: ", ""))
+            actions.save_recent_game(
+                place_id, self._game_name_label.text().replace("Current: ", ""), private,
+            )
             self._refresh_recent_games()
             
         else:
@@ -4045,7 +4051,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 on_done=self._emit_launch_done,
             )
 
-            actions.save_recent_game(place_id, self._game_name_label.text().replace("Current: ", ""))
+            actions.save_recent_game(
+                place_id, self._game_name_label.text().replace("Current: ", ""), private,
+            )
             self._refresh_recent_games()
 
     # Join User
