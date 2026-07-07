@@ -870,6 +870,7 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
     print(f"_mr_h64_path = {_mr_h64_path}")
 
     use_h64 = (method == "handle64")
+    print(f"use_h64 = {use_h64}")
 
     if use_h64:
         # Admin check
@@ -894,6 +895,7 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         _mr_handle = {"mutex": None, "file": None}
         print("[Multi Roblox] Started (handle64 mode)")
         return True, ""
+    print("pass use_h64")
 
     try:
         print("enter mutex creation")
