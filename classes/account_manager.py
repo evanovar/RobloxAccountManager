@@ -1068,22 +1068,23 @@ class RobloxAccountManager:
             print(f"[ERROR] Failed to wipe data: {str(e)}")
     
     def switch_encryption_method(self, new_method, password=None, salt=None):
-        """Switch to a different encryption method"""
-        if new_method not in ['hardware', 'password']:
-            raise ValueError("Invalid encryption method. Must be 'hardware' or 'password'")
-        
-        current_method = self.get_encryption_method()
+        """Switch to a different encryption method, re-encrypting (or decrypting) saved_accounts.json in place"""
+        if new_method not in ('hardware', 'password', 'none'):
+            raise ValueError("Invalid encryption method. Must be 'hardware', 'password', or 'none'")
+
+        current_method = self.get_encryption_method() or 'none'
         if current_method == new_method:
             print("[INFO] Already using this encryption method")
             return
-        
+
         current_data = self.accounts.copy()
-        
+
         self.encryption_config.reset_encryption()
-        
+
         if new_method == 'hardware':
             self.encryption_config.set_encryption_method('hardware')
             self.encryptor = HardwareEncryption()
+            self._entered_password_hash = None
         elif new_method == 'password':
             if password is None:
                 raise ValueError("Password must be provided for password encryption")
@@ -1091,8 +1092,15 @@ class RobloxAccountManager:
                 salt = os.urandom(32).hex()
             password_hash = hashlib.sha256(password.encode()).hexdigest()
             self.encryption_config.enable_password_encryption(salt, password_hash)
+            self._entered_password_hash = password_hash
             self.encryptor = PasswordEncryption(password, salt)
-        
+        else:  # 'none'
+            self.encryption_config.disable_encryption()
+            self.encryptor = None
+            self._entered_password_hash = None
+
         self.accounts = current_data
+        self.save_accounts()
+        print(f"[SUCCESS] Encryption method switched to '{new_method}' and saved_accounts.json re-encrypted")
         self.save_accounts()
         print(f"[SUCCESS] Switched to {new_method} encryption")

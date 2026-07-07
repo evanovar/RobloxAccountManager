@@ -2919,28 +2919,74 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         threading.Thread(target=_worker, daemon=True, name="chromium-dl").start()
 
     def _on_sett_switch_encryption(self):
-        reply = QMessageBox.question(
+        method_labels = {"hardware": "Hardware", "password": "Password", "none": "No Encryption"}
+        current_method = self.manager.get_encryption_method() or "none"
+
+        other_methods = [m for m in ("hardware", "password", "none") if m != current_method]
+        choice, ok = QInputDialog.getItem(
             self, "Switch Encryption Method",
-            "Switching encryption will require you to re-import all accounts\n"
-            "from scratch. Existing encrypted data will be removed.\n\n"
-            "Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            f"Current method: {method_labels[current_method]}\n"
+            "Choose the new encryption method:",
+            [method_labels[m] for m in other_methods], 0, False,
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            # Reset encryption config and show the built-in Setup page
-            data_folder = "AccountManagerData"
-            cfg_path = os.path.join(data_folder, "encryption_config.json")
-            try:
-                os.remove(cfg_path)
-            except FileNotFoundError:
-                pass
-            self._setup_needed = True
-            self._setup_stack.setCurrentIndex(0)
-            for b in self._normal_nav_btns:
-                b.hide()
-            self._setup_nav_btn.show()
-            self._setup_nav_btn.setChecked(True)
-            self._page_stack.setCurrentIndex(7)
+        if not ok or not choice:
+            return
+        new_method = other_methods[[method_labels[m] for m in other_methods].index(choice)]
+
+        new_password = None
+        if new_method == "password":
+            while True:
+                pw1, ok1 = QInputDialog.getText(
+                    self, "Set Password", "Enter new password (min. 8 characters):",
+                    QLineEdit.EchoMode.Password,
+                )
+                if not ok1:
+                    return
+                if len(pw1) < 8:
+                    QMessageBox.warning(self, "Invalid Password", "Password must be at least 8 characters.")
+                    continue
+                pw2, ok2 = QInputDialog.getText(
+                    self, "Confirm Password", "Confirm new password:",
+                    QLineEdit.EchoMode.Password,
+                )
+                if not ok2:
+                    return
+                if pw1 != pw2:
+                    QMessageBox.warning(self, "Password Mismatch", "Passwords do not match.")
+                    continue
+                new_password = pw1
+                break
+
+        if new_method == "none":
+            reply = QMessageBox.warning(
+                self, "No Encryption",
+                "Your account data will be stored in plain text.\n"
+                "Anyone with access to your files can read your cookies.\n\n"
+                "Are you sure you want to continue without encryption?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+        else:
+            reply = QMessageBox.question(
+                self, "Switch Encryption Method",
+                f"Switch encryption to {method_labels[new_method]}?\n"
+                "Your existing accounts will be re-encrypted in place.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.manager.switch_encryption_method(new_method, password=new_password)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to switch encryption method:\n{e}")
+            return
+
+        self._update_encryption_badge()
+        _show_info(
+            self, "Encryption Switched",
+            f"Encryption method switched to {method_labels[new_method]}.",
+        )
 
     def _on_sett_wipe_data(self):
         reply = QMessageBox.warning(
@@ -3533,6 +3579,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _refresh_account_list(self): # Main account list population and refresh
         if hasattr(self, "_drag_filter"):
             self._drag_filter.abort()
+        cur_item = self._account_list.currentItem()
+        cur_username = cur_item.data(Qt.ItemDataRole.UserRole) if cur_item else None
+        selected_usernames = {
+            it.data(Qt.ItemDataRole.UserRole) for it in self._account_list.selectedItems()
+        }
         self._account_list.clear()
         self._avatar_labels.clear()
         self._presence_dots.clear()
@@ -3653,7 +3704,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._account_list.addItem(item)
             self._account_list.setItemWidget(item, row)
 
-        if self._account_list.count() > 0:
+        restored_current = False
+        for i in range(self._account_list.count()):
+            it = self._account_list.item(i)
+            username = it.data(Qt.ItemDataRole.UserRole)
+            if username in selected_usernames:
+                it.setSelected(True)
+            if username == cur_username:
+                self._account_list.setCurrentItem(it)
+                restored_current = True
+
+        if not restored_current and self._account_list.count() > 0:
             self._account_list.setCurrentRow(0)
 
         self._rebuild_group_bar()
