@@ -969,11 +969,17 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         print("[Multi Roblox] Started (handle64 mode)")
         return True, ""
 
+    if is_roblox_running():
+        print("[Multi Roblox] Roblox is already running, close it before enabling default mode.")
+        return False, "ROBLOX_RUNNING"
+
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         mutex = kernel32.CreateMutexW(None, True, "ROBLOX_singletonEvent")
         if not mutex:
             print(f"[Multi Roblox] Failed to create mutex: {ctypes.get_last_error()}")
+        elif ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            print("[Multi Roblox] Mutex already exists. Took ownership.")
         else:
             print("[Multi Roblox] Mutex created.")
 
@@ -1009,14 +1015,12 @@ def is_roblox_running() -> bool:
     return False
 
 def kill_roblox():
-    process = "RobloxPlayerBeta.exe"
-    for proc in process:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", proc],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "RobloxPlayerBeta.exe"],
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 def disable_multi_roblox():
     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path

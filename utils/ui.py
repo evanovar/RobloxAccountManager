@@ -1702,6 +1702,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 )
                 if reply == QMessageBox.StandardButton.Yes:
                     actions.kill_roblox()
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline and actions.is_roblox_running():
+                        time.sleep(0.2)
                 else:
                     self._mr_enabled = False
                     self._mr_enabled_chk.blockSignals(True)
@@ -1715,6 +1718,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not ok:
             if msg == "NEEDS_ADMIN":
                 self._mr_ask_restart_as_admin()
+            elif msg == "ROBLOX_RUNNING":
+                self._mr_status_lbl.setText("Error: Close Roblox first, then enable Multi Roblox.")
+                self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
             else:
                 self._mr_status_lbl.setText(f"Error: {msg}")
                 self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
