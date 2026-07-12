@@ -12,7 +12,7 @@ import psutil
 from datetime import datetime, timezone
 from typing import Callable
 
-def _get_user_id_from_pid(pid: int) -> str | None:
+def _get_user_id_from_pid(pid: int, used_logs: set[str] | None = None) -> str | None:
     try:
         proc = psutil.Process(pid)
         create_utc = datetime.fromtimestamp(
@@ -42,12 +42,16 @@ def _get_user_id_from_pid(pid: int) -> str | None:
 
         candidates.sort(key=lambda x: x[0])
         for _, log_path in candidates:
+            if used_logs is not None and log_path in used_logs:
+                continue
             try:
                 with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
                     content = fh.read(50_000)
                 if "userid:" in content:
                     uid = content.split("userid:")[1].split(",")[0].strip()
                     if uid.isdigit():
+                        if used_logs is not None:
+                            used_logs.add(log_path)
                         return uid
             except Exception:
                 continue
@@ -67,8 +71,9 @@ def _scan_running_user_ids() -> set[str]:
         return set()
 
     online: set[str] = set()
+    used_logs: set[str] = set()
     for pid in pids:
-        uid = _get_user_id_from_pid(pid)
+        uid = _get_user_id_from_pid(pid, used_logs)
         if uid:
             online.add(uid)
     return online

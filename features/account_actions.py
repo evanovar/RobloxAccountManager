@@ -29,7 +29,6 @@ from ctypes import wintypes
 
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
-import features.auto_rejoin as ar
 from utils.app_paths import get_app_dir, get_data_dir
 
 # Paths
@@ -518,16 +517,6 @@ def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *
             print(f"[ERROR] add_account_browser: {e}")
             on_done(False, str(e))
     threading.Thread(target=_worker, daemon=True, name="add-account-browser").start()
-
-# Auto-rejoin
-def start_auto_rejoin(config: dict, manager, on_status: Callable[[str, str], None] = lambda *_: None) -> None:
-    ar.start(config, manager, on_status)
-
-def stop_auto_rejoin(username: str) -> None:
-    ar.stop(username)
-
-def stop_all_auto_rejoin() -> None:
-    ar.stop_all()
 
 # Anti-AFK
 _afk_thread: threading.Thread | None = None

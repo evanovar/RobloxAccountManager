@@ -15,6 +15,7 @@ import psutil
 import requests
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
+import features.presence as presence_mod
 from utils.app_paths import get_data_dir
 
 _CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
@@ -91,6 +92,49 @@ def _kill_pid(pid: int) -> None:
         )
     except Exception:
         pass
+
+_pid_uid_lock = threading.Lock()
+_pid_uid_cache: dict[int, str] = {}   # pid -> resolved user_id, kept while the pid stays alive
+
+def scan_pid_uid_map(wanted_user_ids: set[str]) -> dict[str, int]:
+    global _pid_uid_cache
+    current_pids = _get_roblox_pids()
+    used_logs: set[str] = set()
+
+    with _pid_uid_lock:
+        _pid_uid_cache = {p: u for p, u in _pid_uid_cache.items() if p in current_pids}
+
+        for pid in current_pids:
+            if pid in _pid_uid_cache:
+                continue
+            uid = presence_mod._get_user_id_from_pid(pid, used_logs)
+            if uid:
+                _pid_uid_cache[pid] = uid
+
+        result: dict[str, int] = {}
+        for pid, uid in list(_pid_uid_cache.items()):
+            if uid in wanted_user_ids:
+                result[uid] = pid
+            else:
+                del _pid_uid_cache[pid]
+
+    return result
+
+
+def _get_configured_user_ids(manager) -> set[str]:
+    wanted = set()
+    for username in load_configs().keys():
+        acc = manager.accounts.get(username)
+        if isinstance(acc, dict):
+            uid = str(acc.get("user_id", "") or "")
+            if uid and uid != "0":
+                wanted.add(uid)
+    return wanted
+
+
+def find_running_pid_for_user(manager, user_id: str) -> int | None:
+    wanted = _get_configured_user_ids(manager) | {user_id}
+    return scan_pid_uid_map(wanted).get(user_id)
 
 _presence_lock = threading.Lock()
 _presence_next_time = 0.0
@@ -247,23 +291,29 @@ class AutoRejoinWorker:
         consec_fails = 0
 
         if not self._pid or not _pid_alive(self._pid):
-            self._emit(f"Launching... (Place {place_id})")
-            while not self._stop.is_set() and not self._can_launch():
-                if self._wait(check_interval):
-                    return
-            ok = self._launch_and_track(place_id, private_server, job_id)
-            if not ok:
-                retry_count += 1
-                self._emit(f"Launch failed ({retry_count}/{max_retries})")
-                if retry_count >= max_retries:
-                    self._emit("STOPPED: max retries")
-                    return
+            existing_pid = find_running_pid_for_user(self.manager, user_id)
+            if existing_pid:
+                self._pid = existing_pid
+                print(f"[Auto-Rejoin] [{self.account}] Adopted existing PID {existing_pid} for user {user_id}")
+                self._emit(f"ACTIVE - Place {place_id} (existing client)")
             else:
-                self._emit(f"ACTIVE — Place {place_id}")
-            if self._stop.wait(10):
-                return
+                self._emit(f"Launching... (Place {place_id})")
+                while not self._stop.is_set() and not self._can_launch():
+                    if self._wait(check_interval):
+                        return
+                ok = self._launch_and_track(place_id, private_server, job_id)
+                if not ok:
+                    retry_count += 1
+                    self._emit(f"Launch failed ({retry_count}/{max_retries})")
+                    if retry_count >= max_retries:
+                        self._emit("STOPPED: max retries")
+                        return
+                else:
+                    self._emit(f"ACTIVE - Place {place_id}")
+                if self._stop.wait(10):
+                    return
 
-        self._emit(f"ACTIVE — Place {place_id}")
+        self._emit(f"ACTIVE - Place {place_id}")
 
         while not self._stop.is_set():
             try:
@@ -297,7 +347,7 @@ class AutoRejoinWorker:
                 if disconnected:
                     retry_count  += 1
                     consec_fails = 0
-                    print(f"[Auto-Rejoin] [{self.account}] Disconnect detected — attempt {retry_count}/{max_retries}")
+                    print(f"[Auto-Rejoin] [{self.account}] Disconnect detected, attempt {retry_count}/{max_retries}")
                     self._emit(f"Rejoining... ({retry_count}/{max_retries})")
 
                     if self._pid:
@@ -313,12 +363,18 @@ class AutoRejoinWorker:
                         break
 
                     rejoin_jid = job_id if job_id else game_id
-                    ok = self._launch_and_track(place_id, private_server, rejoin_jid)
+                    existing_pid = find_running_pid_for_user(self.manager, user_id)
+                    if existing_pid:
+                        self._pid = existing_pid
+                        ok = True
+                        print(f"[Auto-Rejoin] [{self.account}] Adopted existing PID {existing_pid} instead of relaunching")
+                    else:
+                        ok = self._launch_and_track(place_id, private_server, rejoin_jid)
 
                     if ok:
                         print(f"[Auto-Rejoin] [{self.account}] Rejoin successful")
                         retry_count = 0
-                        self._emit(f"ACTIVE — Place {place_id}")
+                        self._emit(f"ACTIVE - Place {place_id}")
                         if self._stop.wait(10):
                             break
                     else:
