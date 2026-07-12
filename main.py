@@ -5,6 +5,7 @@ Main entry point for the application.
 
 # if you find this tool helpful, consider starring the repo!
 
+import ctypes
 import os
 import sys
 
@@ -38,7 +39,17 @@ def resolve_discord_logo_path() -> str | None:
         return bundled_logo
     return None
 
+def _set_app_user_model_id():
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "evanovar.robloxaccountmanager.ram"
+        )
+    except Exception:
+        pass
+
+
 def main():
+    _set_app_user_model_id()
     webhook.install_console_capture(lambda: actions.load_ui_settings().get("discord_webhook", {}))
     _ensure_data_folder()
 
