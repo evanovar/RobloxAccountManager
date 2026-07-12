@@ -4435,6 +4435,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         widget.ensureCursorVisible()
 
     _DONATION_URL = "https://www.roblox.com/games/718090786/donation#!/store" # donate!!
+    _DONATION_USERNAME = "evedkdmdj"
 
     def _build_donations_panel(self) -> QFrame:
         panel = QFrame()
@@ -4508,6 +4509,42 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         copy_btn.clicked.connect(_copy_link)
         card_lay.addWidget(copy_btn)
+
+        plus_lbl = QLabel("Or donate robux via plus")
+        plus_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        plus_lbl.setWordWrap(True)
+        plus_lbl.setStyleSheet(
+            f"font-size: 11px; color: {MUTED}; background: transparent;"
+        )
+        card_lay.addWidget(plus_lbl)
+
+        copy_user_btn = QPushButton("Copy Username")
+        copy_user_btn.setFixedHeight(34)
+        copy_user_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_user_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {FG_ACCENT};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: #1a8fe0;
+            }}
+            QPushButton:pressed {{
+                background: #006dc4;
+            }}
+        """)
+
+        def _copy_username():
+            QApplication.clipboard().setText(self._DONATION_USERNAME)
+            copy_user_btn.setText("Copied!")
+            QTimer.singleShot(2000, lambda: copy_user_btn.setText("Copy Username"))
+
+        copy_user_btn.clicked.connect(_copy_username)
+        card_lay.addWidget(copy_user_btn)
 
         h = QHBoxLayout()
         h.addStretch(1)
