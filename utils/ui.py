@@ -1115,8 +1115,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Dropdown menu for add button
         add_menu = QMenu(self._add_btn)
         act_cookie = add_menu.addAction("Import Cookie")
+        act_userpass = add_menu.addAction("Import User:Pass")
         act_js = add_menu.addAction("Javascript")
         act_cookie.triggered.connect(self._on_import_cookie)
+        act_userpass.triggered.connect(self._on_import_userpass)
         act_js.triggered.connect(self._on_add_javascript)
         self._add_btn.setMenu(add_menu)
         self._add_btn.clicked.connect(self._on_add_account_browser)
@@ -4025,6 +4027,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 on_done=self._on_add_done,
             )
 
+    def _on_import_userpass(self):
+        dlg = _ImportUserPassDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.pairs:
+            actions.import_user_pass(
+                self.manager,
+                dlg.pairs,
+                on_done=self._on_add_done,
+            )
+
     def _on_add_javascript(self):
         dlg = _AddJavascriptDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -4611,6 +4622,122 @@ class _ImportCookieDialog(QDialog):
         self.cookie_value = self._text.toPlainText().strip()
         if self.cookie_value:
             self.accept()
+
+
+class _ImportUserPassDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.pairs: list[tuple[str, str]] = []
+        self._row_widgets: list[tuple[QLineEdit, QLineEdit, QWidget]] = []
+        self.setWindowTitle("Import User:Pass")
+        self.setFixedSize(460, 380)
+        self.setStyleSheet(_DLG_STYLE)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("Import Accounts from Username:Password"))
+        desc = QLabel("Enter one account per row, or import a .txt file of Username:Password lines.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        lay.addWidget(desc)
+
+        self._rows_scroll = QScrollArea()
+        self._rows_scroll.setWidgetResizable(True)
+        self._rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rows_widget = QWidget()
+        self._rows_lay = QVBoxLayout(rows_widget)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(6)
+        self._rows_lay.addStretch(1)
+        self._rows_scroll.setWidget(rows_widget)
+        lay.addWidget(self._rows_scroll, 1)
+
+        self._add_row()
+
+        btn_row = QHBoxLayout()
+        file_btn = QPushButton("Import from .txt")
+        file_btn.clicked.connect(self._on_import_file)
+        btn_row.addWidget(file_btn)
+        btn_row.addStretch(1)
+        ok_btn = QPushButton("Import")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._accept)
+        cn_btn = QPushButton("Cancel")
+        cn_btn.clicked.connect(self.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cn_btn)
+        lay.addLayout(btn_row)
+
+    def _add_row(self, username: str = "", password: str = ""):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        user_edit = QLineEdit()
+        user_edit.setPlaceholderText("Username")
+        user_edit.setText(username)
+        pass_edit = QLineEdit()
+        pass_edit.setPlaceholderText("Password")
+        pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        pass_edit.setText(password)
+
+        row.addWidget(user_edit, 1)
+        row.addWidget(pass_edit, 1)
+
+        row_widget = QWidget()
+        row_widget.setLayout(row)
+        self._rows_lay.insertWidget(self._rows_lay.count() - 1, row_widget)
+        self._row_widgets.append((user_edit, pass_edit, row_widget))
+        user_edit.textChanged.connect(lambda text, ue=user_edit: self._on_row_username_typed(ue, text))
+
+    def _remove_row(self, index: int):
+        _, _, row_widget = self._row_widgets.pop(index)
+        self._rows_lay.removeWidget(row_widget)
+        row_widget.setParent(None)
+        row_widget.deleteLater()
+
+    def _on_row_username_typed(self, user_edit: QLineEdit, text: str):
+        idx = next((i for i, (u, _, _) in enumerate(self._row_widgets) if u is user_edit), None)
+        if idx is None:
+            return
+        is_last = idx == len(self._row_widgets) - 1
+
+        if text.strip():
+            if is_last:
+                self._add_row()
+        else:
+            if not is_last and idx == len(self._row_widgets) - 2:
+                last_user, last_pass, _ = self._row_widgets[-1]
+                if not last_user.text().strip() and not last_pass.text().strip():
+                    self._remove_row(len(self._row_widgets) - 1)
+
+    def _on_import_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import User:Pass File", "", "Text Files (*.txt);;All Files (*)"
+        )
+        if not path:
+            return
+        pairs = actions.parse_user_pass_file(path)
+        if not pairs:
+            _show_error(self, "No accounts found", "No valid Username:Password lines were found in that file.")
+            return
+        for username, password in pairs:
+            self._add_row(username, password)
+        self._add_row()
+
+    def _accept(self):
+        pairs: list[tuple[str, str]] = []
+        for user_edit, pass_edit, _ in self._row_widgets:
+            username = user_edit.text().strip()
+            password = pass_edit.text()
+            if username and password:
+                pairs.append((username, password))
+        if not pairs:
+            _show_error(self, "Missing Info", "Enter at least one Username:Password pair.")
+            return
+        self.pairs = pairs
+        self.accept()
 
 
 class _AddJavascriptDialog(QDialog):

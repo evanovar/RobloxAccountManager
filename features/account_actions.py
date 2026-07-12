@@ -474,6 +474,90 @@ def import_cookie(manager, cookie: str, on_done: Callable[[bool, str], None] = l
 
     threading.Thread(target=_worker, daemon=True, name="add-account-cookie-batch").start()
 
+
+def parse_user_pass_file(path: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or ":" not in line:
+                    continue
+                username, password = line.split(":", 1)
+                username = username.strip()
+                password = password.strip()
+                if username and password:
+                    pairs.append((username, password))
+    except Exception as e:
+        print(f"[ERROR] Failed to read User:Pass file: {e}")
+    return pairs
+
+
+def _build_login_script(username: str, password: str) -> str:
+    return f"""
+    (function() {{
+        function setNativeValue(el, value) {{
+            var proto = Object.getPrototypeOf(el);
+            var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            setter.call(el, value);
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        }}
+        function tryFill(attemptsLeft) {{
+            var userEl = document.getElementById('login-username');
+            var passEl = document.getElementById('login-password');
+            var btn = document.getElementById('login-button');
+            if (userEl && passEl && btn) {{
+                setNativeValue(userEl, {json.dumps(username)});
+                setNativeValue(passEl, {json.dumps(password)});
+                setTimeout(function() {{ btn.click(); }}, 300);
+                return;
+            }}
+            if (attemptsLeft > 0) {{
+                setTimeout(function() {{ tryFill(attemptsLeft - 1); }}, 250);
+            }}
+        }}
+        tryFill(20);
+    }})();
+    """
+
+
+def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+    if not pairs:
+        on_done(False, "No username:password pairs provided.")
+        return
+
+    browser_path = get_browser_path()
+
+    def _worker():
+        success_count = 0
+        imported_users: list[str] = []
+
+        for username, password in pairs:
+            existing_before = set(manager.accounts.keys())
+            try:
+                script = _build_login_script(username, password)
+                ok = manager.add_account(javascript=script, browser_path=browser_path)
+                if ok:
+                    new_names = set(manager.accounts.keys()) - existing_before
+                    added = next(iter(new_names)) if new_names else username
+                    success_count += 1
+                    imported_users.append(str(added))
+                else:
+                    print(f"[ERROR] import_user_pass: login failed for {username}")
+            except Exception as e:
+                print(f"[ERROR] import_user_pass: {username}: {e}")
+
+        if success_count:
+            summary = f"Imported {success_count}/{len(pairs)} account(s)."
+            if imported_users:
+                summary += " " + ", ".join(imported_users)
+            on_done(True, summary)
+        else:
+            on_done(False, f"Failed to import {len(pairs)} account(s).")
+
+    threading.Thread(target=_worker, daemon=True, name="import-user-pass").start()
+
+
 def get_browser_path() -> str | None:
     S = load_ui_settings()
     browser_type = S.get("browser_type", "chrome")
