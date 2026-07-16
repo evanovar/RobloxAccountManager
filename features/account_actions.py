@@ -368,36 +368,117 @@ def launch_home(manager, username: str, on_done: Callable[[bool, str], None] = l
         except Exception as e:
             on_done(False, str(e))
     threading.Thread(target=_worker, daemon=True).start()
+# username joining
+def join_user(manager, usernames: list[str] | str, target_username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+    if isinstance(usernames, str):
+        usernames = [usernames]
+    print(f"[INFO] join_user: {len(usernames)} accounts -> join {target_username}")
 
+    def _worker():
+        try:
+            target_user_id = RobloxAPI.get_user_id_from_username(target_username)
+            if not target_user_id:
+                msg = f"Could not find user ID for '{target_username}'."
+                print(f"[WARNING] join_user: {msg}")
+                on_done(False, msg)
+                return
 
-def join_user(manager, username: str, target_username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
-    join_player(manager, username, target_username, on_done=on_done)
+            first_acc_data = manager.accounts.get(usernames[0], {})
+            cookie = first_acc_data.get("cookie", "")
+            if not cookie:
+                msg = f"No cookie found for account {usernames[0]} to check presence."
+                print(f"[WARNING] join_user: {msg}")
+                on_done(False, msg)
+                return
 
+            presence = RobloxAPI.get_player_presence(target_user_id, cookie)
+            if not presence:
+                msg = f"Could not fetch presence data for {target_username}."
+                print(f"[WARNING] join_user: {msg}")
+                on_done(False, msg)
+                return
 
-def join_job_id(manager, username: str, place_id: str, job_id: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+            if not presence.get("in_game", False):
+                msg = f"{target_username} is not in a game."
+                print(f"[WARNING] join_user: {msg}")
+                on_done(False, msg)
+                return
+
+            place_id = str(presence.get("place_id", "") or "")
+            game_id  = str(presence.get("game_id",  "") or "")
+            
+            if not place_id:
+                msg = f"{target_username} is in a game, but their Place ID is hidden."
+                print(f"[WARNING] join_user: {msg}")
+                on_done(False, msg)
+                return
+
+            S = load_ui_settings()
+            launcher = S.get("roblox_launcher", "default")
+            custom_path = S.get("custom_roblox_launcher_path", "")
+
+            success = 0
+            for u in usernames:
+                try:
+                    ok = manager.launch_roblox(
+                        u, place_id,
+                        job_id=game_id,
+                        launcher_preference=launcher,
+                        custom_launcher_path=custom_path,
+                    )
+                    if ok:
+                        success += 1
+                    print(f"[{'SUCCESS' if ok else 'ERROR'}] join_user {u}: {'OK' if ok else 'FAIL'}")
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[ERROR] join_user {u}: {e}")
+
+            msg = f"Joined {success}/{len(usernames)} accounts."
+            print(f"[INFO] join_user done: {msg}")
+            on_done(success > 0, msg)
+        except Exception as e:
+            print(f"[ERROR] join_user exception: {e}")
+            on_done(False, str(e))
+
+    threading.Thread(target=_worker, daemon=True, name="joinplayer-all").start()
+# jobid joining
+def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+    if isinstance(usernames, str):
+        usernames = [usernames]
+
     S = load_ui_settings()
     launcher = S.get("roblox_launcher", "default")
     custom_path = S.get("custom_roblox_launcher_path", "")
-    print(f"[INFO] join_job_id: {username} -> place {place_id} job {job_id}")
+    print(f"[INFO] join_job_id: {len(usernames)} accounts -> place {place_id} job {job_id}")
+
     def _worker():
-        try:
-            ok = manager.launch_roblox(
-                username, place_id,
-                job_id=job_id,
-                launcher_preference=launcher,
-                custom_launcher_path=custom_path,
-            )
-            msg = "" if ok else "Failed to join by Job ID."
-            print(f"[{'SUCCESS' if ok else 'ERROR'}] join_job_id {username}: {'OK' if ok else 'FAIL'}")
-            on_done(ok, msg)
-        except Exception as e:
-            print(f"[ERROR] join_job_id {username}: {e}")
-            on_done(False, str(e))
-    threading.Thread(target=_worker, daemon=True, name=f"jobjoin-{username}").start()
+        success = 0
+        for u in usernames:
+            try:
+                ok = manager.launch_roblox(
+                    u, place_id,
+                    job_id=job_id,
+                    launcher_preference=launcher,
+                    custom_launcher_path=custom_path,
+                )
+                if ok:
+                    success += 1
+                print(f"[{'SUCCESS' if ok else 'ERROR'}] join_job_id {u}: {'OK' if ok else 'FAIL'}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[ERROR] join_job_id {u}: {e}")
+        msg = f"Joined {success}/{len(usernames)} accounts."
+        print(f"[INFO] join_job_id done: {msg}")
+        on_done(success > 0, msg)
 
+    threading.Thread(target=_worker, daemon=True, name="jobjoin-all").start()
+# small server joining
+def join_small_server(manager, usernames: list[str] | str, place_id: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
+    if isinstance(usernames, str):
+        usernames = [usernames]
 
-def join_small_server(manager, username: str, place_id: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
-    print(f"[INFO] join_small_server: {username} -> place {place_id}")
+    print(f"[INFO] join_small_server: {len(usernames)} accounts -> place {place_id}")
+
     def _worker():
         try:
             servers_url = (
@@ -413,26 +494,39 @@ def join_small_server(manager, username: str, place_id: str, on_done: Callable[[
                 print(f"[WARNING] join_small_server: No joinable servers found for place {place_id}")
                 on_done(False, "No available servers found.")
                 return
+
             smallest = min(joinable, key=lambda s: s.get("playing", 999))
             job_id = smallest.get("id", "")
             print(f"[INFO] join_small_server: Joining server {job_id} ({smallest.get('playing')}/{smallest.get('maxPlayers')} players)")
+
             S = load_ui_settings()
             launcher = S.get("roblox_launcher", "default")
             custom_path = S.get("custom_roblox_launcher_path", "")
-            ok = manager.launch_roblox(
-                username, place_id,
-                job_id=job_id,
-                launcher_preference=launcher,
-                custom_launcher_path=custom_path,
-            )
-            msg = "" if ok else "Failed to join smallest server."
-            print(f"[{'SUCCESS' if ok else 'ERROR'}] join_small_server {username}: {'OK' if ok else 'FAIL'}")
-            on_done(ok, msg)
-        except Exception as e:
-            print(f"[ERROR] join_small_server {username}: {e}")
-            on_done(False, str(e))
-    threading.Thread(target=_worker, daemon=True, name=f"smalljoin-{username}").start()
 
+            success = 0
+            for u in usernames:
+                try:
+                    ok = manager.launch_roblox(
+                        u, place_id,
+                        job_id=job_id,
+                        launcher_preference=launcher,
+                        custom_launcher_path=custom_path,
+                    )
+                    if ok:
+                        success += 1
+                    print(f"[{'SUCCESS' if ok else 'ERROR'}] join_small_server {u}: {'OK' if ok else 'FAIL'}")
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[ERROR] join_small_server {u}: {e}")
+
+            msg = f"Joined {success}/{len(usernames)} accounts."
+            print(f"[INFO] join_small_server done: {msg}")
+            on_done(success > 0, msg)
+        except Exception as e:
+            print(f"[ERROR] join_small_server: {e}")
+            on_done(False, str(e))
+
+    threading.Thread(target=_worker, daemon=True, name="smalljoin-all").start()
 
 def fetch_game_name_async(place_id: str, on_done: Callable[[str], None] = lambda _: None) -> None:
     def _worker():
