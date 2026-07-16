@@ -4157,70 +4157,80 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             self._refresh_recent_games()
 
-    # Join User
     def _on_join_user(self):
-        username = self._get_selected_username()
-        if not username:
-            _show_error(self, "No selection", "Please select an account first.")
+        usernames = self._get_selected_usernames()
+        if not usernames:
+            _show_error(self, "No selection", "Please select at least one account.")
             return
-        if not self._guard_invalid([username]):
+
+        target_user, ok = QInputDialog.getText(self, "Join User", "Enter the target username to join:")
+        if not ok or not target_user.strip():
             return
-        target, ok = QInputDialog.getText(
-            self, "Join User", "Enter the Roblox username to join:"
-        )
-        if not ok or not target.strip():
+
+        if not self._guard_invalid(usernames):
             return
-        if not self._confirm_launch(f"Join User ({target.strip()})", [username]):
+
+        if not self._confirm_launch("Join User", usernames):
             return
-        print(f"[INFO] Joining user {target.strip()} for {username}")
+
         actions.join_user(
-            self.manager, username, target.strip(),
-            on_done=self._emit_launch_done,
+            self.manager,
+            usernames,
+            target_user.strip(),
+            on_done=self._emit_launch_done
         )
 
-    # Join Job ID
     def _on_join_job_id(self):
-        username = self._get_selected_username()
-        if not username:
-            _show_error(self, "No selection", "Please select an account first.")
+        usernames = self._get_selected_usernames()
+        if not usernames:
+            _show_error(self, "No selection", "Please select at least one account.")
             return
-        if not self._guard_invalid([username]):
-            return
+
         place_id = self._place_id_edit.text().strip()
         if not place_id:
-            _show_error(self, "Missing Place ID", "Enter a Place ID first.")
+            _show_error(self, "Missing Info", "Please enter a Place ID first.")
             return
-        job_id, ok = QInputDialog.getText(
-            self, "Job ID", "Enter the Job ID (game instance ID):"
-        )
+
+        job_id, ok = QInputDialog.getText(self, "Join by Job ID", "Enter the Job ID (Game ID):")
         if not ok or not job_id.strip():
             return
-        if not self._confirm_launch("Join Job ID", [username]):
+
+        if not self._guard_invalid(usernames):
             return
-        print(f"[INFO] Joining job {job_id.strip()} in place {place_id} for {username}")
+
+        if not self._confirm_launch("Join by Job ID", usernames):
+            return
+
         actions.join_job_id(
-            self.manager, username, place_id, job_id.strip(),
-            on_done=self._emit_launch_done,
+            self.manager,
+            usernames,
+            place_id,
+            job_id.strip(),
+            on_done=self._emit_launch_done
         )
 
-    # Join Small Server
     def _on_join_small_server(self):
-        username = self._get_selected_username()
-        if not username:
-            _show_error(self, "No selection", "Please select an account first.")
+        usernames = self._get_selected_usernames()
+        if not usernames:
+            _show_error(self, "No selection", "Please select at least one account.")
             return
-        if not self._guard_invalid([username]):
-            return
+
         place_id = self._place_id_edit.text().strip()
         if not place_id:
-            _show_error(self, "Missing Place ID", "Enter a Place ID first.")
+            _show_error(self, "Missing Info", "Please enter a Place ID first.")
             return
-        if not self._confirm_launch("Join Small Server", [username]):
+
+        if not self._guard_invalid(usernames):
             return
-        print(f"[INFO] Joining smallest server for place {place_id} with {username}")
+
+        if not self._confirm_launch("Join Small Server", usernames):
+            return
+
         actions.join_small_server(
-            self.manager, username, place_id,
-            on_done=self._emit_launch_done,
+            self.manager,
+            usernames,
+            place_id,
+            on_done=self._emit_launch_done
         )
 
     # Edit Account
