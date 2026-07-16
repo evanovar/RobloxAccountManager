@@ -239,39 +239,7 @@ def join_vip_server(manager, username: str, vip_url: str, on_done: Callable[[boo
 
 
 def join_player(manager, username: str, target_username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
-    print(f"[INFO] join_player: {username} -> join {target_username}")
-    def _worker():
-        try:
-            presence = RobloxAPI.get_player_presence(target_username)
-            if not presence:
-                msg = f"Could not find {target_username}'s presence."
-                print(f"[WARNING] join_player: {msg}")
-                on_done(False, msg)
-                return
-            place_id = str(presence.get("placeId", "") or "")
-            game_id  = str(presence.get("gameId",  "") or "")
-            if not place_id:
-                msg = f"{target_username} is not in a game."
-                print(f"[WARNING] join_player: {msg}")
-                on_done(False, msg)
-                return
-            S = load_ui_settings()
-            launcher = S.get("roblox_launcher", "default")
-            custom_path = S.get("custom_roblox_launcher_path", "")
-            ok = manager.launch_roblox(
-                username, place_id,
-                job_id=game_id,
-                launcher_preference=launcher,
-                custom_launcher_path=custom_path,
-            )
-            msg = "" if ok else f"Could not join {target_username}'s server."
-            print(f"[{'SUCCESS' if ok else 'ERROR'}] join_player {username}: {'OK' if ok else 'FAIL'}")
-            on_done(ok, msg)
-        except Exception as e:
-            print(f"[ERROR] join_player exception: {e}")
-            on_done(False, str(e))
-
-    threading.Thread(target=_worker, daemon=True, name=f"joinplayer-{username}").start()
+    join_user(manager, username, target_username, on_done=on_done)
 
 
 def add_account(manager, cookie: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
