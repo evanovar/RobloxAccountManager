@@ -315,7 +315,7 @@ SELECT = "#2A2A2A"
 NOTE = "#D6BB7D"
 FG_ACCENT = "#0078D7"
 
-APP_VERSION = "2.5.6"
+APP_VERSION = "2.5.7"
 
 class _FloatingTooltip(QWidget):
     def __init__(self, parent=None):
