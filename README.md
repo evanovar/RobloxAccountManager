@@ -160,6 +160,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **JavaScript Automation** | Bulk add accounts with custom JavaScript execution (up to 10 instances) | Click "Add Account" dropdown → "Javascript"|
 | **Password Capture** | Automatically captures and saves passwords during browser login | Automatic during browser login; right-click account → "Copy Password" |
 | **Cookie Validity Indicator** | Warning icon next to accounts with expired or invalid cookies | Automatically shown in the account list |
+| **Account Groups** | Organize and categorize your saved accounts into distinct groups | Click `+` above the list to create a group, then right-click an account → `Move to Group` |
 | **Account Notes** | Add custom notes/tags to accounts for organization | Right-click account → "Edit Note" |
 | **Account Deletion** | Remove accounts from your saved list | Right-click account → "Delete" → confirm |
 | **Multi-Select Mode** | Select and manage multiple accounts at once | Enable in Settings → Use Ctrl+Click to select multiple |
