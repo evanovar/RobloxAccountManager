@@ -374,7 +374,7 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
 
             place_id = str(presence.get("place_id", "") or "")
             game_id  = str(presence.get("game_id",  "") or "")
-            
+
             if not place_id:
                 msg = f"{target_username} is in a game, but their Place ID is hidden."
                 print(f"[WARNING] join_user: {msg}")

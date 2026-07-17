@@ -823,7 +823,7 @@ class RobloxAccountManager:
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
             return False
-        
+
         cookie = self.accounts[username]['cookie']
         return RobloxAPI.launch_roblox(
             username,
@@ -834,7 +834,7 @@ class RobloxAccountManager:
             job_id,
             custom_launcher_path,
         )
-    
+
     def set_account_note(self, username, note):
         """Set or update note for an account"""
         if username not in self.accounts:

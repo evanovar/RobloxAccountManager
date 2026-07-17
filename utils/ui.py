@@ -304,6 +304,8 @@ class _Bridge(QObject):
     update_available = Signal(str) # (latest_version) from update check worker
     update_progress = Signal(int) # (pct 0-100) from auto download worker
     update_done = Signal(bool, str) # (success, error_msg) from auto download worker
+    join_place_resolved = Signal(object) # dict payload from Place ID resolution worker
+    recent_game_saved = Signal() # a recent-game entry was written and needs a list refresh
 
 BG = "#0E0E0E"
 PANEL = "#151515"
@@ -430,6 +432,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.presence_update.connect(self._on_presence_update)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
         self._bridge.update_available.connect(self._on_update_available)
+        self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
+        self._bridge.recent_game_saved.connect(self._refresh_recent_games)
 
         # Presence Indicator
         self._presence_mod = presence_mod
@@ -3505,10 +3509,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._private_server_edit = QLineEdit()
         self._private_server_edit.setPlaceholderText("VIP Link or Link Code")
-        self._private_server_edit.textChanged.connect(
-            lambda: actions.save_ui_setting("last_private_server",
-                                            self._private_server_edit.text())
-        )
+        self._private_server_edit.textChanged.connect(self._on_private_server_changed)
         lay.addWidget(self._private_server_edit)
 
         # join button
@@ -3998,15 +3999,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._game_name_label.setText("")
         self._game_name_timer.start(350)
 
+    def _on_private_server_changed(self, text: str):
+        actions.save_ui_setting("last_private_server", text)
+        self._game_name_label.setText("")
+        self._game_name_timer.start(350)
+
     def _schedule_game_name_fetch(self):
         self._game_name_timer.start(350)
 
-    def _do_fetch_game_name(self):
-        place_id = self._place_id_edit.text().strip()
-        if not place_id.isdigit():
-            self._game_name_label.setText("")
-            return
-
+    def _fetch_game_name_for(self, place_id: str):
         def _cb(name):
             if name:
                 truncated = name if len(name) <= 28 else name[:26] + ".."
@@ -4017,6 +4018,34 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._bridge.game_name_ready.emit(display) # emit to main thread
 
         actions.fetch_game_name_async(place_id, _cb)
+
+    def _do_fetch_game_name(self):
+        place_id = self._place_id_edit.text().strip()
+        if place_id:
+            if not place_id.isdigit():
+                self._game_name_label.setText("")
+                return
+            self._fetch_game_name_for(place_id)
+            return
+
+        private = self._private_server_edit.text().strip()
+        if not private:
+            self._game_name_label.setText("")
+            return
+
+        # Place ID box is empty: resolve a place id from the Private Server
+        # Link off the UI thread (the "now" share-link format needs a network call).
+        usernames = self._get_selected_usernames()
+        cookie = self.manager.accounts.get(usernames[0], {}).get("cookie", "") if usernames else ""
+
+        def _resolve_worker():
+            resolved_pid, _ = RobloxAPI.resolve_share_url(private, cookie=cookie)
+            if resolved_pid and str(resolved_pid).isdigit():
+                self._fetch_game_name_for(str(resolved_pid))
+            else:
+                self._bridge.game_name_ready.emit("")
+
+        threading.Thread(target=_resolve_worker, daemon=True, name="resolve-current-place").start()
 
     def _on_add_account_browser(self):
         actions.add_account_browser(
@@ -4126,36 +4155,71 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         if not self._guard_invalid(usernames):
             return
+
         place_id = self._place_id_edit.text().strip()
-        if not place_id:
-            _show_error(self, "Missing Place ID", "Please enter a Place ID.")
+        private = self._private_server_edit.text().strip()
+
+        # Place ID is only required when there's no Private Server Link to
+        # resolve a Place ID from - the Place ID inputbox is never rewritten.
+        if not place_id and not private:
+            _show_error(self, "Missing Place ID", "Enter a Place ID or a Private Server Link.")
             return
+
         if not self._confirm_launch("Join Place ID", usernames):
             return
-        private = self._private_server_edit.text().strip()
+
+        if place_id:
+            # Place ID inputbox takes priority over any place id embedded in the link
+            self._dispatch_join_place(usernames, place_id, private, place_id)
+            return
+
+        cookie = self.manager.accounts.get(usernames[0], {}).get("cookie", "")
+
+        def _resolve_worker():
+            resolved_pid, _ = RobloxAPI.resolve_share_url(private, cookie=cookie)
+            self._bridge.join_place_resolved.emit({
+                "usernames": usernames,
+                "private": private,
+                "effective_place_id": str(resolved_pid) if resolved_pid else "",
+            })
+
+        threading.Thread(target=_resolve_worker, daemon=True, name="resolve-join-place").start()
+
+    def _on_join_place_resolved(self, payload: dict):
+        effective_place_id = payload.get("effective_place_id", "")
+        if not effective_place_id:
+            _show_error(
+                self, "Invalid Private Server",
+                "Could not resolve a Place ID from the Private Server Link.",
+            )
+            return
+        self._dispatch_join_place(
+            payload["usernames"], "", payload["private"], effective_place_id,
+        )
+
+    def _dispatch_join_place(self, usernames: list[str], place_id: str, private: str, effective_place_id: str):
         if len(usernames) == 1:
-            print(f"[INFO] Joining place {place_id} for {usernames[0]}")
+            print(f"[INFO] Joining place {effective_place_id} for {usernames[0]}")
             actions.join_place(
                 self.manager, usernames[0], place_id, private,
                 on_done=self._emit_launch_done,
             )
-
-            actions.save_recent_game(
-                place_id, self._game_name_label.text().replace("Current: ", ""), private,
-            )
-            self._refresh_recent_games()
-            
         else:
-            print(f"[INFO] Joining place {place_id} for {len(usernames)} accounts")
+            print(f"[INFO] Joining place {effective_place_id} for {len(usernames)} accounts")
             actions.join_place_all(
                 self.manager, usernames, place_id, private,
                 on_done=self._emit_launch_done,
             )
 
-            actions.save_recent_game(
-                place_id, self._game_name_label.text().replace("Current: ", ""), private,
-            )
-            self._refresh_recent_games()
+        # Fetch the game name fresh instead of trusting the "Current Place" label,
+        # which is populated by an independent debounced fetch that may not have
+        # finished yet (especially for share links, which need two network calls).
+        def _save_recent_worker():
+            name = actions.fetch_game_name(effective_place_id)
+            actions.save_recent_game(effective_place_id, name, private)
+            self._bridge.recent_game_saved.emit()
+
+        threading.Thread(target=_save_recent_worker, daemon=True, name="save-recent-game").start()
 
     def _on_join_user(self):
         usernames = self._get_selected_usernames()
