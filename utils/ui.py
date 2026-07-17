@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -37,7 +38,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
-    QPalette, QPixmap, QTextCharFormat,
+    QPalette, QPixmap, QPolygon, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
@@ -57,6 +58,7 @@ import features.account_actions as actions
 import features.auto_rejoin as ar
 import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
+import features.favorites as favorites_mod
 import features.groups as groups
 import features.presence as presence_mod
 import features.updater as updater_mod
@@ -306,6 +308,7 @@ class _Bridge(QObject):
     update_done = Signal(bool, str) # (success, error_msg) from auto download worker
     join_place_resolved = Signal(object) # dict payload from Place ID resolution worker
     recent_game_saved = Signal() # a recent-game entry was written and needs a list refresh
+    favorite_place_resolved = Signal(object) # dict payload from Save Current Game resolution
 
 BG = "#0E0E0E"
 PANEL = "#151515"
@@ -318,6 +321,28 @@ NOTE = "#D6BB7D"
 FG_ACCENT = "#0078D7"
 
 APP_VERSION = "2.5.7"
+
+_dropdown_arrow_cache: dict[str, str] = {}
+
+def _dropdown_arrow_icon_path(color: str) -> str:
+    cached = _dropdown_arrow_cache.get(color)
+    if cached and os.path.exists(cached):
+        return cached
+
+    path = os.path.join(tempfile.gettempdir(), f"ram_dropdown_arrow_{color.strip('#')}.png")
+    if not os.path.exists(path):
+        pix = QPixmap(10, 10)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPolygon(QPolygon([QPoint(1, 3), QPoint(9, 3), QPoint(5, 8)]))
+        painter.end()
+        pix.save(path, "PNG")
+
+    _dropdown_arrow_cache[color] = path
+    return path
 
 class _FloatingTooltip(QWidget):
     def __init__(self, parent=None):
@@ -434,6 +459,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.update_available.connect(self._on_update_available)
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
+        self._bridge.favorite_place_resolved.connect(self._on_favorite_place_resolved)
 
         # Presence Indicator
         self._presence_mod = presence_mod
@@ -502,7 +528,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # Apply persisted settings that affect widgets built in _build_ui
         S = actions.load_ui_settings()
-        self._place_id_edit.setText(S.get("last_place_id", ""))
+        self._place_id_edit.setCurrentText(S.get("last_place_id", ""))
         self._private_server_edit.setText(S.get("last_private_server", ""))
 
         if S.get("last_place_id"):
@@ -3503,9 +3529,20 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         place_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         lay.addWidget(place_lbl)
 
-        self._place_id_edit = QLineEdit()
-        self._place_id_edit.setPlaceholderText("e.g. 10449761463") # This game is fun
-        self._place_id_edit.textChanged.connect(self._on_place_id_changed)
+        self._place_id_edit = QComboBox()
+        self._place_id_edit.setEditable(True)
+        self._place_id_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._place_id_edit.lineEdit().setPlaceholderText("e.g. 10449761463") # This game is fun
+        _arrow_path = _dropdown_arrow_icon_path(TEXT).replace("\\", "/")
+        self._place_id_edit.setStyleSheet(
+            f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; }}"
+            f"QComboBox::drop-down {{ border: 0; width: 20px; }}"
+            f"QComboBox::down-arrow {{ image: url({_arrow_path}); width: 10px; height: 10px; }}"
+        )
+        self._place_id_edit.currentTextChanged.connect(self._on_place_id_changed)
+        self._place_id_edit.activated.connect(self._on_favorite_selected)
+        self._refresh_favorites_dropdown()
         lay.addWidget(self._place_id_edit)
 
         # Private server
@@ -3532,9 +3569,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         act_join_user = self._join_menu.addAction("Join User")
         act_job_id = self._join_menu.addAction("Job ID")
         act_small_srv = self._join_menu.addAction("Small Server")
+        self._join_menu.addSeparator()
+        act_save_fav = self._join_menu.addAction("Save Current Game")
         act_join_user.triggered.connect(self._on_join_user)
         act_job_id.triggered.connect(self._on_join_job_id)
         act_small_srv.triggered.connect(self._on_join_small_server)
+        act_save_fav.triggered.connect(self._on_save_current_game)
 
         self._join_arrow = QToolButton()
         self._join_arrow.setObjectName("splitArrow")
@@ -3990,7 +4030,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         pid = data.get("place_id", "")
         private_server = data.get("private_server", "")
         if pid:
-            self._place_id_edit.setText(pid)
+            self._place_id_edit.setCurrentText(pid)
             self._private_server_edit.setText(private_server)
 
     def _update_encryption_badge(self):
@@ -4026,7 +4066,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         actions.fetch_game_name_async(place_id, _cb)
 
     def _do_fetch_game_name(self):
-        place_id = self._place_id_edit.text().strip()
+        place_id = self._place_id_edit.currentText().strip()
         if place_id:
             if not place_id.isdigit():
                 self._game_name_label.setText("")
@@ -4052,6 +4092,72 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self._bridge.game_name_ready.emit("")
 
         threading.Thread(target=_resolve_worker, daemon=True, name="resolve-current-place").start()
+
+    def _refresh_favorites_dropdown(self):
+        current = self._place_id_edit.currentText()
+        self._place_id_edit.blockSignals(True)
+        self._place_id_edit.clear()
+        for fav in favorites_mod.load_favorites():
+            place_id = str(fav.get("place_id", ""))
+            name = fav.get("name") or place_id
+            private_server = fav.get("private_server", "")
+            self._place_id_edit.addItem(name, (place_id, private_server))
+        self._place_id_edit.setCurrentText(current)
+        self._place_id_edit.blockSignals(False)
+
+    def _on_favorite_selected(self, index: int):
+        data = self._place_id_edit.itemData(index)
+        if not data:
+            return
+        place_id, private_server = data
+        self._place_id_edit.setCurrentText(str(place_id))
+        self._private_server_edit.setText(private_server or "")
+
+    def _on_save_current_game(self):
+        place_id = self._place_id_edit.currentText().strip()
+        private = self._private_server_edit.text().strip()
+
+        if not place_id and not private:
+            _show_error(self, "Missing Place ID", "Enter a Place ID or a Private Server Link first.")
+            return
+
+        if place_id:
+            self._prompt_save_favorite(place_id, private)
+            return
+
+        usernames = self._get_selected_usernames()
+        cookie = self.manager.accounts.get(usernames[0], {}).get("cookie", "") if usernames else ""
+
+        def _resolve_worker():
+            resolved_pid, _ = RobloxAPI.resolve_share_url(private, cookie=cookie)
+            self._bridge.favorite_place_resolved.emit({
+                "private": private,
+                "effective_place_id": str(resolved_pid) if resolved_pid else "",
+            })
+
+        threading.Thread(target=_resolve_worker, daemon=True, name="resolve-save-favorite").start()
+
+    def _on_favorite_place_resolved(self, payload: dict):
+        effective_place_id = payload.get("effective_place_id", "")
+        if not effective_place_id:
+            _show_error(
+                self, "Invalid Private Server",
+                "Could not resolve a Place ID from the Private Server Link.",
+            )
+            return
+        self._prompt_save_favorite(effective_place_id, payload["private"])
+
+    def _prompt_save_favorite(self, place_id: str, private: str):
+        default_name = self._game_name_label.text().replace("Current: ", "").strip() or place_id
+        name, ok = QInputDialog.getText(
+            self, "Save Current Game", "Name for this favorite:", text=default_name,
+        )
+        if not ok or not name.strip():
+            return
+
+        favorites_mod.add_favorite(place_id, name.strip(), private)
+        self._refresh_favorites_dropdown()
+        print(f"[SUCCESS] Saved favorite: {name.strip()} (Place {place_id})")
 
     def _on_add_account_browser(self):
         actions.add_account_browser(
@@ -4162,7 +4268,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not self._guard_invalid(usernames):
             return
 
-        place_id = self._place_id_edit.text().strip()
+        place_id = self._place_id_edit.currentText().strip()
         private = self._private_server_edit.text().strip()
 
         # Place ID is only required when there's no Private Server Link to
@@ -4256,7 +4362,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             _show_error(self, "No selection", "Please select at least one account.")
             return
 
-        place_id = self._place_id_edit.text().strip()
+        place_id = self._place_id_edit.currentText().strip()
         if not place_id:
             _show_error(self, "Missing Info", "Please enter a Place ID first.")
             return
@@ -4285,7 +4391,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             _show_error(self, "No selection", "Please select at least one account.")
             return
 
-        place_id = self._place_id_edit.text().strip()
+        place_id = self._place_id_edit.currentText().strip()
         if not place_id:
             _show_error(self, "Missing Info", "Please enter a Place ID first.")
             return
@@ -4961,10 +5067,12 @@ class _EditAccountDialog(QDialog):
         group_lbl = QLabel("Group:")
         lay.addWidget(group_lbl)
         self._group_combo = QComboBox()
+        _arrow_path = _dropdown_arrow_icon_path(TEXT).replace("\\", "/")
         self._group_combo.setStyleSheet(
             f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
             f" color: {TEXT}; padding: 4px 6px; min-height: 24px; }}"
             f"QComboBox::drop-down {{ border: 0; width: 20px; }}"
+            f"QComboBox::down-arrow {{ image: url({_arrow_path}); width: 10px; height: 10px; }}"
         )
         self._group_combo.addItem("(No Group)", "")
         for gname in groups.get_group_names():
