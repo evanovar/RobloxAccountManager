@@ -2358,6 +2358,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addLayout(_sub_indent(self._sett_ws_pw_chk))
         self._sett_ws_pw_chk.setEnabled(_dev_on and S.get("websocket_enabled", False))
 
+        ws_docs_btn = QPushButton("Read Documentation")
+        ws_docs_btn.clicked.connect(
+            lambda: webbrowser.open("https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram")
+        )
+        f.addWidget(ws_docs_btn)
+
         f.addStretch(1)
 
         return panel
