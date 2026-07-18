@@ -290,6 +290,18 @@ class _DragDropFilter(QObject):
         self.abort()
 
 
+class _ComboRightClickFilter(QObject):
+    # Right-clicking a QComboBox popup normally closes it before a context
+    # menu can show. Consuming the press here keeps the popup open underneath.
+    right_clicked = Signal(QPoint)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+            self.right_clicked.emit(event.pos())
+            return True
+        return False
+
+
 # Thread to Qt signal bridge
 class _Bridge(QObject):
     account_added = Signal(bool, str) # (success, message) from add-account worker
@@ -3542,6 +3554,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         self._place_id_edit.currentTextChanged.connect(self._on_place_id_changed)
         self._place_id_edit.activated.connect(self._on_favorite_selected)
+        self._favorite_ctx_filter = _ComboRightClickFilter(self)
+        self._favorite_ctx_filter.right_clicked.connect(self._on_favorite_context_menu)
+        self._place_id_edit.view().viewport().installEventFilter(self._favorite_ctx_filter)
         self._refresh_favorites_dropdown()
         lay.addWidget(self._place_id_edit)
 
@@ -4112,6 +4127,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         place_id, private_server = data
         self._place_id_edit.setCurrentText(str(place_id))
         self._private_server_edit.setText(private_server or "")
+
+    def _on_favorite_context_menu(self, pos):
+        view = self._place_id_edit.view()
+        index = view.indexAt(pos)
+        if not index.isValid():
+            return
+        data = self._place_id_edit.itemData(index.row())
+        if not data:
+            return
+        place_id, private_server = data
+
+        menu = QMenu(self)
+        act_remove = menu.addAction("Remove")
+        chosen = menu.exec(view.viewport().mapToGlobal(pos))
+        if chosen == act_remove:
+            favorites_mod.remove_favorite(place_id, private_server)
+            self._refresh_favorites_dropdown()
+            self._place_id_edit.hidePopup()
 
     def _on_save_current_game(self):
         place_id = self._place_id_edit.currentText().strip()
