@@ -19,8 +19,7 @@ import shutil
 import zipfile
 import subprocess
 import re
-import win32event
-import win32api
+import win32gui
 import msvcrt
 import requests
 from urllib.request import urlretrieve
@@ -29,6 +28,7 @@ from ctypes import wintypes
 
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
+import features.headless_manager as headless_manager_mod
 from utils.app_paths import get_app_dir, get_data_dir
 
 # Paths
@@ -713,7 +713,6 @@ def stop_anti_afk() -> None:
 
 
 def _afk_worker():
-    import win32gui
     user32 = ctypes.windll.user32
 
     def _get_roblox_pids():
@@ -727,13 +726,17 @@ def _afk_worker():
         return pids
 
     def _get_roblox_hwnds(pids):
+        hm = headless_manager_mod.get_active_manager()
+        headless_pids = hm.get_hidden_pids() if hm else set()
+
         hwnds = []
         def _cb(hwnd, _):
-            if user32.IsWindowVisible(hwnd):
-                pid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value in pids:
-                    hwnds.append(hwnd)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value not in pids:
+                return True
+            if user32.IsWindowVisible(hwnd) or pid.value in headless_pids:
+                hwnds.append(hwnd)
             return True
         EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         user32.EnumWindows(EnumProc(_cb), 0)
@@ -826,11 +829,16 @@ def _afk_worker():
             original_placement = _get_placement(original_hwnd) if original_hwnd else None
 
             # Visit each Roblox window
+            hm = headless_manager_mod.get_active_manager()
             for hwnd in hwnds:
                 if _afk_stop_event.is_set():
                     break
 
                 window_spec = f"[HANDLE:0x{hwnd:08X}]"
+
+                hwnd_pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(hwnd_pid))
+                was_headless_hidden = hm.pause_hidden(hwnd_pid.value) if hm else False
 
                 window_placement = _get_placement(hwnd)
 
@@ -873,6 +881,9 @@ def _afk_worker():
                             user32.SetForegroundWindow(hwnd)
                     except Exception:
                         pass
+
+                if was_headless_hidden and hm:
+                    hm.resume_hidden(hwnd_pid.value)
 
                 print(f"[Anti-AFK] Sent key to window 0x{hwnd:08X}")
 

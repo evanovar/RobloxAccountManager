@@ -60,6 +60,7 @@ import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
 import features.favorites as favorites_mod
 import features.groups as groups
+import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.updater as updater_mod
 import features.webhook as webhook
@@ -321,6 +322,8 @@ class _Bridge(QObject):
     join_place_resolved = Signal(object) # dict payload from Place ID resolution worker
     recent_game_saved = Signal() # a recent-game entry was written and needs a list refresh
     favorite_place_resolved = Signal(object) # dict payload from Save Current Game resolution
+    headless_update = Signal(object) # list[dict] of running Roblox processes from Headless Manager scan
+    headless_avatar_ready = Signal(int, object) # (pid, image_bytes) from Headless Manager avatar worker
 
 BG = "#0E0E0E"
 PANEL = "#151515"
@@ -472,6 +475,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
         self._bridge.favorite_place_resolved.connect(self._on_favorite_place_resolved)
+        self._bridge.headless_update.connect(self._on_headless_update)
+        self._bridge.headless_avatar_ready.connect(self._on_headless_avatar_ready)
 
         # Presence Indicator
         self._presence_mod = presence_mod
@@ -573,6 +578,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         if S.get("websocket_enabled") and S.get("developer_mode"):
             self._ws_server.start()
+
+        if S.get("headless_manager_enabled", False):
+            self._start_headless_manager()
 
         QTimer.singleShot(2000, self._start_cookie_validator)
         QTimer.singleShot(500, self._start_update_check)
@@ -2158,6 +2166,31 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         ram_row.addWidget(self._sett_ram_spin)
         f.addLayout(ram_row)
 
+        headless_hdr = QHBoxLayout()
+        headless_hdr.setContentsMargins(0, 0, 0, 0)
+        headless_hdr.addWidget(_sec("HEADLESS MANAGER"))
+        headless_hdr.addStretch(1)
+        f.addLayout(headless_hdr)
+
+        self._sett_headless_chk = _chk(
+            "headless_manager_enabled", "Enable Headless Manager",
+            "Lists every running Roblox process so you can hide or show\n"
+            "its window on demand.",
+            on_change=self._on_sett_headless_manager,
+        )
+        f.addWidget(self._sett_headless_chk)
+
+        self._headless_list = QListWidget()
+        self._headless_list.setFixedHeight(160)
+        self._headless_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._headless_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._headless_list.customContextMenuRequested.connect(self._headless_on_context_menu)
+        f.addWidget(self._headless_list)
+        self._headless_avatar_labels: dict[int, QLabel] = {}
+        self._headless_status_labels: dict[int, QLabel] = {}
+        self._headless_manager: headless_manager_mod.HeadlessManager | None = None
+        self._refresh_headless_list([])
+
         f.addStretch(1)
 
         # Discord (Page 2)
@@ -2499,6 +2532,191 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 RobloxAPI.set_framerate_cap(value)
             except Exception as e:
                 print(f"[ERROR] Failed to apply framerate cap: {e}")
+
+    _HM_HIDDEN_COLOR = "#4CAF50"
+    _HM_SHOWN_COLOR = "#EF5350"
+
+    def _on_sett_headless_manager(self, enabled: bool):
+        if enabled:
+            self._start_headless_manager()
+        else:
+            self._stop_headless_manager()
+
+    def _start_headless_manager(self) -> None:
+        if self._headless_manager is not None:
+            return
+        self._headless_manager = headless_manager_mod.HeadlessManager(
+            on_update=lambda rows: self._bridge.headless_update.emit(rows),
+        )
+        self._headless_manager.start()
+        print("[INFO] Headless Manager started.")
+
+    def _stop_headless_manager(self) -> None:
+        if self._headless_manager is None:
+            return
+        self._headless_manager.stop(restore=True)
+        self._headless_manager = None
+        self._refresh_headless_list([])
+        print("[INFO] Headless Manager stopped, Roblox windows restored.")
+
+    def _headless_selected_pid(self) -> int | None:
+        item = self._headless_list.currentItem() if self._headless_list else None
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _headless_selected_pids(self) -> list[int]:
+        if not self._headless_list:
+            return []
+        pids = []
+        for it in self._headless_list.selectedItems():
+            pid = it.data(Qt.ItemDataRole.UserRole)
+            if pid:
+                pids.append(pid)
+        return pids
+
+    def _on_headless_update(self, rows: list[dict]):
+        if self._headless_manager is None:
+            return
+        self._refresh_headless_list(rows)
+
+    def _refresh_headless_list(self, rows: list[dict]):
+        cur = self._headless_selected_pid()
+        selected = set(self._headless_selected_pids())
+        self._headless_list.clear()
+        self._headless_avatar_labels.clear()
+        self._headless_status_labels.clear()
+
+        AV = avatars.AVATAR_SIZE
+        ITEM_H = AV + 6
+
+        if not rows:
+            empty = QListWidgetItem(
+                "No Roblox processes found." if self._headless_manager else
+                "Headless Manager is disabled."
+            )
+            empty.setForeground(QColor(MUTED))
+            empty.setFlags(empty.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self._headless_list.addItem(empty)
+            return
+
+        for row_data in rows:
+            pid = row_data["pid"]
+            username = row_data["username"]
+            hidden = row_data["hidden"]
+
+            item = QListWidgetItem("")
+            item.setSizeHint(QSize(0, ITEM_H))
+            item.setData(Qt.ItemDataRole.UserRole, pid)
+
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(4, 0, 6, 0)
+            row_lay.setSpacing(6)
+
+            av_lbl = QLabel()
+            av_lbl.setFixedSize(AV, AV)
+            av_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+            av_lbl.setPixmap(self._make_placeholder_pixmap(AV))
+            row_lay.addWidget(av_lbl)
+            self._headless_avatar_labels[pid] = av_lbl
+
+            name_lbl = QLabel(username)
+            name_lbl.setObjectName("accountName")
+            name_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            row_lay.addWidget(name_lbl)
+
+            sep = QLabel("|")
+            sep.setObjectName("noteSep")
+            sep.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            row_lay.addWidget(sep)
+
+            status_str = "hidden" if hidden else "shown"
+            status_color = self._HM_HIDDEN_COLOR if hidden else self._HM_SHOWN_COLOR
+            status_lbl = QLabel(status_str)
+            status_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            status_lbl.setStyleSheet(f"color: {status_color}; font-size: 10px;")
+            row_lay.addWidget(status_lbl)
+            self._headless_status_labels[pid] = status_lbl
+
+            row_lay.addStretch(1)
+
+            row.setFixedHeight(ITEM_H)
+            self._headless_list.addItem(item)
+            self._headless_list.setItemWidget(item, row)
+
+        for i in range(self._headless_list.count()):
+            it = self._headless_list.item(i)
+            pid = it.data(Qt.ItemDataRole.UserRole) if it else None
+            if pid in selected:
+                it.setSelected(True)
+            if cur and pid == cur:
+                self._headless_list.setCurrentItem(it)
+
+        self._headless_load_avatars_async(rows)
+
+    def _headless_load_avatars_async(self, rows: list[dict]):
+        by_pid = {r["pid"]: r for r in rows}
+        for pid, label in list(self._headless_avatar_labels.items()):
+            row_data = by_pid.get(pid)
+            if not row_data:
+                continue
+            user_id = row_data.get("user_id")
+            username = row_data.get("username")
+            if not user_id:
+                continue
+            avatars.fetch_avatar_async(
+                user_id, username,
+                on_done=lambda u, b, p=pid: self._bridge.headless_avatar_ready.emit(p, b),
+            )
+
+    def _on_headless_avatar_ready(self, pid: int, img_bytes: object):
+        try:
+            pix = self._make_circular_pixmap(bytes(img_bytes), avatars.AVATAR_SIZE)
+            if pix.isNull():
+                return
+            lbl = self._headless_avatar_labels.get(pid)
+            if lbl is not None:
+                lbl.setPixmap(pix)
+        except Exception:
+            pass
+
+    def _headless_set_status_label(self, pid: int, hidden: bool) -> None:
+        lbl = self._headless_status_labels.get(pid)
+        if lbl is None:
+            return
+        lbl.setText("hidden" if hidden else "shown")
+        color = self._HM_HIDDEN_COLOR if hidden else self._HM_SHOWN_COLOR
+        lbl.setStyleSheet(f"color: {color}; font-size: 10px;")
+
+    def _headless_on_context_menu(self, pos):
+        item = self._headless_list.itemAt(pos)
+        if item is None or self._headless_manager is None:
+            return
+        pid = item.data(Qt.ItemDataRole.UserRole)
+        if not pid:
+            return
+
+        if pid not in self._headless_selected_pids():
+            self._headless_list.setCurrentItem(item)
+
+        pids = self._headless_selected_pids()
+        any_shown = any(not self._headless_manager.is_hidden(p) for p in pids)
+        any_hidden = any(self._headless_manager.is_hidden(p) for p in pids)
+
+        menu = QMenu(self)
+        act_hide = menu.addAction("Hide") if any_shown else None
+        act_show = menu.addAction("Show") if any_hidden else None
+
+        chosen = menu.exec(self._headless_list.mapToGlobal(pos))
+        if act_hide and chosen == act_hide:
+            for p in pids:
+                self._headless_manager.set_hidden(p, True)
+                self._headless_set_status_label(p, True)
+        elif act_show and chosen == act_show:
+            for p in pids:
+                self._headless_manager.set_hidden(p, False)
+                self._headless_set_status_label(p, False)
 
     def _start_update_check(self) -> None:
         if not actions.load_ui_settings().get("check_updates_on_startup", True):
@@ -3497,6 +3715,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 RobloxAPI.unlock_framerate_cap()
         except Exception as e:
             print(f"[ERROR] Failed to unlock framerate cap file: {e}")
+        try:
+            self._stop_headless_manager()
+        except Exception as e:
+            print(f"[ERROR] Failed to restore Roblox windows: {e}")
         super().closeEvent(event)
 
     def _ar_on_remove(self):
