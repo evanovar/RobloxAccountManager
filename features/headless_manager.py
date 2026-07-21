@@ -144,6 +144,10 @@ class HeadlessManager:
         with self._lock:
             return set(self._hidden_pids)
 
+    def get_pid_username(self, pid: int) -> str | None:
+        with self._lock:
+            return self._pid_username.get(pid)
+
     def pause_hidden(self, pid: int) -> bool:
         with self._lock:
             if pid in self._hidden_pids:

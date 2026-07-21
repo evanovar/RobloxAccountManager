@@ -735,8 +735,16 @@ def _afk_worker():
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             if pid.value not in pids:
                 return True
-            if user32.IsWindowVisible(hwnd) or pid.value in headless_pids:
+            if user32.IsWindowVisible(hwnd):
                 hwnds.append(hwnd)
+                return True
+            if pid.value in headless_pids:
+                expected_titles = {"Roblox"}
+                username = hm.get_pid_username(pid.value) if hm else None
+                if username:
+                    expected_titles.add(username)
+                if win32gui.GetWindowText(hwnd) in expected_titles:
+                    hwnds.append(hwnd)
             return True
         EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         user32.EnumWindows(EnumProc(_cb), 0)
