@@ -3960,6 +3960,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         selected_usernames = {
             it.data(Qt.ItemDataRole.UserRole) for it in self._account_list.selectedItems()
         }
+        scroll_value = self._account_list.verticalScrollBar().value()
         self._account_list.clear()
         self._avatar_labels.clear()
         self._presence_dots.clear()
@@ -4092,6 +4093,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         if not restored_current and self._account_list.count() > 0:
             self._account_list.setCurrentRow(0)
+
+        # setCurrentItem/setCurrentRow above auto-scroll to keep the current
+        # item visible - restore the scroll position the user actually had.
+        self._account_list.verticalScrollBar().setValue(scroll_value)
 
         self._rebuild_group_bar()
         self._load_avatars_async()
