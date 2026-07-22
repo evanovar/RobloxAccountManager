@@ -204,16 +204,16 @@ class RobloxAccountManager:
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        # Needed so we can read rblx-challenge-* headers from network logs
+        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL", "browser": "ALL"})
         
         chrome_options.add_argument("--log-level=3")
         chrome_options.add_argument("--silent")
-        chrome_options.add_argument("--disable-logging")
         chrome_options.add_argument("--disable-gpu-logging")
         chrome_options.add_argument("--disable-dev-tools")
         chrome_options.add_argument("--no-default-browser-check")
         chrome_options.add_argument("--disable-default-apps")
         chrome_options.add_argument("--disable-web-security")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
         chrome_options.add_argument("--disable-extensions")
@@ -271,9 +271,32 @@ class RobloxAccountManager:
             traceback.print_exc()
             return None
     
-    def wait_for_login(self, driver, timeout=300):
+    def wait_for_login(self, driver, timeout=300, auto_solve_captcha=True, username="", password=""):
         from selenium.common.exceptions import WebDriverException
         print("Please log into your Roblox account")
+
+        captcha_helper = None
+        if auto_solve_captcha:
+            try:
+                from .captcha_solver import get_2captcha_key_from_settings
+                from .roblox_login import CaptchaAwareLogin
+
+                key = get_2captcha_key_from_settings(self)
+                if key:
+                    captcha_helper = CaptchaAwareLogin(
+                        driver=driver,
+                        twocaptcha_key=key,
+                        username=username or "",
+                        password=password or "",
+                        timeout=timeout,
+                    )
+                    captcha_helper.enable_network_capture()
+                    captcha_helper.install_hooks()
+                    print("[INFO] Auto captcha solving enabled (2captcha)")
+                else:
+                    print("[WARNING] No 2captcha key — captchas will not be auto-solved")
+            except Exception as e:
+                print(f"[WARNING] Could not init captcha solver: {e}")
         
         detector_script = """
         window.browserDetect = {
@@ -371,6 +394,7 @@ class RobloxAccountManager:
         
         start_time = time.time()
         last_debug_time = 0
+        last_captcha_check = 0
         check_count = 0
         last_url = ""
         
@@ -409,8 +433,63 @@ class RobloxAccountManager:
                     except:
                         pass
                     return True
-                
+
+                # Auto-solve FunCaptcha when it appears (manual browser add / JS fill)
                 current_time = time.time()
+                if captcha_helper and (current_time - last_captcha_check) > 2.5:
+                    last_captcha_check = current_time
+                    try:
+                        # Capture credentials from page into helper if possible
+                        try:
+                            creds = driver.execute_script(
+                                """
+                                return {
+                                  pw: sessionStorage.getItem('_ram_pw')
+                                    || (window.browserDetect && window.browserDetect.password) || '',
+                                  user: (document.getElementById('login-username')||{}).value || ''
+                                };
+                                """
+                            ) or {}
+                            if creds.get("pw") and not captcha_helper.password:
+                                captcha_helper.password = creds["pw"]
+                            if creds.get("user") and not captcha_helper.username:
+                                captcha_helper.username = creds["user"]
+                        except Exception:
+                            pass
+                        # Keep interceptor alive across soft navigations
+                        try:
+                            captcha_helper.install_hooks()
+                        except Exception:
+                            pass
+                        dom = captcha_helper.detect()
+                        challenges = dom.get("challenges") or []
+                        has_captcha_ch = any(
+                            (c.get("type") or "").lower() == "captcha" for c in challenges
+                        )
+                        body = (dom.get("bodyText") or "").lower()
+                        verify_ui = (
+                            dom.get("captchaVisible")
+                            or dom.get("verifyText")
+                            or dom.get("visibleChallenge")
+                            or has_captcha_ch
+                            or "start puzzle" in body
+                            or "verify" in body and "captcha" in body
+                        )
+                        if verify_ui or has_captcha_ch or dom.get("pkey") or dom.get("iframeSrc"):
+                            print(
+                                f"[INFO] Captcha/verification detected "
+                                f"(challenges={len(challenges)}, captchaUI={bool(verify_ui)}) "
+                                f"— solving with 2captcha..."
+                            )
+                            for c in challenges[-3:]:
+                                print(
+                                    f"[INFO]   challenge type={c.get('type')} "
+                                    f"id={str(c.get('id') or '')[:40]}"
+                                )
+                            captcha_helper.solve_and_continue(dom)
+                    except Exception as cap_err:
+                        print(f"[WARNING] Captcha solve attempt failed: {cap_err}")
+
                 if current_time - last_debug_time > 5:
                     last_debug_time = current_time
                     try:
