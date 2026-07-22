@@ -28,6 +28,7 @@ from ctypes import wintypes
 
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
+from classes.captcha_solver import get_2captcha_key_from_settings
 import features.headless_manager as headless_manager_mod
 from utils.app_paths import get_app_dir, get_data_dir
 
@@ -583,29 +584,48 @@ def _build_login_script(username: str, password: str) -> str:
     """
 
 
+def get_twocaptcha_api_key(manager=None) -> str:
+    """Resolve the user-supplied 2captcha key from GUI settings."""
+    return get_2captcha_key_from_settings(manager)
+
+
 def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
     if not pairs:
         on_done(False, "No username:password pairs provided.")
         return
 
     browser_path = get_browser_path()
+    captcha_key = get_twocaptcha_api_key(manager)
+    if captcha_key:
+        print("[INFO] 2captcha captcha solving enabled (GUI key configured)")
+    else:
+        print(
+            "[WARNING] No 2captcha API key set in Settings → Captcha Solver — "
+            "captchas will not be auto-solved"
+        )
 
     def _worker():
+        from classes.roblox_login import login_and_extract
+
         success_count = 0
         imported_users: list[str] = []
 
         for username, password in pairs:
-            existing_before = set(manager.accounts.keys())
             try:
-                script = _build_login_script(username, password)
-                ok = manager.add_account(javascript=script, browser_path=browser_path)
-                if ok:
-                    new_names = set(manager.accounts.keys()) - existing_before
-                    added = next(iter(new_names)) if new_names else username
+                print(f"[INFO] import_user_pass: logging in {username} (auto-captcha={'on' if captcha_key else 'off'})...")
+                ok, result = login_and_extract(
+                    manager,
+                    username=username,
+                    password=password,
+                    twocaptcha_key=captcha_key,
+                    browser_path=browser_path,
+                    timeout=180.0,
+                )
+                if ok and result:
                     success_count += 1
-                    imported_users.append(str(added))
+                    imported_users.append(str(result))
                 else:
-                    print(f"[ERROR] import_user_pass: login failed for {username}")
+                    print(f"[ERROR] import_user_pass: login failed for {username}: {result}")
             except Exception as e:
                 print(f"[ERROR] import_user_pass: {username}: {e}")
 

@@ -2304,6 +2304,27 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         sa, f = _scrollable()
         content_stack.addWidget(sa)
 
+        f.addWidget(_sec("CAPTCHA SOLVER (2CAPTCHA)"))
+        _cap_lbl = QLabel(
+            "Automatically solve Roblox FunCaptcha when adding accounts via User:Pass import.\n"
+            "Paste your own 2captcha API key below. Changes are saved automatically."
+        )
+        _cap_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        _cap_lbl.setWordWrap(True)
+        f.addWidget(_cap_lbl)
+        self._sett_2captcha_edit = QLineEdit()
+        self._sett_2captcha_edit.setPlaceholderText("Enter your 2captcha API key")
+        self._sett_2captcha_edit.setText(S.get("twocaptcha_api_key", "") or "")
+        self._sett_2captcha_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._sett_2captcha_edit.setToolTip(
+            "Your 2captcha.com API key. Stored in local UI settings.\n"
+            "Used when Import User:Pass hits a Roblox captcha."
+        )
+        self._sett_2captcha_edit.textChanged.connect(
+            lambda t: actions.save_ui_setting("twocaptcha_api_key", t.strip())
+        )
+        f.addWidget(self._sett_2captcha_edit)
+
         f.addWidget(_sec("BROWSER ENGINE"))
         _br_lbl = QLabel(
             "Browser used when adding accounts via the browser method."
