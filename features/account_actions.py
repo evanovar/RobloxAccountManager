@@ -582,6 +582,7 @@ def _build_login_script(username: str, password: str) -> str:
     }})();
     """
 
+IMPORT_BATCH_SIZE = 5
 
 def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
     if not pairs:
@@ -594,20 +595,20 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
         success_count = 0
         imported_users: list[str] = []
 
-        for username, password in pairs:
+        for start in range(0, len(pairs), IMPORT_BATCH_SIZE):
+            batch = pairs[start:start + IMPORT_BATCH_SIZE]
             existing_before = set(manager.accounts.keys())
             try:
-                script = _build_login_script(username, password)
-                ok = manager.add_account(javascript=script, browser_path=browser_path)
-                if ok:
-                    new_names = set(manager.accounts.keys()) - existing_before
-                    added = next(iter(new_names)) if new_names else username
-                    success_count += 1
-                    imported_users.append(str(added))
+                scripts = [_build_login_script(username, password) for username, password in batch]
+                manager.add_account(amount=len(batch), javascript_list=scripts, browser_path=browser_path)
+                new_names = set(manager.accounts.keys()) - existing_before
+                if new_names:
+                    success_count += len(new_names)
+                    imported_users.extend(str(name) for name in new_names)
                 else:
-                    print(f"[ERROR] import_user_pass: login failed for {username}")
+                    print(f"[ERROR] import_user_pass: batch at {start} failed for all {len(batch)} account(s)")
             except Exception as e:
-                print(f"[ERROR] import_user_pass: {username}: {e}")
+                print(f"[ERROR] import_user_pass: batch at {start}: {e}")
 
         if success_count:
             summary = f"Imported {success_count}/{len(pairs)} account(s)."

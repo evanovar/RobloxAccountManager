@@ -48,3 +48,5 @@ debug/
 # My things
 handle64.exe
 CLAUDE.md
+website/
+.claude/

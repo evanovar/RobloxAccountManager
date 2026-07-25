@@ -518,17 +518,22 @@ class RobloxAccountManager:
             print(f"[ERROR] Error extracting user info: {e}")
             return None, None, None, None, ""
     
-    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", javascript_list=None, browser_path=None):
         """
         Add accounts through browser login with optional Javascript execution
         amount: number of browser instances to open (max 10)
         website: URL to navigate to
-        javascript: Javascript code to execute after page load
+        javascript: Javascript code to execute after page load, same script for every instance
+        javascript_list: optional list of per-instance Javascript, overrides javascript, index i maps to instance i
         browser_path: Optional path to browser executable
         """
+        if javascript_list:
+            amount = len(javascript_list)
+
         if amount > 10:
             print("[WARNING] The maximum instance is only 10. Setting to 10.")
             amount = 10
+            javascript_list = javascript_list[:10] if javascript_list else javascript_list
         
         success_count = 0
         drivers = []
@@ -578,11 +583,12 @@ class RobloxAccountManager:
                             else:
                                 raise nav_error
                     
-                    if javascript:
+                    instance_script = javascript_list[i] if javascript_list else javascript
+                    if instance_script:
                         print(f"[INFO] Executing Javascript for instance {i + 1}...")
                         try:
-                            driver.execute_script("return document.readyState") 
-                            driver.execute_script(javascript)
+                            driver.execute_script("return document.readyState")
+                            driver.execute_script(instance_script)
                             print(f"[SUCCESS] Javascript executed for instance {i + 1}")
                         except Exception as js_error:
                             print(f"[WARNING] Javascript execution failed for instance {i + 1}: {js_error}")
