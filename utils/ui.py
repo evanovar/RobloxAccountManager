@@ -1678,7 +1678,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._mr_handle64_radio.blockSignals(False)
         self._mr_default_radio.blockSignals(False)
 
+        self._mr_enabled_chk.blockSignals(True)
         self._mr_enabled_chk.setChecked(self._mr_enabled)
+        self._mr_enabled_chk.blockSignals(False)
         self._update_mr_h64_status()
         self._update_mr_status()
 

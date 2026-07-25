@@ -980,7 +980,7 @@ def _mr_h64_monitor_worker():
                     daemon=True
                 ).start()
             known -= known - current
-            time.sleep(0.4)
+            time.sleep(0.15)
         except Exception as e:
             print(f"[Multi Roblox] Handle64 monitor error: {e}")
             time.sleep(1.0)
@@ -1008,7 +1008,7 @@ def _mr_h64_close_handles(pids: list[int]):
                             break
                 if handle_value:
                     break
-                time.sleep(1)
+                time.sleep(0.2)
             if handle_value:
                 subprocess.run(
                     f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
@@ -1057,6 +1057,8 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
 
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [wintypes.LPCVOID, wintypes.BOOL, wintypes.LPCWSTR]
         mutex = kernel32.CreateMutexW(None, True, "ROBLOX_singletonEvent")
         if not mutex:
             print(f"[Multi Roblox] Failed to create mutex: {ctypes.get_last_error()}")
@@ -1135,6 +1137,10 @@ def disable_multi_roblox():
         m = _mr_handle.get("mutex")
         if m:
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.ReleaseMutex.restype = wintypes.BOOL
+            kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             try:
                 if not kernel32.ReleaseMutex(m):
                     print(f"ReleaseMutex failed. Error: {ctypes.get_last_error()}")
