@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
-    QSizePolicy, QSpinBox, QStackedWidget, QTextEdit,
+    QSizePolicy, QSpinBox, QStackedWidget, QTabWidget, QTextEdit,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -55,6 +55,7 @@ from classes.encryption import EncryptionConfig, PasswordEncryption
 from classes.roblox_api import RobloxAPI
 
 import features.account_actions as actions
+import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
 import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
@@ -307,6 +308,7 @@ class _ComboRightClickFilter(QObject):
 # Thread to Qt signal bridge
 class _Bridge(QObject):
     account_added = Signal(bool, str) # (success, message) from add-account worker
+    account_creator_done = Signal(bool, str) # (success, summary) from account creator
     game_name_ready = Signal(str) # display text for current-place label
     launch_done = Signal(bool, str) # (success, message) from any join/launch worker
     avatar_ready = Signal(str, object) # (username, image_bytes) from avatar worker
@@ -467,6 +469,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Thread to Qt signal bridge
         self._bridge = _Bridge()
         self._bridge.account_added.connect(self._on_add_done_main)
+        self._bridge.account_creator_done.connect(self._on_account_creator_done)
         self._bridge.launch_done.connect(self._on_launch_and_refresh)
         self._bridge.avatar_ready.connect(self._on_avatar_ready)
         self._bridge.rejoin_status.connect(self._on_rejoin_status)
@@ -1171,9 +1174,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         add_menu = QMenu(self._add_btn)
         act_cookie = add_menu.addAction("Import Cookie")
         act_userpass = add_menu.addAction("Import User:Pass")
+        act_creator = add_menu.addAction("Account Creator")
         act_js = add_menu.addAction("Javascript")
         act_cookie.triggered.connect(self._on_import_cookie)
         act_userpass.triggered.connect(self._on_import_userpass)
+        act_creator.triggered.connect(self._on_account_creator)
         act_js.triggered.connect(self._on_add_javascript)
         self._add_btn.setMenu(add_menu)
         self._add_btn.clicked.connect(self._on_add_account_browser)
@@ -4697,6 +4702,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 on_done=self._on_add_done,
             )
 
+    def _on_account_creator(self):
+        dlg = _AccountCreatorDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            account_creator_mod.create_accounts(
+                self.manager,
+                dlg.amount,
+                options=dlg.options,
+                on_done=(
+                    lambda success, message:
+                    self._bridge.account_creator_done.emit(success, message)
+                ),
+            )
+
+    def _on_account_creator_done(self, success: bool, message: str):
+        if success:
+            self._refresh_account_list()
+            _show_info(self, "Account Creator", message)
+        else:
+            _show_error(self, "Account Creator", message)
+
     def _on_add_javascript(self):
         dlg = _AddJavascriptDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -5365,6 +5390,182 @@ class _ImportCookieDialog(QDialog):
         self.cookie_value = self._text.toPlainText().strip()
         if self.cookie_value:
             self.accept()
+
+class _AccountCreatorDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.amount = 1
+        self.options: dict = {}
+        self.setWindowTitle("Account Creator")
+        self.setFixedSize(540, 320)
+        self.setStyleSheet(_DLG_STYLE + f"""
+            QTabWidget::pane {{
+                background: {PANEL};
+                border: 1px solid {LINE};
+                border-radius: 0;
+            }}
+            QTabBar::tab {{
+                background: {INPUT};
+                color: {MUTED};
+                border: 1px solid {LINE};
+                border-bottom: none;
+                border-radius: 0;
+                min-width: 80px;
+                min-height: 24px;
+                padding: 2px 10px;
+            }}
+            QTabBar::tab:selected {{
+                background: {SELECT};
+                color: {TEXT};
+            }}
+            QSpinBox {{
+                background: {INPUT};
+                color: {TEXT};
+                border: 1px solid {LINE};
+                border-radius: 0;
+                min-height: 24px;
+                padding: 2px 6px;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        title = QLabel("Create Roblox Accounts")
+        title.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: 700;")
+        lay.addWidget(title)
+
+        warning = QLabel(
+            "CAPTCHAs must be completed manually. This program does not "
+            "bypass Roblox CAPTCHA protection."
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet(f"color: {NOTE}; font-size: 10px;")
+        lay.addWidget(warning)
+
+        tabs = QTabWidget()
+
+        basic_page = QWidget()
+        basic_lay = QVBoxLayout(basic_page)
+        basic_lay.setContentsMargins(12, 12, 12, 12)
+        basic_lay.setSpacing(8)
+
+        amount_row = QHBoxLayout()
+        amount_label = QLabel("Amount of Accounts")
+        amount_label.setToolTip(
+            "Create between 1 and 100 accounts.\n"
+            "No more than 5 browsers are open at the same time."
+        )
+        amount_row.addWidget(amount_label)
+        amount_row.addStretch(1)
+        self._amount_spin = QSpinBox()
+        self._amount_spin.setRange(1, account_creator_mod.MAX_CREATOR_ACCOUNTS)
+        self._amount_spin.setValue(1)
+        self._amount_spin.setFixedWidth(70)
+        self._amount_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        amount_row.addWidget(self._amount_spin)
+        basic_lay.addLayout(amount_row)
+        basic_lay.addStretch(1)
+        tabs.addTab(basic_page, "Basic")
+
+        advanced_page = QWidget()
+        advanced_lay = QVBoxLayout(advanced_page)
+        advanced_lay.setContentsMargins(12, 12, 12, 12)
+        advanced_lay.setSpacing(8)
+
+        advanced_desc = QLabel("Optionally add your own prefix and set one password for every created account. Max 14 characters.")
+        advanced_desc.setWordWrap(True)
+        advanced_desc.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        advanced_desc.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        advanced_desc.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        advanced_lay.addWidget(advanced_desc)
+
+        self._enable_prefix_chk = QCheckBox("Enable Custom Prefix")
+        self._enable_prefix_chk.setChecked(False)
+        advanced_lay.addWidget(self._enable_prefix_chk)
+
+        prefix_row = QHBoxLayout()
+        prefix_label = QLabel("Custom Prefix")
+        prefix_label.setFixedWidth(105)
+        prefix_row.addWidget(prefix_label)
+        self._username_prefix_edit = QLineEdit()
+        self._username_prefix_edit.setPlaceholderText("Example: alts_")
+        self._username_prefix_edit.setMaxLength(
+            account_creator_mod.MAX_PREFIX_LENGTH
+        )
+        self._username_prefix_edit.setEnabled(False)
+        prefix_row.addWidget(self._username_prefix_edit, 1)
+        advanced_lay.addLayout(prefix_row)
+
+        password_row = QHBoxLayout()
+        password_label = QLabel("Set Password")
+        password_label.setFixedWidth(105)
+        password_row.addWidget(password_label)
+        self._creator_password_edit = QLineEdit()
+        self._creator_password_edit.setPlaceholderText(
+            "Leave blank to generate a password for each account"
+        )
+        self._creator_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        password_row.addWidget(self._creator_password_edit, 1)
+        advanced_lay.addLayout(password_row)
+        advanced_lay.addStretch(1)
+
+        self._enable_prefix_chk.toggled.connect(
+            self._username_prefix_edit.setEnabled
+        )
+        tabs.addTab(advanced_page, "Advanced")
+
+        lay.addWidget(tabs, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        create_btn = QPushButton("Create Accounts")
+        create_btn.setDefault(True)
+        create_btn.clicked.connect(self._accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(create_btn)
+        btn_row.addWidget(cancel_btn)
+        lay.addLayout(btn_row)
+
+    def _accept(self):
+        enable_custom_prefix = self._enable_prefix_chk.isChecked()
+        prefix = self._username_prefix_edit.text().strip()
+        if (
+            enable_custom_prefix
+            and not account_creator_mod.is_valid_prefix(prefix)
+        ):
+            _show_error(
+                self,
+                "Invalid Prefix",
+                "The prefix must only contain letters, numbers, and _. "
+                "It cannot start with _.\n\n"
+                "Roblox account creation was not launched.",
+            )
+            return
+
+        password = self._creator_password_edit.text()
+        if password and len(password) < 8:
+            _show_error(
+                self,
+                "Invalid Password",
+                "The custom password must contain at least 8 characters.",
+            )
+            return
+
+        self.amount = self._amount_spin.value()
+        self.options = {
+            "enable_custom_prefix": enable_custom_prefix,
+            "prefix": prefix,
+            "password": password,
+        }
+        self.accept()
 
 
 class _ImportUserPassDialog(QDialog):

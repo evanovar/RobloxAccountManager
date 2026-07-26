@@ -34,6 +34,8 @@ class RobloxAccountManager:
         self.encryptor = None
         self.secure_settings = {}
         self._entered_password_hash = None
+        self._accounts_lock = threading.RLock()
+        self._browser_setup_lock = threading.Lock()
         
         if self.encryption_config.is_encryption_enabled():
             method = self.encryption_config.get_encryption_method()
@@ -171,15 +173,16 @@ class RobloxAccountManager:
         return True
     
     def create_temp_profile(self):
-        """Create a temporary Chrome profile directory"""
+        # Create a temporary Chrome profile directory.
         self.temp_profile_dir = tempfile.mkdtemp(prefix="roblox_login_")
         return self.temp_profile_dir
     
-    def cleanup_temp_profile(self):
-        """Clean up temporary profile directory"""
-        if self.temp_profile_dir and os.path.exists(self.temp_profile_dir):
+    def cleanup_temp_profile(self, profile_dir=None):
+        # Clean one temporary browser profile without touching active profiles.
+        target_dir = profile_dir or self.temp_profile_dir
+        if target_dir and os.path.exists(target_dir):
             try:
-                shutil.rmtree(self.temp_profile_dir)
+                shutil.rmtree(target_dir)
             except:
                 pass
     
@@ -235,37 +238,43 @@ class RobloxAccountManager:
         chrome_options.add_argument("--aggressive-cache-discard")
         
         try:
-            if browser_path and "Chromium" in browser_path:
-                chromium_dir = os.path.dirname(os.path.dirname(browser_path))
-                chromedriver_path = os.path.join(chromium_dir, "chromedriver_win32", "chromedriver.exe")
-                
-                if os.path.exists(chromedriver_path):
-                    print(f"[INFO] Using bundled chromedriver: {chromedriver_path}")
-                    service = Service(chromedriver_path, log_path=os.devnull)
+            # Chrome setup changes process-wide stderr, so only one setup may
+            # run at a time. Open browser sessions continue concurrently.
+            with self._browser_setup_lock:
+                if browser_path and "Chromium" in browser_path:
+                    chromium_dir = os.path.dirname(os.path.dirname(browser_path))
+                    chromedriver_path = os.path.join(chromium_dir, "chromedriver_win32", "chromedriver.exe")
+
+                    if os.path.exists(chromedriver_path):
+                        print(f"[INFO] Using bundled chromedriver: {chromedriver_path}")
+                        service = Service(chromedriver_path, log_path=os.devnull)
+                    else:
+                        print(f"[WARNING] Chromedriver not found, falling back to webdriver_manager")
+                        service = Service(ChromeDriverManager().install(), log_path=os.devnull)
                 else:
-                    print(f"[WARNING] Chromedriver not found, falling back to webdriver_manager")
                     service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-            else:
-                service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-            
-            original_stderr = sys.stderr
-            devnull_f = open(os.devnull, 'w')
-            sys.stderr = devnull_f
-            try:
-                driver = webdriver.Chrome(service=service, options=chrome_options)
                 
-                driver.set_page_load_timeout(120)
-                driver.implicitly_wait(10)
-                
-                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                return driver
-            finally:
-                sys.stderr = original_stderr
+                original_stderr = sys.stderr
+                devnull_f = open(os.devnull, 'w')
+                sys.stderr = devnull_f
                 try:
-                    devnull_f.close()
-                except Exception:
-                    pass
+                    driver = webdriver.Chrome(service=service, options=chrome_options)
+                    driver._ram_profile_dir = profile_dir
+
+                    driver.set_page_load_timeout(120)
+                    driver.implicitly_wait(10)
+
+                    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                finally:
+                    sys.stderr = original_stderr
+                    try:
+                        devnull_f.close()
+                    except Exception:
+                        pass
+                
+                return driver
         except Exception as e:
+            self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] Error setting up Chrome driver: {e}")
             print("[INFO] Please make sure Google Chrome is installed on your system")
             traceback.print_exc()
@@ -323,7 +332,7 @@ class RobloxAccountManager:
                 
                 window.browserDetect.detected = true;
                 window.browserDetect.method = 'url';
-                window.browserDetect.debug.push('✅ DETECTED via URL! Page: ' + url);
+                window.browserDetect.debug.push('DETECTED via URL! Page: ' + url);
                 window.browserDetect.cleanup();
                 return true;
             }
@@ -436,7 +445,7 @@ class RobloxAccountManager:
 
     
     def extract_user_info(self, driver):
-        """Extract username, cookie, user_id, and password"""
+        # Extract the username, cookie, user ID, password, and avatar URL.
         try:
             roblosecurity_cookie = None
             cookies = driver.get_cookies()
@@ -447,7 +456,7 @@ class RobloxAccountManager:
                     break
             
             if not roblosecurity_cookie:
-                return None, None, None, None
+                return None, None, None, None, ""
             
             captured_password = ""
             try:
@@ -518,15 +527,9 @@ class RobloxAccountManager:
             print(f"[ERROR] Error extracting user info: {e}")
             return None, None, None, None, ""
     
-    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", javascript_list=None, browser_path=None):
-        """
-        Add accounts through browser login with optional Javascript execution
-        amount: number of browser instances to open (max 10)
-        website: URL to navigate to
-        javascript: Javascript code to execute after page load, same script for every instance
-        javascript_list: optional list of per-instance Javascript, overrides javascript, index i maps to instance i
-        browser_path: Optional path to browser executable
-        """
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", javascript_list=None, browser_path=None, password_list=None, window_slot=None, window_slot_count=None):
+        # Add accounts through one or more browser instances.
+        # javascript_list and password_list map each value to the same browser index.
         if javascript_list:
             amount = len(javascript_list)
 
@@ -534,9 +537,11 @@ class RobloxAccountManager:
             print("[WARNING] The maximum instance is only 10. Setting to 10.")
             amount = 10
             javascript_list = javascript_list[:10] if javascript_list else javascript_list
+            password_list = password_list[:10] if password_list else password_list
         
         success_count = 0
         drivers = []
+        instance_passwords = []
         
         try:
             print(f"[INFO] Launching {amount} browser instance(s)...")
@@ -553,11 +558,13 @@ class RobloxAccountManager:
                 screen_width = driver.execute_script("return screen.width;")
                 screen_height = driver.execute_script("return screen.height;")
                 
-                grid_cols = min(3, amount)
-                grid_rows = (amount + grid_cols - 1) // grid_cols
+                position_count = window_slot_count or amount
+                position_index = window_slot if window_slot is not None else i
+                grid_cols = min(3, position_count)
+                grid_rows = (position_count + grid_cols - 1) // grid_cols
                 
-                col = i % grid_cols
-                row = i // grid_cols
+                col = position_index % grid_cols
+                row = position_index // grid_cols
                 
                 x = col * (screen_width // grid_cols) + 10
                 y = row * ((screen_height - 100) // grid_rows) + 10
@@ -566,6 +573,11 @@ class RobloxAccountManager:
                 driver.set_window_size(window_width, window_height)
                 
                 drivers.append(driver)
+                instance_passwords.append(
+                    password_list[i]
+                    if password_list and i < len(password_list)
+                    else ""
+                )
                 
                 try:
                     print(f"[INFO] Opening {website} (instance {i + 1}/{amount})...")
@@ -609,16 +621,18 @@ class RobloxAccountManager:
                         username, cookie, user_id, password, avatar_url = self.extract_user_info(driver)
 
                         if username and cookie:
-                            self.accounts[username] = {
-                                'username':   username,
-                                'cookie':     cookie,
-                                'user_id':    user_id or 0,
-                                'password':   password or '',
-                                'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                'note':       '',
-                                'avatar_url': avatar_url or '',
-                            }
-                            self.save_accounts()
+                            saved_password = password or instance_passwords[driver_index]
+                            with self._accounts_lock:
+                                self.accounts[username] = {
+                                    'username':   username,
+                                    'cookie':     cookie,
+                                    'user_id':    user_id or 0,
+                                    'password':   saved_password or '',
+                                    'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'note':       '',
+                                    'avatar_url': avatar_url or '',
+                                }
+                                self.save_accounts()
 
                             print(f"[SUCCESS] Successfully added account: {username}")
                             nonlocal success_count
@@ -631,10 +645,12 @@ class RobloxAccountManager:
                     print(f"[ERROR] Error waiting for login on instance {driver_index + 1}: {e}")
                 finally:
                     completed[driver_index] = True
+                    profile_dir = getattr(driver, "_ram_profile_dir", None)
                     try:
                         driver.quit()
                     except:
                         pass
+                    self.cleanup_temp_profile(profile_dir)
             
             threads = []
             for i in range(len(drivers)):
@@ -645,17 +661,17 @@ class RobloxAccountManager:
             for thread in threads:
                 thread.join()
             
-            self.cleanup_temp_profile()
-            
             return success_count > 0
                 
         except Exception as e:
             print(f"[ERROR] Error during account addition: {e}")
             for driver in drivers:
+                profile_dir = getattr(driver, "_ram_profile_dir", None)
                 try:
                     driver.quit()
                 except:
                     pass
+                self.cleanup_temp_profile(profile_dir)
             return False
     
     def import_cookie_account(self, cookie):
