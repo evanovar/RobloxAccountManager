@@ -62,6 +62,7 @@ import features.favorites as favorites_mod
 import features.groups as groups
 import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
+import features.roblox_downloader as roblox_downloader_mod
 import features.updater as updater_mod
 import features.webhook as webhook
 import features.websocket_server as ws_mod
@@ -314,6 +315,8 @@ class _Bridge(QObject):
     mr_download_done = Signal(bool) # (success) from download_handle64 worker
     chromium_progress = Signal(int, str) # (percent 0-100, label text) from chromium download
     chromium_done = Signal(bool, str) # (success, error_msg) from chromium download
+    roblox_download_progress = Signal(int, str) # (percent 0-100, current operation)
+    roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
     presence_update = Signal(object) # set[str] of online usernames
     cookie_validated = Signal(str, bool) # (username, is_valid) from validator worker
     update_available = Signal(str) # (latest_version) from update check worker
@@ -469,6 +472,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.rejoin_status.connect(self._on_rejoin_status)
         self._bridge.afk_tooltip.connect(self._on_afk_tooltip_signal)
         self._bridge.mr_download_done.connect(self._update_mr_h64_status)
+        self._bridge.roblox_download_progress.connect(self._on_roblox_download_progress)
+        self._bridge.roblox_download_done.connect(self._on_roblox_download_done)
         self._bridge.presence_update.connect(self._on_presence_update)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
         self._bridge.update_available.connect(self._on_update_available)
@@ -2168,6 +2173,106 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         ram_row.addWidget(self._sett_ram_spin)
         f.addLayout(ram_row)
 
+        f.addWidget(_sec("ROBLOX DOWNLOADER"))
+        _roblox_downloader_desc = QLabel(
+            "Download a Windows Roblox Player deployment directly from Roblox."
+        )
+        _roblox_downloader_desc.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        _roblox_downloader_desc.setWordWrap(True)
+        f.addWidget(_roblox_downloader_desc)
+
+        _roblox_downloader_custom = bool(
+            S.get("roblox_downloader_customizations", False)
+        )
+        self._sett_roblox_downloader_custom_chk = _chk(
+            "roblox_downloader_customizations",
+            "Enable Customizations",
+            "Enable a custom Roblox version hash and download location.\n"
+            "When disabled, the latest LIVE version is downloaded to Roblox's "
+            "default Versions folder.",
+            on_change=self._on_sett_roblox_downloader_customizations,
+        )
+        f.addWidget(self._sett_roblox_downloader_custom_chk)
+
+        roblox_version_row = QHBoxLayout()
+        roblox_version_row.setContentsMargins(20, 0, 0, 0)
+        roblox_version_label = QLabel("Version")
+        roblox_version_label.setFixedWidth(78)
+        roblox_version_label.setToolTip(
+            "Use LIVE for the latest WindowsPlayer version,\n"
+            "or enter a specific version hash."
+        )
+        roblox_version_row.addWidget(roblox_version_label)
+        self._sett_roblox_downloader_version_edit = QLineEdit()
+        self._sett_roblox_downloader_version_edit.setPlaceholderText("LIVE")
+        self._sett_roblox_downloader_version_edit.setText(
+            str(S.get("roblox_downloader_version", "LIVE") or "LIVE")
+        )
+        self._sett_roblox_downloader_version_edit.setEnabled(
+            _roblox_downloader_custom
+        )
+        self._sett_roblox_downloader_version_edit.textChanged.connect(
+            lambda text: actions.save_ui_setting("roblox_downloader_version", text)
+        )
+        roblox_version_row.addWidget(self._sett_roblox_downloader_version_edit, 1)
+        f.addLayout(roblox_version_row)
+
+        roblox_location_row = QHBoxLayout()
+        roblox_location_row.setContentsMargins(20, 0, 0, 0)
+        roblox_location_label = QLabel("Location Path")
+        roblox_location_label.setFixedWidth(78)
+        roblox_location_label.setToolTip(
+            "Folder that will contain the downloaded version folder."
+        )
+        roblox_location_row.addWidget(roblox_location_label)
+        self._sett_roblox_downloader_location_edit = QLineEdit()
+        self._sett_roblox_downloader_location_edit.setPlaceholderText(
+            roblox_downloader_mod.get_default_versions_path()
+        )
+        self._sett_roblox_downloader_location_edit.setText(
+            str(
+                S.get(
+                    "roblox_downloader_location",
+                    roblox_downloader_mod.get_default_versions_path(),
+                )
+                or roblox_downloader_mod.get_default_versions_path()
+            )
+        )
+        self._sett_roblox_downloader_location_edit.setEnabled(
+            _roblox_downloader_custom
+        )
+        self._sett_roblox_downloader_location_edit.textChanged.connect(
+            lambda text: actions.save_ui_setting("roblox_downloader_location", text)
+        )
+        roblox_location_row.addWidget(
+            self._sett_roblox_downloader_location_edit,
+            1,
+        )
+        self._sett_roblox_downloader_browse_btn = QPushButton("Browse Folder")
+        self._sett_roblox_downloader_browse_btn.setEnabled(
+            _roblox_downloader_custom
+        )
+        self._sett_roblox_downloader_browse_btn.clicked.connect(
+            self._on_sett_browse_roblox_download_path
+        )
+        roblox_location_row.addWidget(self._sett_roblox_downloader_browse_btn)
+        f.addLayout(roblox_location_row)
+
+        self._sett_roblox_downloader_btn = QPushButton("Download Latest Roblox")
+        self._sett_roblox_downloader_btn.setToolTip(
+            "Download and extract the selected WindowsPlayer deployment."
+        )
+        self._sett_roblox_downloader_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
+            f"border: 1px solid {LINE}; border-radius: 0; "
+            f"text-align: center; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+        )
+        self._sett_roblox_downloader_btn.clicked.connect(
+            self._on_sett_download_roblox
+        )
+        f.addWidget(self._sett_roblox_downloader_btn)
+
         headless_hdr = QHBoxLayout()
         headless_hdr.setContentsMargins(0, 0, 0, 0)
         headless_hdr.addWidget(_sec("HEADLESS MANAGER"))
@@ -3104,6 +3209,153 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         if path:
             self._sett_custom_launcher_edit.setText(path)
+
+    def _on_sett_roblox_downloader_customizations(self, enabled: bool):
+        if hasattr(self, "_sett_roblox_downloader_version_edit"):
+            self._sett_roblox_downloader_version_edit.setEnabled(enabled)
+        if hasattr(self, "_sett_roblox_downloader_location_edit"):
+            self._sett_roblox_downloader_location_edit.setEnabled(enabled)
+        if hasattr(self, "_sett_roblox_downloader_browse_btn"):
+            self._sett_roblox_downloader_browse_btn.setEnabled(enabled)
+
+    def _on_sett_browse_roblox_download_path(self):
+        current_path = self._sett_roblox_downloader_location_edit.text().strip()
+        if not current_path:
+            current_path = roblox_downloader_mod.get_default_versions_path()
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Roblox Versions Folder",
+            current_path,
+        )
+        if path:
+            self._sett_roblox_downloader_location_edit.setText(path)
+
+    def _on_sett_download_roblox(self):
+        button = self._sett_roblox_downloader_btn
+        customizations_enabled = (
+            self._sett_roblox_downloader_custom_chk.isChecked()
+        )
+        version_value = self._sett_roblox_downloader_version_edit.text()
+        location_path = self._sett_roblox_downloader_location_edit.text()
+
+        button.setEnabled(False)
+        button.setText("0%")
+        self._sett_roblox_downloader_custom_chk.setEnabled(False)
+        self._sett_roblox_downloader_version_edit.setEnabled(False)
+        self._sett_roblox_downloader_location_edit.setEnabled(False)
+        self._sett_roblox_downloader_browse_btn.setEnabled(False)
+
+        def _worker():
+            success, result_type, message = roblox_downloader_mod.download_roblox(
+                version_value,
+                location_path,
+                customizations_enabled,
+                progress_callback=(
+                    lambda percent, text: self._bridge.roblox_download_progress.emit(
+                        percent,
+                        text,
+                    )
+                ),
+            )
+            self._bridge.roblox_download_done.emit(
+                success,
+                result_type,
+                message,
+            )
+
+        threading.Thread(
+            target=_worker,
+            daemon=True,
+            name="roblox-downloader",
+        ).start()
+
+    def _on_roblox_download_progress(self, percent: int, operation: str):
+        if not hasattr(self, "_sett_roblox_downloader_btn"):
+            return
+        button = self._sett_roblox_downloader_btn
+        filled = max(0, min(100, int(percent)))
+        button.setText(f"{filled}%")
+        button.setToolTip(operation)
+        if filled == 0:
+            button.setStyleSheet(
+                f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
+                f"border: 1px solid {LINE}; border-radius: 0; "
+                f"text-align: center; }}"
+            )
+            return
+
+        stop_a = f"{filled / 100:.4f}"
+        stop_b = f"{min(filled / 100 + 0.001, 1.0):.4f}"
+        button.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: qlineargradient("
+            f"    x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 #3A5A9A,"
+            f"    stop:{stop_a} #3A5A9A,"
+            f"    stop:{stop_b} {INPUT},"
+            f"    stop:1 {INPUT}"
+            f"  );"
+            f"  color: {TEXT}; border: 1px solid {LINE};"
+            f"  border-radius: 0; text-align: center;"
+            f"}}"
+        )
+
+    def _on_roblox_download_done(
+        self,
+        success: bool,
+        result_type: str,
+        message: str,
+    ):
+        if not hasattr(self, "_sett_roblox_downloader_btn"):
+            return
+
+        button = self._sett_roblox_downloader_btn
+        button.setText("Download Latest Roblox")
+        button.setEnabled(True)
+        button.setToolTip(
+            "Download and extract the selected WindowsPlayer deployment."
+        )
+        button.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
+            f"border: 1px solid {LINE}; border-radius: 0; "
+            f"text-align: center; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+        )
+
+        self._sett_roblox_downloader_custom_chk.setEnabled(True)
+        customizations_enabled = (
+            self._sett_roblox_downloader_custom_chk.isChecked()
+        )
+        self._sett_roblox_downloader_version_edit.setEnabled(
+            customizations_enabled
+        )
+        self._sett_roblox_downloader_location_edit.setEnabled(
+            customizations_enabled
+        )
+        self._sett_roblox_downloader_browse_btn.setEnabled(
+            customizations_enabled
+        )
+
+        if success and result_type == "already_exists":
+            QMessageBox.information(
+                self,
+                "Roblox Downloader",
+                "The latest Roblox version has already been downloaded.\n\n"
+                f"{message}",
+            )
+        elif success:
+            QMessageBox.information(
+                self,
+                "Roblox Downloader",
+                "Roblox was downloaded successfully.\n\n"
+                f"Location:\n{message}",
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "Roblox Downloader",
+                f"Failed to download Roblox.\n\n{message}",
+            )
 
     def _on_sett_dl_chromium(self):
 
