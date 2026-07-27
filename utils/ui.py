@@ -340,7 +340,7 @@ SELECT = "#2A2A2A"
 NOTE = "#D6BB7D"
 FG_ACCENT = "#0078D7"
 
-APP_VERSION = "2.5.9"
+APP_VERSION = "2.6.0"
 
 _dropdown_arrow_cache: dict[str, str] = {}
 
