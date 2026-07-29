@@ -320,7 +320,7 @@ class _Bridge(QObject):
     roblox_download_progress = Signal(int, str) # (percent 0-100, current operation)
     roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
     presence_update = Signal(object) # set[str] of online usernames
-    cookie_validated = Signal(str, bool) # (username, is_valid) from validator worker
+    cookie_validated = Signal(str, str) # (username, status) from validator worker
     update_available = Signal(str) # (latest_version) from update check worker
     update_progress = Signal(int) # (pct 0-100) from auto download worker
     update_done = Signal(bool, str) # (success, error_msg) from auto download worker
@@ -2986,15 +2986,21 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         self._cv_validator = self._cv_mod.CookieValidator(
             self.manager,
-            on_result=lambda u, ok: self._bridge.cookie_validated.emit(u, ok),
+            on_result=lambda u, status: self._bridge.cookie_validated.emit(
+                u,
+                status,
+            ),
             # on_done=lambda: print("[INFO] Cookie validation pass complete."),
             delay_sec=1.5,
         )
         self._cv_validator.start()
 
-    def _on_cookie_validated(self, username: str, is_valid: bool) -> None:
-        if not is_valid:
-            print(f"[WARNING] {username}: cookie invalid, flagging account.")
+    def _on_cookie_validated(self, username: str, status: str) -> None:
+        if status == self._cv_mod.INVALID:
+            print(
+                f"[WARNING] {username}: cookie received repeated "
+                f"unauthorized responses."
+            )
         self._refresh_account_list()
 
     def _is_account_invalid(self, username: str) -> bool:
@@ -3006,13 +3012,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not bad:
             return True
         names = ", ".join(bad)
-        QMessageBox.warning(
-            self, "Invalid Account",
-            f"The following account(s) have an expired or revoked cookie "
-            f"and cannot be launched:\n\n  {names}\n\n"
-            "Please remove the account and add it again to restore access."
+        reply = QMessageBox.question(
+            self,
+            "Cookie May Be Invalid",
+            f"The following account(s) received repeated unauthorized "
+            f"responses during cookie validation:\n\n  {names}\n\n"
+            "Would you like to try launching anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
-        return False
+        return reply == QMessageBox.StandardButton.Yes
 
     def _start_presence_scanner(self) -> None:
         if self._presence_scanner is not None:
@@ -4301,9 +4310,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     }}
                 """)
                 bad_lbl.setToolTip(
-                    "Invalid account, this cookie has expired or been revoked.\n"
-                    "This account cannot be launched.\n"
-                    "Remove it and add it again to fix."
+                    "Cookie validation received repeated unauthorized responses.\n"
+                    "You can still try launching this account."
                 )
                 bad_lbl.setVisible(True)
                 self._invalid_badges[username] = bad_lbl
@@ -4314,8 +4322,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             if flagged:
                 name_lbl.setStyleSheet("color: #E8A020; font-style: italic;")
                 name_lbl.setToolTip(
-                    "Invalid account, cookie expired or revoked.\n"
-                    "Remove and re-add this account."
+                    "Cookie validation received repeated unauthorized responses.\n"
+                    "You can still try launching this account."
                 )
             row_lay.addWidget(name_lbl)
 

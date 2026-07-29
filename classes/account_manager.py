@@ -631,6 +631,7 @@ class RobloxAccountManager:
                                     'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
                                     'note':       '',
                                     'avatar_url': avatar_url or '',
+                                    'cookie_valid': True,
                                 }
                                 self.save_accounts()
 
@@ -727,6 +728,7 @@ class RobloxAccountManager:
                 'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'note':       '',
                 'avatar_url': avatar_url,
+                'cookie_valid': True,
             }
             self.save_accounts()
 
@@ -847,7 +849,7 @@ class RobloxAccountManager:
             return False
 
         cookie = self.accounts[username]['cookie']
-        return RobloxAPI.launch_roblox(
+        launched = RobloxAPI.launch_roblox(
             username,
             cookie,
             game_id,
@@ -856,6 +858,12 @@ class RobloxAccountManager:
             job_id,
             custom_launcher_path,
         )
+        if launched and self.accounts[username].get('cookie_valid') is not True:
+            with self._accounts_lock:
+                self.accounts[username]['cookie_valid'] = True
+                self.accounts[username].pop('valid', None)
+                self.save_accounts()
+        return launched
 
     def set_account_note(self, username, note):
         """Set or update note for an account"""
