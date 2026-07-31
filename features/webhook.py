@@ -43,27 +43,6 @@ CONSOLE_COLORS: dict[str, str] = {
 }
 
 
-def send_embed(url: str, title: str, description: str, color: int, ping_user_id: str | None = None,) -> None:
-    def _post():
-        try:
-            now = datetime.now(timezone.utc)
-            payload = {
-                "content": f"<@{ping_user_id}>" if ping_user_id else "",
-                "embeds": [{
-                    "title": title,
-                    "description": description,
-                    "color": color,
-                    "footer": {"text": _APP_FOOTER},
-                    "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                }],
-                "attachments": [],
-            }
-            requests.post(url, json=payload, timeout=10)
-        except Exception:
-            pass
-    threading.Thread(target=_post, daemon=True, name="webhook-embed").start()
-
-
 def send_screenshot(url: str, caption: str = "") -> None:
     def _do():
         tmp_path: str | None = None
@@ -152,6 +131,7 @@ class WebhookStdoutInterceptor:
         self._orig = orig
         self._get_cfg = get_cfg
         self._buf = ""
+        self._write_lock = threading.RLock()
 
         self._pending: list[tuple[str, str, int]] = []
         self._lock = threading.Lock()
@@ -159,13 +139,15 @@ class WebhookStdoutInterceptor:
 
         self._console_queue: collections.deque = collections.deque(maxlen=2000)
 
-    def write(self, text: str) -> None:
-        if self._orig is not None:
-            self._orig.write(text)
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            self._handle(line.rstrip("\r"))
+    def write(self, text: str) -> int:
+        with self._write_lock:
+            if self._orig is not None:
+                self._orig.write(text)
+            self._buf += text
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                self._handle(line.rstrip("\r"))
+        return len(text)
 
     def flush(self) -> None:
         if self._orig is not None:
@@ -315,79 +297,30 @@ class WebhookStdoutInterceptor:
                 pass
         threading.Thread(target=_post, daemon=True, name="webhook-ar").start()
 
-
 class WebhookStderrInterceptor:
     def __init__(self, orig, stdout_interceptor):
         self._orig = orig
         self._stdout = stdout_interceptor
         self._buf = ""
+        self._write_lock = threading.RLock()
 
-    def write(self, text: str) -> None:
-        if self._orig is not None:
-            self._orig.write(text)
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.rstrip("\r")
-            if line.strip():
-                if not any(line.startswith(prefix) for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
-                    line = f"[ERROR] {line}"
-                if self._stdout is not None:
-                    self._stdout.write(line + "\n")
-
-    def flush(self) -> None:
-        if self._orig is not None:
-            self._orig.flush()
-
-    def fileno(self) -> int:
-        try:
-            return self._orig.fileno()
-        except Exception:
-            return -1
-
-
-def install_console_capture(get_cfg: Callable[[], dict]):
-    stdout = sys.stdout
-    if isinstance(stdout, WebhookStdoutInterceptor):
-        stdout._get_cfg = get_cfg
-    else:
-        stdout = WebhookStdoutInterceptor(
-            stdout if stdout is not None else getattr(sys, "__stdout__", None),
-            get_cfg,
-        )
-        sys.stdout = stdout
-
-    stderr = sys.stderr
-    if isinstance(stderr, WebhookStderrInterceptor):
-        stderr._stdout = stdout
-    else:
-        stderr = WebhookStderrInterceptor(
-            stderr if stderr is not None else getattr(sys, "__stderr__", None),
-            stdout,
-        )
-        sys.stderr = stderr
-
-    return stdout, stderr
-
-
-class WebhookStderrInterceptor:
-    def __init__(self, orig, stdout_interceptor):
-        self._orig = orig
-        self._stdout = stdout_interceptor
-        self._buf = ""
-
-    def write(self, text: str) -> None:
-        if self._orig is not None:
-            self._orig.write(text)
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.rstrip("\r")
-            if line.strip():
-                if not any(line.startswith(prefix) for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
-                    line = f"[ERROR] {line}"
-                if self._stdout is not None:
-                    self._stdout.write(line + "\n")
+    def write(self, text: str) -> int:
+        with self._write_lock:
+            if self._orig is not None:
+                self._orig.write(text)
+            self._buf += text
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                line = line.rstrip("\r")
+                if line.strip():
+                    if not any(line.startswith(prefix) for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]")):
+                        line = f"[ERROR] {line}"
+                    if self._stdout is not None:
+                        if hasattr(self._stdout, "_handle"):
+                            self._stdout._handle(line)
+                        else:
+                            self._stdout.write(line + "\n")
+        return len(text)
 
     def flush(self) -> None:
         if self._orig is not None:

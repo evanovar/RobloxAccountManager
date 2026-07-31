@@ -19,11 +19,10 @@ import tempfile
 import threading
 import time
 import webbrowser
-import zipfile
 
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
+from utils.version import APP_VERSION
 
-_UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = get_app_dir()
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
@@ -42,7 +41,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
-    QComboBox, QDialog, QFileDialog, QFrame, QGroupBox,
+    QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
@@ -52,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from classes import RobloxAccountManager
 from classes.encryption import EncryptionConfig, PasswordEncryption
+from classes.operation_result import OperationResult, ensure_result
 from classes.roblox_api import RobloxAPI
 
 import features.account_actions as actions
@@ -59,6 +59,8 @@ import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
 import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
+import features.chromium as chromium_mod
+import features.diagnostics as diagnostics
 import features.favorites as favorites_mod
 import features.groups as groups
 import features.headless_manager as headless_manager_mod
@@ -307,16 +309,17 @@ class _ComboRightClickFilter(QObject):
 
 # Thread to Qt signal bridge
 class _Bridge(QObject):
-    account_added = Signal(bool, str) # (success, message) from add-account worker
+    account_added = Signal(object) # OperationResult from add-account worker
     account_creator_done = Signal(bool, str) # (success, summary) from account creator
     game_name_ready = Signal(str) # display text for current-place label
-    launch_done = Signal(bool, str) # (success, message) from any join/launch worker
+    launch_done = Signal(object) # OperationResult from any join/launch worker
     avatar_ready = Signal(str, object) # (username, image_bytes) from avatar worker
     rejoin_status = Signal(str, str) # (account, status_str) from rejoin worker
     afk_tooltip = Signal(str, int, int) # (message, x, y) pass None to hide
     mr_download_done = Signal(bool) # (success) from download_handle64 worker
     chromium_progress = Signal(int, str) # (percent 0-100, label text) from chromium download
-    chromium_done = Signal(bool, str) # (success, error_msg) from chromium download
+    chromium_done = Signal(object) # OperationResult from Chromium download
+    chromium_status = Signal(object) # OperationResult from latest build check
     roblox_download_progress = Signal(int, str) # (percent 0-100, current operation)
     roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
     presence_update = Signal(object) # set[str] of online usernames
@@ -330,6 +333,7 @@ class _Bridge(QObject):
     headless_update = Signal(object) # list[dict] of running Roblox processes from Headless Manager scan
     headless_avatar_ready = Signal(int, object) # (pid, image_bytes) from Headless Manager avatar worker
 
+
 BG = "#0E0E0E"
 PANEL = "#151515"
 INPUT = "#1A1A1A"
@@ -340,9 +344,8 @@ SELECT = "#2A2A2A"
 NOTE = "#D6BB7D"
 FG_ACCENT = "#0078D7"
 
-APP_VERSION = "2.6.0"
-
 _dropdown_arrow_cache: dict[str, str] = {}
+
 
 def _dropdown_arrow_icon_path(color: str) -> str:
     cached = _dropdown_arrow_cache.get(color)
@@ -441,6 +444,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
         self.manager = manager
+        self._last_operation_error = ("", 0.0)
+        self._chromium_download_active = False
+        self._diagnostics_heartbeat = QTimer(self)
+        self._diagnostics_heartbeat.setInterval(5000)
+        self._diagnostics_heartbeat.timeout.connect(diagnostics.pulse_ui)
+        self._diagnostics_heartbeat.start()
 
         for candidate in [
             os.path.join(get_data_dir(), "icon.ico"),
@@ -458,8 +467,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._game_name_timer.setSingleShot(True)
         self._game_name_timer.timeout.connect(self._do_fetch_game_name)
 
-        webhook.install_console_capture(lambda: actions.load_ui_settings().get("discord_webhook", {}))
-
         self._console_queue = (
             sys.stdout._console_queue
             if isinstance(sys.stdout, webhook.WebhookStdoutInterceptor)
@@ -475,6 +482,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.rejoin_status.connect(self._on_rejoin_status)
         self._bridge.afk_tooltip.connect(self._on_afk_tooltip_signal)
         self._bridge.mr_download_done.connect(self._update_mr_h64_status)
+        self._bridge.chromium_progress.connect(self._on_chromium_progress)
+        self._bridge.chromium_done.connect(self._on_chromium_done)
+        self._bridge.chromium_status.connect(self._on_chromium_status)
         self._bridge.roblox_download_progress.connect(self._on_roblox_download_progress)
         self._bridge.roblox_download_done.connect(self._on_roblox_download_done)
         self._bridge.presence_update.connect(self._on_presence_update)
@@ -511,7 +521,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             ar_workers=self._ar_workers,
             ar_configs=self._ar_configs,
             get_settings=actions.load_ui_settings,
-            refresh_ui_callback=lambda: self._bridge.account_added.emit(True, ""),
+            refresh_ui_callback=lambda: self._bridge.account_added.emit(
+                OperationResult.success()
+            ),
         )
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
@@ -592,6 +604,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         QTimer.singleShot(2000, self._start_cookie_validator)
         QTimer.singleShot(500, self._start_update_check)
+        QTimer.singleShot(1000, self._start_chromium_status_check)
         print("[INFO] UI ready")
 
     def _apply_stylesheet(self):
@@ -2441,23 +2454,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             f.addWidget(rb)
 
-        _chromium_exe = os.path.join(
-            _ROOT_DIR, "AccountManagerData", "Chromium", "chrome-win64", "chrome.exe"
-        )
-        _chromium_installed = os.path.exists(_chromium_exe)
+        _chromium_installed = bool(chromium_mod.validate_chromium())
         self._sett_chromium_btn = QPushButton(
-            "Downloaded" if _chromium_installed else "Download Chromium"
+            "Reinstall Chromium" if _chromium_installed else "Download Chromium"
         )
-        self._sett_chromium_btn.setEnabled(not _chromium_installed)
+        self._sett_chromium_btn.setEnabled(True)
         self._sett_chromium_btn.setToolTip(
-            "Download a portable Chromium + ChromeDriver build to AccountManagerData/Chromium.\n"
-            "No installation required."
+            "Download the latest portable Chromium and matching ChromeDriver.\n"
+            "Reinstalling replaces the current Chromium folder with a clean copy."
         )
-        if _chromium_installed:
-            self._sett_chromium_btn.setStyleSheet(
-                f"QPushButton {{ background: #2A5A2A; color: {TEXT}; "
-                f"border: 1px solid #3A7A3A; text-align: center; }}"
-            )
         self._sett_chromium_btn.clicked.connect(self._on_sett_dl_chromium)
         f.addLayout(_sub_indent(self._sett_chromium_btn))
 
@@ -2477,8 +2482,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "This action cannot be undone."
         )
         _wipe_btn.setStyleSheet(
-            f"QPushButton {{ color: #EF5350; border-color: #5A2A2A; }}"
-            f"QPushButton:hover {{ background: #3A1A1A; color: #FF6B6B; }}"
+            "QPushButton { color: #EF5350; border-color: #5A2A2A; }"
+            "QPushButton:hover { background: #3A1A1A; color: #FF6B6B; }"
         )
         _wipe_btn.clicked.connect(self._on_sett_wipe_data)
         f.addWidget(_wipe_btn)
@@ -2990,7 +2995,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 u,
                 status,
             ),
-            # on_done=lambda: print("[INFO] Cookie validation pass complete."),
             delay_sec=1.5,
         )
         self._cv_validator.start()
@@ -3060,7 +3064,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         def _worker():
             kernel32 = ctypes.windll.kernel32
             psapi = ctypes.windll.psapi
-            seen: set[int] = set()
             print("[INFO] RAM boost started")
             while not self._ram_boost_stop:
                 try:
@@ -3371,174 +3374,137 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 f"Failed to download Roblox.\n\n{message}",
             )
 
-    def _on_sett_dl_chromium(self):
+    def _set_chromium_button_idle(self) -> None:
+        if not hasattr(self, "_sett_chromium_btn"):
+            return
+        installed = bool(chromium_mod.validate_chromium())
+        self._sett_chromium_btn.setText(
+            "Reinstall Chromium" if installed else "Download Chromium"
+        )
+        self._sett_chromium_btn.setEnabled(True)
+        self._sett_chromium_btn.setStyleSheet("")
 
-        btn = self._sett_chromium_btn
-        chromium_dir = os.path.join(_ROOT_DIR, "AccountManagerData", "Chromium")
-        target_exe = os.path.join(chromium_dir, "chrome-win64", "chrome.exe")
+    def _start_chromium_status_check(self) -> None:
+        chromium_mod.check_chromium_status(
+            lambda result: self._bridge.chromium_status.emit(result)
+        )
 
-        print(f"[INFO] Download requested. Target: {target_exe}")
-
-        if os.path.exists(target_exe):
-            btn.setText("Downloaded")
-            btn.setEnabled(False)
+    def _on_chromium_status(self, result) -> None:
+        operation_result = ensure_result(
+            result,
+            failure_code="CHROMIUM_STATUS_FAILED",
+            failure_title="Chromium Check Failed",
+            failure_message="The latest Chromium version could not be checked.",
+        )
+        if not operation_result:
+            print(
+                f"[WARNING] Chromium status check failed: "
+                f"{operation_result.code}: {operation_result.detail}"
+            )
+            return
+        if self._chromium_download_active:
             return
 
-        btn.setEnabled(False)
-        btn.setText("0%")
-        print("[INFO] Starting download thread...")
+        data = operation_result.data or {}
+        installed = bool(data.get("installed"))
+        installed_build = str(data.get("installed_build", "") or "")
+        latest_build = str(data.get("latest_build", "") or "")
+        outdated = bool(data.get("outdated"))
 
-        def _on_progress(pct: int, label: str):
-            text = label if label else f"{pct}%"
-            btn.setText(text)
-            filled = max(0, min(100, pct))
-            if filled == 0:
-                btn.setStyleSheet(
-                    f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
-                    f"border: 1px solid {LINE}; text-align: center; }}"
+        self._sett_chromium_btn.setText(
+            "Reinstall Chromium" if installed else "Download Chromium"
+        )
+        if installed:
+            if outdated:
+                detail = (
+                    f"Installed snapshot: {installed_build}\n"
+                    f"Latest snapshot: {latest_build}\n"
+                    "Reinstall Chromium to update it."
                 )
             else:
-                stop_a = f"{filled / 100:.4f}"
-                stop_b = f"{min(filled / 100 + 0.001, 1.0):.4f}"
-                btn.setStyleSheet(
-                    f"QPushButton {{"
-                    f"  background: qlineargradient("
-                    f"    x1:0, y1:0, x2:1, y2:0,"
-                    f"    stop:0 #3A5A9A,"
-                    f"    stop:{stop_a} #3A5A9A,"
-                    f"    stop:{stop_b} {INPUT},"
-                    f"    stop:1 {INPUT}"
-                    f"  );"
-                    f"  color: {TEXT}; border: 1px solid {LINE}; text-align: center;"
-                    f"}}"
+                detail = (
+                    f"Installed snapshot: {installed_build or 'Unknown'}\n"
+                    f"Latest snapshot: {latest_build}\n"
+                    "You can reinstall Chromium with a clean copy."
                 )
+        else:
+            detail = (
+                f"Latest snapshot: {latest_build}\n"
+                "Download portable Chromium and its matching ChromeDriver."
+            )
+        self._sett_chromium_btn.setToolTip(detail)
 
-        def _on_done(success: bool, error_msg: str):
-            if success:
-                print("[INFO] Download and extraction complete.")
-                btn.setText("Downloaded")
-                btn.setEnabled(False)
-                btn.setStyleSheet(
-                    f"QPushButton {{ background: #2A5A2A; color: {TEXT}; "
-                    f"border: 1px solid #3A7A3A; text-align: center; }}"
-                )
-            else:
-                print(f"[INFO] Download failed: {error_msg}")
-                btn.setText("Download Chromium")
-                btn.setEnabled(True)
-                btn.setStyleSheet("") # reset to default
+    def _on_chromium_progress(self, pct: int, label: str) -> None:
+        if not hasattr(self, "_sett_chromium_btn"):
+            return
+        btn = self._sett_chromium_btn
+        btn.setText(label if label else f"{pct}%")
+        filled = max(0, min(100, pct))
+        if filled == 0:
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {INPUT}; color: {TEXT}; "
+                f"border: 1px solid {LINE}; text-align: center; }}"
+            )
+            return
 
-        # Connect signals
-        try:
-            self._bridge.chromium_progress.disconnect()
-        except RuntimeError:
-            pass
-        try:
-            self._bridge.chromium_done.disconnect()
-        except RuntimeError:
-            pass
-        self._bridge.chromium_progress.connect(_on_progress)
-        self._bridge.chromium_done.connect(_on_done)
+        stop_a = f"{filled / 100:.4f}"
+        stop_b = f"{min(filled / 100 + 0.001, 1.0):.4f}"
+        btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: qlineargradient("
+            f"    x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 #3A5A9A,"
+            f"    stop:{stop_a} #3A5A9A,"
+            f"    stop:{stop_b} {INPUT},"
+            f"    stop:1 {INPUT}"
+            f"  );"
+            f"  color: {TEXT}; border: 1px solid {LINE}; text-align: center;"
+            f"}}"
+        )
 
-        def _worker():
-            try:
-                os.makedirs(chromium_dir, exist_ok=True)
+    def _on_chromium_done(self, result) -> None:
+        self._chromium_download_active = False
+        operation_result = ensure_result(
+            result,
+            failure_code="CHROMIUM_DOWNLOAD_FAILED",
+            failure_title="Chromium Download Failed",
+            failure_message="Chromium could not be downloaded.",
+        )
+        self._set_chromium_button_idle()
+        if operation_result:
+            print("[INFO] Chromium download and extraction complete.")
+            return
 
-                # 1. Fetch latest build number
-                print("[INFO] Fetching latest build number...")
-                self._bridge.chromium_progress.emit(0, "Fetching version...")
-                r = requests.get(
-                    "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE",
-                    timeout=30
-                )
-                r.raise_for_status()
-                build = r.text.strip()
-                print(f"[INFO] Latest build: {build}")
+        print(
+            f"[ERROR] Chromium download failed: "
+            f"{operation_result.code}: {operation_result.detail}"
+        )
+        self._show_operation_error(operation_result)
 
-                # 2. Download chrome-win.zip (maps to 1–80%)
-                self._bridge.chromium_progress.emit(1, "Downloading...")
-                zip_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build}/chrome-win.zip"
-                zip_path = os.path.join(chromium_dir, "chromium.zip")
-                print(f"[INFO] Downloading from: {zip_url}")
-                dl_resp = requests.get(zip_url, stream=True, timeout=300)
-                dl_resp.raise_for_status()
-                total = int(dl_resp.headers.get("content-length", 0))
-                done = 0
-                last_pct = 0
-                print(f"[INFO] File size: {total // 1024 // 1024} MB")
-                with open(zip_path, "wb") as fh:
-                    for chunk in dl_resp.iter_content(65536):
-                        if chunk:
-                            fh.write(chunk)
-                            done += len(chunk)
-                            if total:
-                                pct = int(done / total * 79) + 1  # 1..80
-                                if pct > last_pct:
-                                    last_pct = pct
-                                    self._bridge.chromium_progress.emit(pct, "")
+    def _on_sett_dl_chromium(self):
+        if self._chromium_download_active:
+            return
 
-                print(f"[INFO] Download complete. Extracting...")
+        target_exe = chromium_mod.get_chromium_path()
+        action = (
+            "Reinstall"
+            if bool(chromium_mod.validate_chromium())
+            else "Download"
+        )
+        print(f"[INFO] {action} requested. Target: {target_exe}")
 
-                # 3. Extract (maps 80–90%)
-                self._bridge.chromium_progress.emit(80, "Extracting...")
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    names = zf.namelist()
-                    ntotal = len(names)
-                    for i, name in enumerate(names):
-                        zf.extract(name, chromium_dir)
-                        if i % 100 == 0:
-                            pct = 80 + int(i / ntotal * 10)
-                            self._bridge.chromium_progress.emit(pct, "Extracting...")
-                os.remove(zip_path)
-                print("[INFO] Extraction complete.")
+        self._chromium_download_active = True
+        self._sett_chromium_btn.setEnabled(False)
+        self._sett_chromium_btn.setText("0%")
+        print("[INFO] Starting Chromium download thread...")
 
-                # Rename folder
-                extracted = os.path.join(chromium_dir, "chrome-win")
-                target64 = os.path.join(chromium_dir, "chrome-win64")
-                if os.path.exists(extracted) and not os.path.exists(target64):
-                    os.rename(extracted, target64)
-                    print(f"[INFO] Renamed chrome-win -> chrome-win64")
-
-                # 4. Download chromedriver (maps 90–98%)
-                self._bridge.chromium_progress.emit(90, "ChromeDriver...")
-                cd_url = f"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/{build}/chromedriver_win32.zip"
-                cd_path = os.path.join(chromium_dir, "chromedriver.zip")
-                print(f"[INFO] Downloading ChromeDriver from: {cd_url}")
-                cd_resp = requests.get(cd_url, stream=True, timeout=120)
-                cd_resp.raise_for_status()
-                cd_total = int(cd_resp.headers.get("content-length", 0))
-                cd_done = 0
-                cd_last = 90
-                with open(cd_path, "wb") as fh:
-                    for chunk in cd_resp.iter_content(65536):
-                        if chunk:
-                            fh.write(chunk)
-                            cd_done += len(chunk)
-                            if cd_total:
-                                pct = 90 + int(cd_done / cd_total * 8)  # 90..98
-                                if pct > cd_last:
-                                    cd_last = pct
-                                    self._bridge.chromium_progress.emit(pct, "ChromeDriver...")
-                with zipfile.ZipFile(cd_path, "r") as zf:
-                    zf.extractall(chromium_dir)
-                os.remove(cd_path)
-                print("[INFO] ChromeDriver extracted.")
-
-                cd_src = os.path.join(chromium_dir, "chromedriver-win32", "chromedriver.exe")
-                cd_dst = os.path.join(target64, "chromedriver.exe")
-                if os.path.exists(cd_src):
-                    shutil.copy2(cd_src, cd_dst)
-                    shutil.rmtree(os.path.join(chromium_dir, "chromedriver-win32"), ignore_errors=True)
-                    print(f"[INFO] chromedriver.exe placed at: {cd_dst}")
-
-                self._bridge.chromium_progress.emit(100, "")
-                self._bridge.chromium_done.emit(True, "")
-
-            except Exception as exc:
-                print(f"[INFO] Worker exception: {exc}")
-                self._bridge.chromium_done.emit(False, str(exc))
-
-        threading.Thread(target=_worker, daemon=True, name="chromium-dl").start()
+        chromium_mod.download_chromium(
+            lambda percent, label: self._bridge.chromium_progress.emit(
+                percent,
+                label,
+            ),
+            lambda result: self._bridge.chromium_done.emit(result),
+        )
 
     def _on_sett_switch_encryption(self):
         method_labels = {"hardware": "Hardware", "password": "Password", "none": "No Encryption"}
@@ -3702,18 +3668,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             except Exception as e:
                 print(f"[ERROR] Discord test exception: {e}")
         threading.Thread(target=_do, daemon=True).start()
-
-    def _maybe_send_webhook_embed(self, title: str, description: str, color: int, ping_user_id: str | None = None) -> None:
-        try:
-            dc = actions.load_ui_settings().get("discord_webhook", {})
-            url = str(dc.get("url", "") or "").strip()
-            if dc.get("enabled") and url:
-                ping = ping_user_id
-                if ping is None and dc.get("enable_ping") and dc.get("ping_user_id"):
-                    ping = dc["ping_user_id"]
-                webhook.send_embed(url, title, description, color, ping_user_id=ping)
-        except Exception:
-            pass
 
     _AR_ACTIVE_COLOR = "#4CAF50"
     _AR_INACTIVE_COLOR = "#EF5350"
@@ -4739,16 +4693,33 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 javascript=dlg.js_value,
             )
 
-    def _on_add_done(self, success: bool, message: str):
-        self._bridge.account_added.emit(success, message)
+    def _on_add_done(self, success: bool, result):
+        if isinstance(result, OperationResult):
+            operation_result = result
+        elif success:
+            operation_result = OperationResult.success(str(result or ""))
+        else:
+            operation_result = OperationResult.failure(
+                "ACCOUNT_ADD_FAILED",
+                "Account Could Not Be Added",
+                str(result or "The account could not be added."),
+            )
+        self._bridge.account_added.emit(operation_result)
 
-    def _on_add_done_main(self, success: bool, message: str):
-        if success:
+    def _on_add_done_main(self, result):
+        operation_result = ensure_result(
+            result,
+            failure_code="ACCOUNT_ADD_FAILED",
+            failure_title="Account Could Not Be Added",
+            failure_message="The account could not be added.",
+        )
+        if operation_result:
             # Auto-refresh the account list
             self._refresh_account_list()
-            _show_info(self, "Success", f"Successfully added account: {message}")
+            if operation_result.message:
+                _show_info(self, "Account Added", operation_result.message)
         else:
-            _show_error(self, "Error", message)
+            self._show_operation_error(operation_result)
 
     def _on_account_reorder(self, from_row: int, insert_before_row: int): # Reoder accounts
         items = list(self.manager.accounts.items())
@@ -4956,27 +4927,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_done=self._emit_launch_done
         )
 
-    # Edit Account
-    def _on_edit_account(self):
-        username = self._get_selected_username()
-        if not username:
-            _show_error(self, "No selection", "Please select an account first.")
-            return
-        current_note = actions.get_note(self.manager, username)
-        current_group = groups.get_account_group(username) or ""
-        dlg = _EditAccountDialog(username, current_note, current_group, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Update note
-            actions.set_note(self.manager, username, dlg.note_value)
-            # Update group
-            new_group = dlg.group_value
-            if new_group:
-                groups.set_account_group(username, new_group)
-            else:
-                groups.set_account_group(username, None)
-            self._refresh_account_list()
-            self._rebuild_group_bar()
-
     # Edit Note
     def _on_edit_note(self):
         usernames = self._get_selected_usernames()
@@ -5009,23 +4959,110 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_done=self._emit_launch_done,
         )
 
-    def _emit_launch_done(self, success: bool, message: str):
-        self._bridge.launch_done.emit(success, message)
+    def _emit_launch_done(self, success: bool, result):
+        if isinstance(result, OperationResult):
+            operation_result = result
+        elif success:
+            operation_result = OperationResult.success(str(result or ""))
+        else:
+            operation_result = OperationResult.failure(
+                "ROBLOX_LAUNCH_FAILED",
+                "Roblox Could Not Start",
+                str(result or "Roblox could not be launched."),
+            )
+        self._bridge.launch_done.emit(operation_result)
 
-    def _on_launch_and_refresh(self, success: bool, message: str):
+    def _on_launch_and_refresh(self, result):
         self._refresh_recent_games()
-        if not success:
-            if message == "EXPIRED_COOKIE":
-                QMessageBox.warning(
-                    self, "Account Expired",
-                    "The account is expired.\n\nPlease remove it and add it again."
-                )
-            elif message:
-                _show_error(self, "Launch Error", message)
+        operation_result = ensure_result(
+            result,
+            failure_code="ROBLOX_LAUNCH_FAILED",
+            failure_title="Roblox Could Not Start",
+            failure_message="Roblox could not be launched.",
+        )
+        if not operation_result:
+            self._show_operation_error(operation_result)
 
-    # def _on_launch_done(self, success: bool, message: str):
-    #     if not success and message:
-    #         _show_error(self, "Launch Error", message)
+    def _operation_error_message_text(self, result: OperationResult) -> str:
+        lines = [
+            result.title or "Operation Failed",
+            result.message or "The operation could not be completed.",
+        ]
+        if result.code:
+            lines.append(f"Error code: {result.code}")
+        if result.detail:
+            lines.extend([
+                "",
+                "Technical details:",
+                diagnostics.redact(result.detail),
+            ])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _session_log_copy_text() -> str:
+        session_log = diagnostics.get_session_log_path()
+        if not session_log:
+            return "The session log is unavailable."
+        try:
+            with open(session_log, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except Exception as exc:
+            return (
+                f"Failed to read the session log.\n"
+                f"Path: {session_log}\n"
+                f"Error: {type(exc).__name__}: {exc}"
+            )
+
+    def _show_operation_error(self, result: OperationResult) -> None:
+        now = time.monotonic()
+        key = f"{result.code}|{result.title}|{result.message}"
+        if self._last_operation_error[0] == key and now - self._last_operation_error[1] < 3:
+            return
+        self._last_operation_error = (key, now)
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(result.title or "Operation Failed")
+        dlg.setText(result.message or "The operation could not be completed.")
+        information = []
+        if result.code:
+            information.append(f"Error code: {result.code}")
+        if result.code == "UNEXPECTED_ERROR":
+            information.append(
+                f"Session log: {diagnostics.get_session_log_path()}"
+            )
+        if information:
+            dlg.setInformativeText("\n".join(information))
+        if result.detail:
+            dlg.setDetailedText(diagnostics.redact(result.detail))
+        dlg.setIcon(QMessageBox.Icon.Critical)
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.setDefaultButton(QMessageBox.StandardButton.Ok)
+        ok_button = dlg.button(QMessageBox.StandardButton.Ok)
+        if ok_button:
+            dlg.setEscapeButton(ok_button)
+
+        error_text = self._operation_error_message_text(result)
+        copy_error_button = dlg.addButton(
+            "Copy Error Message",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        copy_error_button.clicked.disconnect()
+        copy_error_button.clicked.connect(
+            lambda: QApplication.clipboard().setText(error_text)
+        )
+
+        copy_log_button = dlg.addButton(
+            "Copy Full Log",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        copy_log_button.clicked.disconnect()
+        copy_log_button.clicked.connect(
+            lambda: QApplication.clipboard().setText(
+                self._session_log_copy_text()
+            )
+        )
+        dlg.setStyleSheet(f"QMessageBox {{ background: {BG}; color: {TEXT}; }}")
+        dlg.exec()
 
     # Right-click context menu on account list
     def _on_account_context_menu(self, pos):
@@ -5766,66 +5803,6 @@ class _EditNoteDialog(QDialog):
         self.accept()
 
 
-class _EditAccountDialog(QDialog):
-    def __init__(self, username: str, current_note: str, current_group: str, parent):
-        super().__init__(parent)
-        self.note_value = current_note
-        self.group_value = current_group
-        self.setWindowTitle(f"Edit Account - {username}")
-        self.setFixedSize(400, 220)
-        self.setStyleSheet(_DLG_STYLE)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(10)
-
-        lay.addWidget(QLabel(f"Account: {username}"))
-
-        note_lbl = QLabel("Note:")
-        lay.addWidget(note_lbl)
-        self._note_entry = QLineEdit(current_note)
-        self._note_entry.setPlaceholderText("Enter a note…")
-        lay.addWidget(self._note_entry)
-
-        group_lbl = QLabel("Group:")
-        lay.addWidget(group_lbl)
-        self._group_combo = QComboBox()
-        _arrow_path = _dropdown_arrow_icon_path(TEXT).replace("\\", "/")
-        self._group_combo.setStyleSheet(
-            f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
-            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; }}"
-            f"QComboBox::drop-down {{ border: 0; width: 20px; }}"
-            f"QComboBox::down-arrow {{ image: url({_arrow_path}); width: 10px; height: 10px; }}"
-        )
-        self._group_combo.addItem("(No Group)", "")
-        for gname in groups.get_group_names():
-            self._group_combo.addItem(gname, gname)
-        if current_group:
-            idx = self._group_combo.findData(current_group)
-            if idx >= 0:
-                self._group_combo.setCurrentIndex(idx)
-        lay.addWidget(self._group_combo)
-
-        btn_row = QHBoxLayout()
-        clr_btn = QPushButton("Clear Note")
-        clr_btn.clicked.connect(self._note_entry.clear)
-        ok_btn = QPushButton("Save")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self._accept)
-        cn_btn = QPushButton("Cancel")
-        cn_btn.clicked.connect(self.reject)
-        btn_row.addWidget(clr_btn)
-        btn_row.addStretch(1)
-        btn_row.addWidget(ok_btn)
-        btn_row.addWidget(cn_btn)
-        lay.addLayout(btn_row)
-
-    def _accept(self):
-        self.note_value = self._note_entry.text()
-        self.group_value = self._group_combo.currentData()
-        self.accept()
-
-
 class _AutoRejoinAddWindow(QDialog):
     # Panel for adding accounts to auto rejoin and edit accounts
     # Left side: List of accounts
@@ -6233,13 +6210,16 @@ class _PasswordDialog(QDialog):
 def main(icon_path: str | None = None) -> int:
     # QApplication MUST exist before any QWidget / QDialog is created.
     # Create it first, before setup_encryption() and before _PasswordDialog.
+    diagnostics.set_startup_stage("creating QApplication")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Roblox Account Manager")
     app.setFont(QFont("Segoe UI", 10))
     apply_palette(app)
+    diagnostics.set_startup_stage("QApplication ready")
 
     password = None
     try:
+        diagnostics.set_startup_stage("loading encryption settings")
         data_folder = get_data_dir()
         os.makedirs(data_folder, exist_ok=True)
         enc_cfg = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
@@ -6252,15 +6232,37 @@ def main(icon_path: str | None = None) -> int:
                 return 1
             password = dlg.password_value
     except Exception as exc:
-        print(f"[WARNING] Encryption check skipped: {exc}")
+        crash_path = diagnostics.report_exception(
+            "Loading encryption settings",
+            exc,
+            fatal=True,
+        )
+        _show_error(
+            None,
+            "Encryption Settings Error",
+            "The encryption settings could not be loaded.\n\n"
+            f"Details were saved to:\n{crash_path}",
+        )
+        return 1
 
     try:
+        diagnostics.set_startup_stage("initializing account manager")
         manager = RobloxAccountManager(password=password)
     except ValueError:
         _show_error(None, "Error", "Invalid password. Please try again.")
         return 1
     except Exception as exc:
-        print(f"[ERROR] Failed to initialise manager: {exc}")
+        crash_path = diagnostics.report_exception(
+            "Initializing account manager",
+            exc,
+            fatal=True,
+        )
+        _show_error(
+            None,
+            "Account Manager Could Not Start",
+            "The account data could not be loaded.\n\n"
+            f"Details were saved to:\n{crash_path}",
+        )
         return 1
 
     if not icon_path or not os.path.exists(icon_path):
@@ -6276,8 +6278,25 @@ def main(icon_path: str | None = None) -> int:
         except Exception:
             pass
 
-    window = AccountManagerUIQt(manager, icon_path=icon_path)
+    try:
+        diagnostics.set_startup_stage("creating main window")
+        window = AccountManagerUIQt(manager, icon_path=icon_path)
+    except Exception as exc:
+        crash_path = diagnostics.report_exception(
+            "Creating the main window",
+            exc,
+            fatal=True,
+        )
+        _show_error(
+            None,
+            "Evanovar RAM Could Not Start",
+            "The main window could not be created.\n\n"
+            f"Details were saved to:\n{crash_path}",
+        )
+        return 1
+
     window.show()
+    diagnostics.mark_ui_ready()
     return app.exec()
 
 

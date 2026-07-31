@@ -119,9 +119,6 @@ class PresenceScanner:
         self._force_evt.set()
         self._thread = None
 
-    def force_scan(self) -> None:
-        self._force_evt.set()
-
     def _run(self) -> None:
         while not self._stop_evt.is_set():
             self._do_scan()

@@ -55,18 +55,6 @@ def fetch_avatar_url(user_id: str) -> Optional[str]:
         pass
     return None
 
-AVATAR_JS = """
-return fetch(
-    'https://thumbnails.roblox.com/v1/users/avatar-headshot'
-    + '?userIds=' + (window.Roblox && Roblox.CurrentUser ? Roblox.CurrentUser.userId : 0)
-    + '&size=100x100&format=Png&isCircular=true'
-)
-.then(r => r.json())
-.then(d => (d.data && d.data[0] && d.data[0].imageUrl) ? d.data[0].imageUrl : null)
-.catch(() => null);
-"""
-
-
 def fetch_avatar_async(user_id: str, username: str, on_done: Callable[[str, bytes], None],) -> None:
     if not user_id or str(user_id) == "0":
         return

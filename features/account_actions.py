@@ -18,7 +18,6 @@ import tempfile
 import shutil
 import zipfile
 import subprocess
-import re
 import win32gui
 import msvcrt
 import requests
@@ -26,8 +25,10 @@ from urllib.request import urlretrieve
 from ctypes import wintypes
 
 
-from typing import Callable, Optional
+from typing import Callable
+from classes.operation_result import OperationResult, ensure_result, unexpected_result
 from classes.roblox_api import RobloxAPI
+import features.chromium as chromium_mod
 import features.headless_manager as headless_manager_mod
 from utils.app_paths import get_app_dir, get_data_dir
 
@@ -35,7 +36,6 @@ from utils.app_paths import get_app_dir, get_data_dir
 _DATA_DIR = get_data_dir()
 _RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "ui_settings.json")
-_CHROMIUM_DIR = os.path.join(_DATA_DIR, "Chromium", "chrome-win64")
 
 # Recent games
 def load_recent_games() -> list[dict]:
@@ -97,64 +97,43 @@ def fetch_game_name(place_id: str) -> str:
     try:
         name = RobloxAPI.get_game_name(str(place_id))
         if name:
-            # print(f"[SUCCESS] Game name for place {place_id}: {name}")
             return name
     except Exception as e:
         print(f"[ERROR] Failed to fetch game name for place {place_id}: {e}")
     return ""
 
 
-# Account list helpers
-def get_accounts(manager) -> list[dict]:
-    try:
-        result = []
-        for username, data in manager.accounts.items():
-            entry = dict(data) if isinstance(data, dict) else {}
-            entry["username"] = username
-            result.append(entry)
-        return result
-    except Exception:
-        return []
-
-
-def get_groups(manager) -> list[str]:
-    try:
-        groups: set[str] = set()
-        for data in manager.accounts.values():
-            g = data.get("group", "") if isinstance(data, dict) else ""
-            if g:
-                groups.add(g)
-        return sorted(groups)
-    except Exception:
-        return []
-
-# Avatar fetching
-def fetch_avatar_image(username: str, on_done: Callable[[str, bytes | None], None]) -> None:
-    def _worker():
-        try:
-            api = RobloxAPI()
-            user_id = api.get_user_id(username)
-            if user_id:
-                img_bytes = api.get_avatar_thumbnail(user_id, size=48)
-                on_done(username, img_bytes)
-                return
-        except Exception:
-            pass
-        on_done(username, None)
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-
 # Launch / join
-def launch_roblox_home(manager, username: str, on_done: Callable[[bool, str], None]) -> None:
-    def _worker():
-        try:
-            ok = manager.launch_roblox(username, "", "")
-            on_done(ok, "" if ok else "Failed to launch Roblox.")
-        except Exception as e:
-            on_done(False, str(e))
+def _batch_launch_result(
+    action: str,
+    total: int,
+    success_count: int,
+    failures: list[tuple[str, OperationResult]],
+) -> OperationResult:
+    summary = f"{action} {success_count}/{total} accounts."
+    if not failures:
+        return OperationResult.success(summary)
 
-    threading.Thread(target=_worker, daemon=True).start()
+    detail = "\n".join(
+        f"{username}: {result.code} - {result.message}"
+        for username, result in failures
+    )
+    if success_count:
+        return OperationResult.failure(
+            "PARTIAL_LAUNCH_FAILURE",
+            "Some Accounts Failed to Launch",
+            summary,
+            detail=detail,
+        )
+
+    first_result = failures[0][1]
+    return OperationResult.failure(
+        first_result.code or "ROBLOX_LAUNCH_FAILED",
+        first_result.title or "Roblox Could Not Start",
+        first_result.message or "Roblox could not be launched.",
+        detail=detail,
+        retryable=first_result.retryable,
+    )
 
 
 def join_place(manager, username: str, place_id: str, private_server_key: str = "", on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
@@ -164,25 +143,18 @@ def join_place(manager, username: str, place_id: str, private_server_key: str = 
     print(f"[INFO] join_place: {username} -> place {place_id} (launcher={launcher}, ps={bool(private_server_key)})")
     def _worker():
         try:
-            ok = manager.launch_roblox(
+            result = ensure_result(manager.launch_roblox(
                 username, place_id,
                 private_server_id=private_server_key or "",
                 launcher_preference=launcher,
                 custom_launcher_path=custom_path,
-            )
-            if not ok:
-                if getattr(RobloxAPI, "_last_error", None) == "expired_cookie":
-                    msg = "EXPIRED_COOKIE"
-                    RobloxAPI._last_error = None
-                else:
-                    msg = "Failed to join. Check the console for details."
-            else:
-                msg = ""
-            print(f"[{'SUCCESS' if ok else 'ERROR'}] join_place {username}: {'OK' if ok else 'FAIL'}")
-            on_done(ok, msg)
-        except Exception as e:
-            print(f"[ERROR] join_place exception for {username}: {e}")
-            on_done(False, str(e))
+            ))
+            print(f"[{'SUCCESS' if result else 'ERROR'}] join_place {username}: {'OK' if result else 'FAIL'}")
+            on_done(bool(result), result)
+        except Exception as exc:
+            print(f"[ERROR] join_place exception for {username}: {exc}")
+            result = unexpected_result(f"Joining place for {username}", exc)
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name=f"join-{username}").start()
 
@@ -194,23 +166,32 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
     print(f"[INFO] join_place_all: {len(usernames)} accounts -> place {place_id}")
     def _worker():
         success = 0
+        failures: list[tuple[str, OperationResult]] = []
         for u in usernames:
             try:
-                ok = manager.launch_roblox(
+                result = ensure_result(manager.launch_roblox(
                     u, place_id,
                     private_server_id=private_server_key or "",
                     launcher_preference=launcher,
                     custom_launcher_path=custom_path,
-                )
-                if ok:
+                ))
+                if result:
                     success += 1
-                print(f"[{'SUCCESS' if ok else 'ERROR'}] join_place_all {u}: {'OK' if ok else 'FAIL'}")
+                else:
+                    failures.append((u, result))
+                print(f"[{'SUCCESS' if result else 'ERROR'}] join_place_all {u}: {'OK' if result else 'FAIL'}")
                 time.sleep(0.5)
-            except Exception as e:
-                print(f"[ERROR] join_place_all {u}: {e}")
-        msg = f"Joined {success}/{len(usernames)} accounts."
-        print(f"[INFO] join_place_all done: {msg}")
-        on_done(success > 0, msg)
+            except Exception as exc:
+                print(f"[ERROR] join_place_all {u}: {exc}")
+                failures.append((u, unexpected_result(f"Joining place for {u}", exc)))
+        result = _batch_launch_result(
+            "Joined",
+            len(usernames),
+            success,
+            failures,
+        )
+        print(f"[INFO] join_place_all done: {result.message}")
+        on_done(bool(result), result)
 
     threading.Thread(target=_worker, daemon=True, name="join-all").start()
 
@@ -222,37 +203,33 @@ def join_vip_server(manager, username: str, vip_url: str, on_done: Callable[[boo
     print(f"[INFO] join_vip_server: {username} -> {vip_url}")
     def _worker():
         try:
-            ok = manager.launch_roblox(
+            result = ensure_result(manager.launch_roblox(
                 username, "",
                 private_server_id=vip_url,
                 launcher_preference=launcher,
                 custom_launcher_path=custom_path,
-            )
-            msg = "" if ok else "Failed to join VIP server."
-            print(f"[{'SUCCESS' if ok else 'ERROR'}] join_vip_server {username}: {'OK' if ok else 'FAIL'}")
-            on_done(ok, msg)
-        except Exception as e:
-            print(f"[ERROR] join_vip_server {username}: {e}")
-            on_done(False, str(e))
+            ))
+            print(f"[{'SUCCESS' if result else 'ERROR'}] join_vip_server {username}: {'OK' if result else 'FAIL'}")
+            on_done(bool(result), result)
+        except Exception as exc:
+            print(f"[ERROR] join_vip_server {username}: {exc}")
+            result = unexpected_result(f"Joining VIP server for {username}", exc)
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name=f"vip-{username}").start()
-
-
-def join_player(manager, username: str, target_username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
-    join_user(manager, username, target_username, on_done=on_done)
 
 
 def add_account(manager, cookie: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
     def _worker():
         try:
-            ok, username = manager.import_cookie_account(cookie)
-            if ok and username:
-                on_done(True, str(username))
+            result = manager.import_cookie_account_result(cookie)
+            if result:
+                on_done(True, str(result.data or result.message))
             else:
-                on_done(False, "Failed to add account — invalid or expired cookie?")
-        except Exception as e:
-            print(f"[ERROR] add_account: {e}")
-            on_done(False, str(e))
+                on_done(False, result)
+        except Exception as exc:
+            print(f"[ERROR] add_account: {exc}")
+            on_done(False, unexpected_result("Importing cookie", exc))
 
     threading.Thread(target=_worker, daemon=True, name="add-account-cookie").start()
 
@@ -331,10 +308,22 @@ def launch_home(manager, username: str, on_done: Callable[[bool, str], None] = l
     custom_path = S.get("custom_roblox_launcher_path", "")
     def _worker():
         try:
-            ok = manager.launch_roblox(username, "",  "", launcher_preference=launcher, custom_launcher_path=custom_path)
-            on_done(ok, "" if ok else "Failed to launch Roblox.")
-        except Exception as e:
-            on_done(False, str(e))
+            result = ensure_result(
+                manager.launch_roblox(
+                    username,
+                    "",
+                    "",
+                    launcher_preference=launcher,
+                    custom_launcher_path=custom_path,
+                ),
+                failure_code="ROBLOX_LAUNCH_FAILED",
+                failure_title="Roblox Could Not Start",
+                failure_message="Roblox could not be launched.",
+            )
+            on_done(bool(result), result)
+        except Exception as exc:
+            result = unexpected_result(f"Launching Roblox Home for {username}", exc)
+            on_done(False, result)
     threading.Thread(target=_worker, daemon=True).start()
 # username joining
 def join_user(manager, usernames: list[str] | str, target_username: str, on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
@@ -348,7 +337,11 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
             if not target_user_id:
                 msg = f"Could not find user ID for '{target_username}'."
                 print(f"[WARNING] join_user: {msg}")
-                on_done(False, msg)
+                on_done(False, OperationResult.failure(
+                    "TARGET_USER_NOT_FOUND",
+                    "Roblox User Not Found",
+                    msg,
+                ))
                 return
 
             first_acc_data = manager.accounts.get(usernames[0], {})
@@ -356,20 +349,33 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
             if not cookie:
                 msg = f"No cookie found for account {usernames[0]} to check presence."
                 print(f"[WARNING] join_user: {msg}")
-                on_done(False, msg)
+                on_done(False, OperationResult.failure(
+                    "COOKIE_MISSING",
+                    "Account Cookie Missing",
+                    msg,
+                ))
                 return
 
             presence = RobloxAPI.get_player_presence(target_user_id, cookie)
             if not presence:
                 msg = f"Could not fetch presence data for {target_username}."
                 print(f"[WARNING] join_user: {msg}")
-                on_done(False, msg)
+                on_done(False, OperationResult.failure(
+                    "PRESENCE_REQUEST_FAILED",
+                    "Presence Could Not Be Checked",
+                    msg,
+                    retryable=True,
+                ))
                 return
 
             if not presence.get("in_game", False):
                 msg = f"{target_username} is not in a game."
                 print(f"[WARNING] join_user: {msg}")
-                on_done(False, msg)
+                on_done(False, OperationResult.failure(
+                    "TARGET_NOT_IN_GAME",
+                    "User Is Not In Game",
+                    msg,
+                ))
                 return
 
             place_id = str(presence.get("place_id", "") or "")
@@ -378,7 +384,11 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
             if not place_id:
                 msg = f"{target_username} is in a game, but their Place ID is hidden."
                 print(f"[WARNING] join_user: {msg}")
-                on_done(False, msg)
+                on_done(False, OperationResult.failure(
+                    "TARGET_PLACE_HIDDEN",
+                    "Place ID Is Hidden",
+                    msg,
+                ))
                 return
 
             S = load_ui_settings()
@@ -386,27 +396,37 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
             custom_path = S.get("custom_roblox_launcher_path", "")
 
             success = 0
+            failures: list[tuple[str, OperationResult]] = []
             for u in usernames:
                 try:
-                    ok = manager.launch_roblox(
+                    result = ensure_result(manager.launch_roblox(
                         u, place_id,
                         job_id=game_id,
                         launcher_preference=launcher,
                         custom_launcher_path=custom_path,
-                    )
-                    if ok:
+                    ))
+                    if result:
                         success += 1
-                    print(f"[{'SUCCESS' if ok else 'ERROR'}] join_user {u}: {'OK' if ok else 'FAIL'}")
+                    else:
+                        failures.append((u, result))
+                    print(f"[{'SUCCESS' if result else 'ERROR'}] join_user {u}: {'OK' if result else 'FAIL'}")
                     time.sleep(0.5)
-                except Exception as e:
-                    print(f"[ERROR] join_user {u}: {e}")
+                except Exception as exc:
+                    print(f"[ERROR] join_user {u}: {exc}")
+                    failures.append((u, unexpected_result(f"Joining user with {u}", exc)))
 
-            msg = f"Joined {success}/{len(usernames)} accounts."
-            print(f"[INFO] join_user done: {msg}")
-            on_done(success > 0, msg)
-        except Exception as e:
-            print(f"[ERROR] join_user exception: {e}")
-            on_done(False, str(e))
+            result = _batch_launch_result(
+                "Joined",
+                len(usernames),
+                success,
+                failures,
+            )
+            print(f"[INFO] join_user done: {result.message}")
+            on_done(bool(result), result)
+        except Exception as exc:
+            print(f"[ERROR] join_user exception: {exc}")
+            result = unexpected_result("Joining Roblox user", exc)
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name="joinplayer-all").start()
 # jobid joining
@@ -421,23 +441,32 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
 
     def _worker():
         success = 0
+        failures: list[tuple[str, OperationResult]] = []
         for u in usernames:
             try:
-                ok = manager.launch_roblox(
+                result = ensure_result(manager.launch_roblox(
                     u, place_id,
                     job_id=job_id,
                     launcher_preference=launcher,
                     custom_launcher_path=custom_path,
-                )
-                if ok:
+                ))
+                if result:
                     success += 1
-                print(f"[{'SUCCESS' if ok else 'ERROR'}] join_job_id {u}: {'OK' if ok else 'FAIL'}")
+                else:
+                    failures.append((u, result))
+                print(f"[{'SUCCESS' if result else 'ERROR'}] join_job_id {u}: {'OK' if result else 'FAIL'}")
                 time.sleep(0.5)
-            except Exception as e:
-                print(f"[ERROR] join_job_id {u}: {e}")
-        msg = f"Joined {success}/{len(usernames)} accounts."
-        print(f"[INFO] join_job_id done: {msg}")
-        on_done(success > 0, msg)
+            except Exception as exc:
+                print(f"[ERROR] join_job_id {u}: {exc}")
+                failures.append((u, unexpected_result(f"Joining Job ID with {u}", exc)))
+        result = _batch_launch_result(
+            "Joined",
+            len(usernames),
+            success,
+            failures,
+        )
+        print(f"[INFO] join_job_id done: {result.message}")
+        on_done(bool(result), result)
 
     threading.Thread(target=_worker, daemon=True, name="jobjoin-all").start()
 # small server joining
@@ -460,7 +489,12 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
             joinable = [s for s in servers if s.get("playing", 0) < s.get("maxPlayers", 1)]
             if not joinable:
                 print(f"[WARNING] join_small_server: No joinable servers found for place {place_id}")
-                on_done(False, "No available servers found.")
+                on_done(False, OperationResult.failure(
+                    "NO_JOINABLE_SERVER",
+                    "No Available Server",
+                    "No joinable public server was found for this game.",
+                    retryable=True,
+                ))
                 return
 
             smallest = min(joinable, key=lambda s: s.get("playing", 999))
@@ -472,27 +506,55 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
             custom_path = S.get("custom_roblox_launcher_path", "")
 
             success = 0
+            failures: list[tuple[str, OperationResult]] = []
             for u in usernames:
                 try:
-                    ok = manager.launch_roblox(
+                    result = ensure_result(manager.launch_roblox(
                         u, place_id,
                         job_id=job_id,
                         launcher_preference=launcher,
                         custom_launcher_path=custom_path,
-                    )
-                    if ok:
+                    ))
+                    if result:
                         success += 1
-                    print(f"[{'SUCCESS' if ok else 'ERROR'}] join_small_server {u}: {'OK' if ok else 'FAIL'}")
+                    else:
+                        failures.append((u, result))
+                    print(f"[{'SUCCESS' if result else 'ERROR'}] join_small_server {u}: {'OK' if result else 'FAIL'}")
                     time.sleep(0.5)
-                except Exception as e:
-                    print(f"[ERROR] join_small_server {u}: {e}")
+                except Exception as exc:
+                    print(f"[ERROR] join_small_server {u}: {exc}")
+                    failures.append((u, unexpected_result(f"Joining small server with {u}", exc)))
 
-            msg = f"Joined {success}/{len(usernames)} accounts."
-            print(f"[INFO] join_small_server done: {msg}")
-            on_done(success > 0, msg)
-        except Exception as e:
-            print(f"[ERROR] join_small_server: {e}")
-            on_done(False, str(e))
+            result = _batch_launch_result(
+                "Joined",
+                len(usernames),
+                success,
+                failures,
+            )
+            print(f"[INFO] join_small_server done: {result.message}")
+            on_done(bool(result), result)
+        except requests.Timeout as exc:
+            result = OperationResult.failure(
+                "SERVER_LIST_TIMEOUT",
+                "Server List Timed Out",
+                "Roblox did not return the server list in time.",
+                detail=str(exc),
+                retryable=True,
+            )
+            on_done(False, result)
+        except requests.RequestException as exc:
+            result = OperationResult.failure(
+                "SERVER_LIST_FAILED",
+                "Server List Could Not Be Loaded",
+                "Roblox could not return the public server list.",
+                detail=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+            )
+            on_done(False, result)
+        except Exception as exc:
+            print(f"[ERROR] join_small_server: {exc}")
+            result = unexpected_result("Finding a small server", exc)
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name="smalljoin-all").start()
 
@@ -516,15 +578,15 @@ def import_cookie(manager, cookie: str, on_done: Callable[[bool, str], None] = l
     def _worker():
         success_count = 0
         imported_users: list[str] = []
-        failures = 0
+        failure_results: list[OperationResult] = []
 
         for cookie_value in cookies:
-            ok, username = manager.import_cookie_account(cookie_value)
-            if ok and username:
+            result = manager.import_cookie_account_result(cookie_value)
+            if result:
                 success_count += 1
-                imported_users.append(str(username))
+                imported_users.append(str(result.data))
             else:
-                failures += 1
+                failure_results.append(result)
 
         if success_count:
             summary = f"Imported {success_count}/{len(cookies)} account(s)."
@@ -532,7 +594,12 @@ def import_cookie(manager, cookie: str, on_done: Callable[[bool, str], None] = l
                 summary += " " + ", ".join(imported_users)
             on_done(True, summary)
         else:
-            on_done(False, f"Failed to import {len(cookies)} cookie(s).")
+            result = failure_results[0] if failure_results else OperationResult.failure(
+                "COOKIE_IMPORT_FAILED",
+                "Cookie Import Failed",
+                f"Failed to import {len(cookies)} cookie(s).",
+            )
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name="add-account-cookie-batch").start()
 
@@ -589,26 +656,37 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
         on_done(False, "No username:password pairs provided.")
         return
 
-    browser_path = get_browser_path()
+    browser_result = get_browser_result()
+    if not browser_result:
+        on_done(False, browser_result)
+        return
+    browser_path = browser_result.data.get("browser_path", "")
 
     def _worker():
         success_count = 0
         imported_users: list[str] = []
+        failures: list[OperationResult] = []
 
         for start in range(0, len(pairs), IMPORT_BATCH_SIZE):
             batch = pairs[start:start + IMPORT_BATCH_SIZE]
             existing_before = set(manager.accounts.keys())
             try:
                 scripts = [_build_login_script(username, password) for username, password in batch]
-                manager.add_account(amount=len(batch), javascript_list=scripts, browser_path=browser_path)
+                add_result = ensure_result(manager.add_account(
+                    amount=len(batch),
+                    javascript_list=scripts,
+                    browser_path=browser_path,
+                ))
                 new_names = set(manager.accounts.keys()) - existing_before
                 if new_names:
                     success_count += len(new_names)
                     imported_users.extend(str(name) for name in new_names)
                 else:
                     print(f"[ERROR] import_user_pass: batch at {start} failed for all {len(batch)} account(s)")
-            except Exception as e:
-                print(f"[ERROR] import_user_pass: batch at {start}: {e}")
+                    failures.append(add_result)
+            except Exception as exc:
+                print(f"[ERROR] import_user_pass: batch at {start}: {exc}")
+                failures.append(unexpected_result("Importing User:Pass batch", exc))
 
         if success_count:
             summary = f"Imported {success_count}/{len(pairs)} account(s)."
@@ -616,53 +694,45 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
                 summary += " " + ", ".join(imported_users)
             on_done(True, summary)
         else:
-            on_done(False, f"Failed to import {len(pairs)} account(s).")
+            result = failures[0] if failures else OperationResult.failure(
+                "USER_PASS_IMPORT_FAILED",
+                "User:Pass Import Failed",
+                f"Failed to import {len(pairs)} account(s).",
+            )
+            on_done(False, result)
 
     threading.Thread(target=_worker, daemon=True, name="import-user-pass").start()
 
 
-def get_browser_path() -> str | None:
+def get_browser_result() -> OperationResult:
     S = load_ui_settings()
     browser_type = S.get("browser_type", "chrome")
-    
-    if browser_type == "chromium":
-        chromium_path = os.path.join(_CHROMIUM_DIR, "chrome.exe")
-        if os.path.exists(chromium_path):
-            return chromium_path
-        browser_type = "chrome"
-    
-    if browser_type == "chrome":
-        candidates = []
-        pf = os.environ.get('ProgramFiles')
-        pfx86 = os.environ.get('ProgramFiles(x86)')
-        localapp = os.environ.get('LOCALAPPDATA')
-        if pf:
-            candidates.append(os.path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-        if pfx86:
-            candidates.append(os.path.join(pfx86, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-        if localapp:
-            candidates.append(os.path.join(localapp, 'Google', 'Chrome', 'Application', 'chrome.exe'))
-        for path in candidates:
-            if path and os.path.exists(path):
-                return path
-    
-    return None
+    return chromium_mod.resolve_browser(browser_type)
+
 
 def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *_: None, javascript: str = "") -> None:
-    browser_path = get_browser_path()
+    browser_result = get_browser_result()
+    if not browser_result:
+        on_done(False, browser_result)
+        return
+    browser_path = browser_result.data.get("browser_path", "")
+
     def _worker():
         existing_before = set(manager.accounts.keys())
         try:
-            ok = manager.add_account(javascript=javascript or "", browser_path=browser_path)
-            if ok:
+            result = ensure_result(manager.add_account(
+                javascript=javascript or "",
+                browser_path=browser_path,
+            ))
+            if result:
                 new_names = set(manager.accounts.keys()) - existing_before
                 username = next(iter(new_names)) if new_names else "(unknown)"
                 on_done(True, str(username))
             else:
-                on_done(False, "Failed to add account via browser.")
-        except Exception as e:
-            print(f"[ERROR] add_account_browser: {e}")
-            on_done(False, str(e))
+                on_done(False, result)
+        except Exception as exc:
+            print(f"[ERROR] add_account_browser: {exc}")
+            on_done(False, unexpected_result("Adding account through browser", exc))
     threading.Thread(target=_worker, daemon=True, name="add-account-browser").start()
 
 # Anti-AFK
@@ -957,8 +1027,6 @@ def download_handle64() -> bool:
 
 
 def _mr_h64_monitor_worker():
-    global _mr_h64_monitoring, _mr_h64_path
-    
     target = "robloxplayerbeta.exe"
     known: set[int] = set()
 
@@ -987,7 +1055,6 @@ def _mr_h64_monitor_worker():
 
 
 def _mr_h64_close_handles(pids: list[int]):
-    global _mr_h64_path
     HANDLE = _mr_h64_path
     if not HANDLE:
         return
@@ -1083,7 +1150,7 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         except OSError:
             print("[Multi Roblox] Could not lock RobloxCookies.dat (may already be locked).")
     else:
-        print("[Multi Roblox] RobloxCookies.dat not found — 773 fix skipped.")
+        print("[Multi Roblox] RobloxCookies.dat not found, 773 fix skipped.")
 
     _mr_handle = {"mutex": mutex, "file": cookie_file}
     print("[Multi Roblox] Started (default mode)")

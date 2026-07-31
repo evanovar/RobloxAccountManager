@@ -227,21 +227,29 @@ class WebSocketServer:
             return {"ok": False, "error": f"Too many cookies (max {max_c})"}
 
         imported, failed = [], []
-        for cookie in cookies:
+        for index, cookie in enumerate(cookies):
             if not cookie:
-                failed.append({"cookie": "", "error": "Empty cookie"})
+                failed.append({"index": index, "error": "Empty cookie"})
                 continue
             if len(cookie) > 4096:
-                failed.append({"cookie": cookie[:32] + "...", "error": "Cookie too long"})
+                failed.append({"index": index, "error": "Cookie too long"})
                 continue
             try:
-                success, username = self.manager.import_cookie_account(cookie)
-                if success and username:
-                    imported.append(username)
+                result = self.manager.import_cookie_account_result(cookie)
+                if result:
+                    imported.append(str(result.data))
                 else:
-                    failed.append({"cookie": cookie[:32] + "...", "error": "Import failed"})
+                    failed.append({
+                        "index": index,
+                        "error": result.message,
+                        "code": result.code,
+                    })
             except Exception as exc:
-                failed.append({"cookie": cookie[:32] + "...", "error": str(exc)})
+                failed.append({
+                    "index": index,
+                    "error": "Unexpected import error",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                })
 
         if not imported:
             return {"ok": False, "error": "Failed to import any accounts", "failed": failed}
@@ -295,7 +303,12 @@ class WebSocketServer:
                     "job_id": job_id,
                 },
             }
-        return {"ok": False, "error": f"Failed to launch {account}"}
+        return {
+            "ok": False,
+            "error": launched.message or f"Failed to launch {account}",
+            "code": launched.code or "ROBLOX_LAUNCH_FAILED",
+            "detail": launched.detail,
+        }
 
     def _cmd_join_user(self, parts: list) -> dict:
         if len(parts) < 3:
@@ -348,7 +361,12 @@ class WebSocketServer:
                     "job_id": game_id,
                 },
             }
-        return {"ok": False, "error": f"Failed to join {target_user} with {account}"}
+        return {
+            "ok": False,
+            "error": launched.message or f"Failed to join {target_user} with {account}",
+            "code": launched.code or "ROBLOX_LAUNCH_FAILED",
+            "detail": launched.detail,
+        }
 
     def _cmd_auto_rejoin(self, parts: list) -> dict:
         if len(parts) < 3:

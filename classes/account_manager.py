@@ -4,7 +4,6 @@ Handles account storage, browser automation, and account management
 """
 
 import os
-import sys
 import json
 import time
 import tempfile
@@ -13,14 +12,11 @@ import shutil
 import traceback
 import threading
 import requests
-import zipfile
-import io
-from pathlib import Path
 
 from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
+from .operation_result import OperationResult
 from .roblox_api import RobloxAPI
 from utils.app_paths import get_data_dir
-
 
 class RobloxAccountManager:
     
@@ -65,8 +61,8 @@ class RobloxAccountManager:
                         self._migrate_accounts(accounts)
                         self._repair_password_hash_if_needed()
                         return accounts
-                    except Exception as e:
-                        raise ValueError(f"Decryption failed. Wrong password or corrupted data.")
+                    except Exception:
+                        raise ValueError("Decryption failed. Wrong password or corrupted data.")
                 
                 if isinstance(data, dict):
                     accounts = self._extract_accounts_payload(data)
@@ -162,16 +158,6 @@ class RobloxAccountManager:
         """Read a sensitive setting stored alongside encrypted account data."""
         return self.secure_settings.get(key, default)
 
-    def set_secure_setting(self, key, value):
-        """Write a sensitive setting and persist it to saved_accounts.json."""
-        if value is None:
-            value = ""
-        if self.secure_settings.get(key) == value:
-            return False
-        self.secure_settings[key] = value
-        self.save_accounts()
-        return True
-    
     def create_temp_profile(self):
         # Create a temporary Chrome profile directory.
         self.temp_profile_dir = tempfile.mkdtemp(prefix="roblox_login_")
@@ -191,10 +177,20 @@ class RobloxAccountManager:
         profile_dir = self.create_temp_profile()
         # to make startup faster
         from selenium import webdriver
+        from selenium.common.exceptions import SessionNotCreatedException
+        from selenium.common.exceptions import WebDriverException
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
         from webdriver_manager.chrome import ChromeDriverManager
 
+        if browser_path and not os.path.isfile(browser_path):
+            self.cleanup_temp_profile(profile_dir)
+            return OperationResult.failure(
+                "BROWSER_EXECUTABLE_MISSING",
+                "Browser Executable Missing",
+                "The selected browser executable could not be found.",
+                detail=f"Expected path: {browser_path}",
+            )
         
         chrome_options = Options()
         
@@ -238,47 +234,72 @@ class RobloxAccountManager:
         chrome_options.add_argument("--aggressive-cache-discard")
         
         try:
-            # Chrome setup changes process-wide stderr, so only one setup may
-            # run at a time. Open browser sessions continue concurrently.
             with self._browser_setup_lock:
-                if browser_path and "Chromium" in browser_path:
-                    chromium_dir = os.path.dirname(os.path.dirname(browser_path))
-                    chromedriver_path = os.path.join(chromium_dir, "chromedriver_win32", "chromedriver.exe")
-
+                if browser_path and "chromium" in browser_path.lower():
+                    chromedriver_path = os.path.join(
+                        os.path.dirname(browser_path),
+                        "chromedriver.exe",
+                    )
                     if os.path.exists(chromedriver_path):
                         print(f"[INFO] Using bundled chromedriver: {chromedriver_path}")
                         service = Service(chromedriver_path, log_path=os.devnull)
                     else:
-                        print(f"[WARNING] Chromedriver not found, falling back to webdriver_manager")
-                        service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+                        self.cleanup_temp_profile(profile_dir)
+                        return OperationResult.failure(
+                            "BROWSER_DRIVER_MISSING",
+                            "Chromium Driver Missing",
+                            "The Chromium installation is incomplete. Download Chromium again.",
+                            detail=f"Missing driver: {chromedriver_path}",
+                        )
                 else:
                     service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-                
-                original_stderr = sys.stderr
-                devnull_f = open(os.devnull, 'w')
-                sys.stderr = devnull_f
-                try:
-                    driver = webdriver.Chrome(service=service, options=chrome_options)
-                    driver._ram_profile_dir = profile_dir
 
-                    driver.set_page_load_timeout(120)
-                    driver.implicitly_wait(10)
-
-                    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                finally:
-                    sys.stderr = original_stderr
-                    try:
-                        devnull_f.close()
-                    except Exception:
-                        pass
-                
-                return driver
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                driver._ram_profile_dir = profile_dir
+                driver.set_page_load_timeout(120)
+                driver.implicitly_wait(10)
+                driver.execute_script(
+                    "Object.defineProperty(navigator, 'webdriver', "
+                    "{get: () => undefined})"
+                )
+                return OperationResult.success(data=driver)
+        except SessionNotCreatedException as exc:
+            self.cleanup_temp_profile(profile_dir)
+            print(f"[ERROR] Browser and driver versions do not match: {exc}")
+            return OperationResult.failure(
+                "BROWSER_DRIVER_MISMATCH",
+                "Browser Driver Version Mismatch",
+                "The browser and ChromeDriver versions do not match.",
+                detail=str(exc),
+            )
+        except WebDriverException as exc:
+            self.cleanup_temp_profile(profile_dir)
+            print(f"[ERROR] Selenium could not start the browser: {exc}")
+            return OperationResult.failure(
+                "BROWSER_START_FAILED",
+                "Browser Could Not Start",
+                "The selected browser could not be opened.",
+                detail=str(exc),
+            )
+        except PermissionError as exc:
+            self.cleanup_temp_profile(profile_dir)
+            print(f"[ERROR] Browser startup permission denied: {exc}")
+            return OperationResult.failure(
+                "BROWSER_PERMISSION_DENIED",
+                "Browser Start Blocked",
+                "Windows denied permission to start the browser.",
+                detail=str(exc),
+            )
         except Exception as e:
             self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] Error setting up Chrome driver: {e}")
-            print("[INFO] Please make sure Google Chrome is installed on your system")
             traceback.print_exc()
-            return None
+            return OperationResult.failure(
+                "BROWSER_SETUP_FAILED",
+                "Browser Setup Failed",
+                "The browser could not be prepared. Check the Console tab or session log.",
+                detail=f"{type(e).__name__}: {e}",
+            )
     
     def wait_for_login(self, driver, timeout=300):
         from selenium.common.exceptions import WebDriverException
@@ -466,7 +487,7 @@ class RobloxAccountManager:
                            '';
                 """)
                 if captured_password:
-                    print(f"[INFO] Password captured")
+                    print("[INFO] Password captured")
                     driver.execute_script("sessionStorage.removeItem('_ram_pw');")
             except Exception as e:
                 print(f"[ERROR] Password capture failed: {e}")
@@ -542,15 +563,22 @@ class RobloxAccountManager:
         success_count = 0
         drivers = []
         instance_passwords = []
+        failures: list[OperationResult] = []
+        failure_lock = threading.Lock()
         
         try:
             print(f"[INFO] Launching {amount} browser instance(s)...")
             
             for i in range(amount):
-                driver = self.setup_chrome_driver(browser_path)
-                if not driver:
-                    print(f"[ERROR] Failed to setup Chrome driver for instance {i + 1}")
+                setup_result = self.setup_chrome_driver(browser_path)
+                if not setup_result:
+                    print(
+                        f"[ERROR] Failed to setup browser for instance "
+                        f"{i + 1}: {setup_result.code}"
+                    )
+                    failures.append(setup_result)
                     continue
+                driver = setup_result.data
                 
                 window_width = 500
                 window_height = 600
@@ -608,12 +636,25 @@ class RobloxAccountManager:
                 except Exception as e:
                     print(f"[ERROR] Error opening browser for instance {i + 1}: {e}")
                     traceback.print_exc()
+                    if drivers and drivers[-1] is driver:
+                        drivers.pop()
+                        instance_passwords.pop()
+                    profile_dir = getattr(driver, "_ram_profile_dir", None)
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    self.cleanup_temp_profile(profile_dir)
+                    failures.append(OperationResult.failure(
+                        "BROWSER_NAVIGATION_FAILED",
+                        "Roblox Login Could Not Open",
+                        "The browser opened but the Roblox login page could not be loaded.",
+                        detail=f"{type(e).__name__}: {e}",
+                        retryable=True,
+                    ))
             
             print(f"[INFO] All {len(drivers)} browser(s) opened. Waiting for logins...")
-            
-            completed = [False] * len(drivers)
-            
-            
+
             def wait_for_instance(driver_index):
                 driver = drivers[driver_index]
                 try:
@@ -640,12 +681,31 @@ class RobloxAccountManager:
                             success_count += 1
                         else:
                             print(f"[ERROR] Failed to extract account information for instance {driver_index + 1}")
+                            with failure_lock:
+                                failures.append(OperationResult.failure(
+                                    "ACCOUNT_EXTRACTION_FAILED",
+                                    "Account Information Missing",
+                                    "The login completed, but the account information could not be read.",
+                                ))
                     else:
                         print(f"[ERROR] Login timeout for instance {driver_index + 1}")
+                        with failure_lock:
+                            failures.append(OperationResult.failure(
+                                "BROWSER_LOGIN_TIMEOUT",
+                                "Browser Login Timed Out",
+                                "The Roblox browser login did not finish within five minutes.",
+                                retryable=True,
+                            ))
                 except Exception as e:
                     print(f"[ERROR] Error waiting for login on instance {driver_index + 1}: {e}")
+                    with failure_lock:
+                        failures.append(OperationResult.failure(
+                            "BROWSER_LOGIN_FAILED",
+                            "Browser Login Failed",
+                            "The browser login could not be completed.",
+                            detail=f"{type(e).__name__}: {e}",
+                        ))
                 finally:
-                    completed[driver_index] = True
                     profile_dir = getattr(driver, "_ram_profile_dir", None)
                     try:
                         driver.quit()
@@ -655,14 +715,29 @@ class RobloxAccountManager:
             
             threads = []
             for i in range(len(drivers)):
-                thread = threading.Thread(target=wait_for_instance, args=(i,))
+                thread = threading.Thread(
+                    target=wait_for_instance,
+                    args=(i,),
+                    name=f"browser-login-{i + 1}",
+                )
                 thread.start()
                 threads.append(thread)
             
             for thread in threads:
                 thread.join()
             
-            return success_count > 0
+            if success_count:
+                return OperationResult.success(
+                    f"Added {success_count} account(s).",
+                    data={"success_count": success_count},
+                )
+            if failures:
+                return failures[0]
+            return OperationResult.failure(
+                "BROWSER_DID_NOT_OPEN",
+                "Browser Did Not Open",
+                "No browser instance could be opened.",
+            )
                 
         except Exception as e:
             print(f"[ERROR] Error during account addition: {e}")
@@ -673,18 +748,31 @@ class RobloxAccountManager:
                 except:
                     pass
                 self.cleanup_temp_profile(profile_dir)
-            return False
+            return OperationResult.failure(
+                "ACCOUNT_BROWSER_FAILED",
+                "Browser Account Login Failed",
+                "The browser account login could not be completed.",
+                detail=f"{type(e).__name__}: {e}",
+            )
     
-    def import_cookie_account(self, cookie):
+    def import_cookie_account_result(self, cookie):
         if not cookie:
             print("[ERROR] Cookie is required")
-            return False, None
+            return OperationResult.failure(
+                "COOKIE_MISSING",
+                "Cookie Missing",
+                "Paste a Roblox security cookie before importing.",
+            )
         
         cookie = cookie.strip()
         
         if not cookie.startswith('_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|'):
             print("[ERROR] Invalid cookie format")
-            return False, None
+            return OperationResult.failure(
+                "COOKIE_FORMAT_INVALID",
+                "Invalid Cookie Format",
+                "The provided text is not a Roblox security cookie.",
+            )
         
         try:
             try:
@@ -696,12 +784,20 @@ class RobloxAccountManager:
 
             if not username or username == "Unknown":
                 print("[ERROR] Failed to get username from cookie")
-                return False, None
+                return OperationResult.failure(
+                    "COOKIE_ACCOUNT_LOOKUP_FAILED",
+                    "Account Could Not Be Identified",
+                    "Roblox did not return an account for this cookie.",
+                    retryable=True,
+                )
 
-            is_valid = RobloxAPI.validate_account(username, cookie)
-            if not is_valid:
-                print("[ERROR] Cookie is invalid or expired")
-                return False, None
+            validation = RobloxAPI.validate_cookie(cookie)
+            if not validation:
+                print(
+                    f"[ERROR] Cookie validation failed: "
+                    f"{validation.code}"
+                )
+                return validation
 
             user_id   = user_id_val
             avatar_url = ""
@@ -709,12 +805,11 @@ class RobloxAccountManager:
                 uid = user_id if user_id else RobloxAPI.get_user_id_from_username(username)
                 if uid:
                     user_id = uid
-                    import requests as _req
                     api = (
                         "https://thumbnails.roblox.com/v1/users/avatar-headshot"
                         f"?userIds={uid}&size=100x100&format=Png&isCircular=true"
                     )
-                    r = _req.get(api, timeout=6)
+                    r = requests.get(api, timeout=6)
                     d = r.json()
                     if d.get("data") and d["data"][0].get("imageUrl"):
                         avatar_url = d["data"][0]["imageUrl"]
@@ -733,12 +828,20 @@ class RobloxAccountManager:
             self.save_accounts()
 
             print(f"[SUCCESS] Successfully imported account: {username}")
-            return True, username
+            return OperationResult.success(
+                f"Successfully imported account: {username}",
+                data=username,
+            )
 
         except Exception as e:
             print(f"[ERROR] Failed to import account: {e}")
-            return False, None
-    
+            return OperationResult.failure(
+                "COOKIE_IMPORT_FAILED",
+                "Cookie Import Failed",
+                "The account could not be imported. Check the Console tab or session log.",
+                detail=f"{type(e).__name__}: {e}",
+            )
+
     def delete_account(self, username):
         """Delete a saved account"""
         if username in self.accounts:
@@ -750,103 +853,15 @@ class RobloxAccountManager:
             print(f"[ERROR] Account '{username}' not found")
             return False
     
-    def get_account_cookie(self, username):
-        """Get cookie for a specific account"""
-        if username in self.accounts:
-            return self.accounts[username]['cookie']
-        return None
-    
-    def validate_account(self, username):
-        """Validate if an account's cookie is still valid"""
-        cookie = self.get_account_cookie(username)
-        if not cookie:
-            return False
-        
-        return RobloxAPI.validate_account(username, cookie)
-    
-    # def launch_home(self, username):
-    #     """Launch Chrome to Roblox home with account logged in"""
-    #     if username not in self.accounts:
-    #         print(f"[ERROR] Account '{username}' not found")
-    #         return False
-        
-    #     cookie = self.accounts[username]['cookie']
-        
-    #     try:
-            
-    #         print(f"Launching Chrome for {username}...")
-            
-    #         chrome_options = Options()
-    #         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    #         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    #         chrome_options.add_experimental_option('useAutomationExtension', False)
-            
-    #         chrome_options.add_argument("--log-level=3")
-    #         chrome_options.add_argument("--silent")
-    #         chrome_options.add_argument("--disable-logging")
-    #         chrome_options.add_argument("--disable-gpu")
-    #         chrome_options.add_argument("--disable-dev-shm-usage")
-    #         chrome_options.add_argument("--no-sandbox")
-    #         chrome_options.add_argument("--disable-usb")
-    #         chrome_options.add_argument("--disable-device-discovery-notifications")
-            
-    #         original_stderr = sys.stderr
-    #         sys.stderr = open(os.devnull, 'w')
-            
-    #         service = Service(ChromeDriverManager().install(), log_path=os.devnull)
-    #         driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-    #         driver.set_page_load_timeout(120)
-    #         driver.implicitly_wait(10)
-            
-    #         sys.stderr.close()
-    #         sys.stderr = original_stderr
-            
-    #         max_retries = 3
-    #         for retry in range(max_retries):
-    #             try:
-    #                 driver.get("https://www.roblox.com/")
-    #                 time.sleep(1)
-    #                 break
-    #             except Exception as nav_error:
-    #                 if retry < max_retries - 1:
-    #                     print(f"[WARNING] Navigation attempt {retry + 1} failed, retrying...")
-    #                     time.sleep(2)
-    #                 else:
-    #                     raise nav_error
-            
-    #         driver.add_cookie({
-    #             'name': '.ROBLOSECURITY',
-    #             'value': cookie,
-    #             'domain': '.roblox.com',
-    #             'path': '/',
-    #             'secure': True,
-    #             'httpOnly': True
-    #         })
-            
-    #         driver.get("https://www.roblox.com/home")
-            
-    #         driver.execute_cdp_cmd('Page.setWebLifecycleState', {'state': 'active'})
-            
-    #         print(f"[SUCCESS] Chrome launched with {username} logged in!")
-    #         return True
-            
-    #     except Exception as e:
-    #         if 'original_stderr' in locals():
-    #             sys.stderr = original_stderr
-    #         print(f"[ERROR] Failed to launch Chrome: {e}")
-    #         try:
-    #             if 'driver' in locals():
-    #                 driver.quit()
-    #         except:
-    #             pass
-    #         return False
-    
-    def launch_roblox(self, username, game_id, private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
+    def launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         """Launch Roblox game with specified account"""
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
-            return False
+            return OperationResult.failure(
+                "ACCOUNT_NOT_FOUND",
+                "Account Not Found",
+                f"The account '{username}' is no longer available.",
+            )
 
         cookie = self.accounts[username]['cookie']
         launched = RobloxAPI.launch_roblox(
@@ -887,215 +902,6 @@ class RobloxAccountManager:
         if not self.encryption_config.is_encryption_enabled():
             return None
         return self.encryption_config.get_encryption_method()
-    
-    def verify_password(self, password):
-        """Verify password for password-based encryption"""
-        if not self.encryption_config.is_encryption_enabled():
-            return False
-        
-        method = self.encryption_config.get_encryption_method()
-        if method != 'password':
-            return False
-        
-        stored_hash = self.encryption_config.get_password_hash()
-        entered_hash = hashlib.sha256(password.encode()).hexdigest()
-        return entered_hash == stored_hash
-    
-    def get_roblox_version(self, channel="LIVE"):
-        """Get current Roblox version from ClientSettings API"""
-        url = f"https://clientsettings.roblox.com/v2/client-version/WindowsPlayer/channel/{channel}"
-        
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                version = data.get("clientVersionUpload", "")
-                if version:
-                    return version
-        except Exception as e:
-            print(f"[ERROR] Failed to get Roblox version: {e}")
-        
-        return None
-    
-    def download_roblox_version(self, version, install_path, channel="LIVE", progress_callback=None):
-        """Download and install a specific Roblox version"""
-        
-        HOST_PATH = "https://setup-aws.rbxcdn.com"
-        BLOB_DIR = "/"
-        
-        EXTRACT_ROOTS = {
-            "RobloxApp.zip": "",
-            "redist.zip": "",
-            "shaders.zip": "shaders/",
-            "ssl.zip": "ssl/",
-            "WebView2.zip": "",
-            "WebView2RuntimeInstaller.zip": "WebView2RuntimeInstaller/",
-            "content-avatar.zip": "content/avatar/",
-            "content-configs.zip": "content/configs/",
-            "content-fonts.zip": "content/fonts/",
-            "content-sky.zip": "content/sky/",
-            "content-sounds.zip": "content/sounds/",
-            "content-textures2.zip": "content/textures/",
-            "content-models.zip": "content/models/",
-            "content-platform-fonts.zip": "PlatformContent/pc/fonts/",
-            "content-platform-dictionaries.zip": "PlatformContent/pc/shared_compression_dictionaries/",
-            "content-terrain.zip": "PlatformContent/pc/terrain/",
-            "content-textures3.zip": "PlatformContent/pc/textures/",
-            "extracontent-luapackages.zip": "ExtraContent/LuaPackages/",
-            "extracontent-translations.zip": "ExtraContent/translations/",
-            "extracontent-models.zip": "ExtraContent/models/",
-            "extracontent-textures.zip": "ExtraContent/textures/",
-            "extracontent-places.zip": "ExtraContent/places/"
-        }
-        
-        APP_SETTINGS_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<Settings>
-\t<ContentFolder>content</ContentFolder>
-\t<BaseUrl>http://www.roblox.com</BaseUrl>
-</Settings>
-"""
-        def log_progress(message):
-            _silent_prefixes = ("DOWNLOAD_PROGRESS:", "EXTRACT_PROGRESS:", "EXTRACT_START:", "EXTRACT_COMPLETE:")
-            if progress_callback:
-                progress_callback(message)
-            if not message.startswith(_silent_prefixes):
-                print(message)
-        
-        try:
-            if not version.startswith("version-"):
-                version = f"version-{version}"
-            
-            if channel == "LIVE":
-                channel_path = HOST_PATH
-            else:
-                channel_path = f"{HOST_PATH}/channel/{channel}"
-            
-            version_path = f"{channel_path}{BLOB_DIR}{version}-"
-            manifest_url = f"{version_path}rbxPkgManifest.txt"
-            
-            log_progress(f"Fetching manifest...")
-            response = requests.get(manifest_url, timeout=30)
-            
-            if response.status_code != 200:
-                channel_path = f"{HOST_PATH}/channel/common"
-                version_path = f"{channel_path}{BLOB_DIR}{version}-"
-                manifest_url = f"{version_path}rbxPkgManifest.txt"
-                response = requests.get(manifest_url, timeout=30)
-            
-            if response.status_code != 200:
-                return False, "Failed to fetch manifest"
-            
-            manifest_text = response.text
-            lines = [line.strip() for line in manifest_text.split('\n')]
-            
-            if not lines or lines[0] != "v0":
-                return False, "Invalid manifest format"
-            
-            if "RobloxApp.zip" not in lines:
-                return False, "Not a WindowsPlayer manifest"
-            
-            packages = [line for line in lines if line.endswith('.zip')]
-            log_progress(f"Found {len(packages)} packages to download")
-            
-            install_path = Path(install_path)
-            install_path.mkdir(parents=True, exist_ok=True)
-            
-            (install_path / "AppSettings.xml").write_text(APP_SETTINGS_XML)
-            
-            total = len(packages)
-            for idx, package_name in enumerate(packages, 1):
-                log_progress(f"[{idx}/{total}] Starting {package_name}...")
-                
-                package_url = f"{version_path}{package_name}"
-                
-                try:
-                    response = requests.get(package_url, stream=True, timeout=60)
-                    
-                    if response.status_code != 200:
-                        log_progress(f"Warning: Failed to download {package_name}, skipping...")
-                        continue
-                    
-                    total_size = int(response.headers.get('content-length', 0))
-                    downloaded = 0
-                    chunks = []
-                    last_reported_percent = -1
-                    
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            chunks.append(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                percent = (downloaded / total_size) * 100
-                                if int(percent) > last_reported_percent or downloaded >= total_size:
-                                    last_reported_percent = int(percent)
-                                    size_mb = downloaded / (1024 * 1024)
-                                    total_mb = total_size / (1024 * 1024)
-                                    log_progress(f"DOWNLOAD_PROGRESS:{package_name}:{percent:.1f}:{size_mb:.2f}:{total_mb:.2f}")
-                    
-                    package_data = b''.join(chunks)
-                    
-                except Exception as e:
-                    log_progress(f"Error downloading {package_name}: {e}")
-                    continue
-                
-                if package_name not in EXTRACT_ROOTS:
-                    log_progress(f"Warning: {package_name} not in extract roots, skipping!")
-                    continue
-                
-                extract_root = EXTRACT_ROOTS[package_name]
-                
-                log_progress(f"EXTRACT_START:{package_name}")
-                
-                try:
-                    with zipfile.ZipFile(io.BytesIO(package_data)) as zf:
-                        members = [m for m in zf.namelist() if not (m.endswith('/') or m.endswith('\\'))]
-                        total_files = len(members)
-                        
-                        for file_idx, member in enumerate(members, 1):
-                            fixed_path = member.replace('\\', '/')
-                            extract_path = install_path / extract_root / fixed_path
-                            extract_path.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            with zf.open(member) as source, open(extract_path, 'wb') as target:
-                                target.write(source.read())
-                            
-                            if file_idx % 10 == 0 or file_idx == total_files:
-                                percent = (file_idx / total_files) * 100
-                                log_progress(f"EXTRACT_PROGRESS:{package_name}:{percent:.1f}")
-                        
-                        log_progress(f"EXTRACT_COMPLETE:{package_name}")
-                except Exception as e:
-                    log_progress(f"Error extracting {package_name}: {e}")
-                    continue
-            
-            exe_path = install_path / "RobloxPlayerBeta.exe"
-            if exe_path.exists():
-                log_progress("Installation complete!")
-                return True, str(install_path)
-            else:
-                log_progress("Warning: RobloxPlayerBeta.exe not found!")
-                return False, "Installation incomplete, RobloxPlayerBeta.exe not found"
-        
-        except Exception as e:
-            error_msg = f"Installation failed: {str(e)}"
-            log_progress(error_msg)
-            return False, error_msg
-    
-    def wipe_all_data(self):
-        """Wipe all saved accounts, encryption config, and settings by deleting entire AccountManagerData folder"""
-        
-        try:
-            if os.path.exists(self.data_folder):
-                shutil.rmtree(self.data_folder)
-                os.makedirs(self.data_folder, exist_ok=True)
-            
-            self.accounts.clear()
-            self.encryption_config.reset_encryption()
-            self.encryptor = None
-            
-            print("[SUCCESS] All data has been wiped")
-        except Exception as e:
-            print(f"[ERROR] Failed to wipe data: {str(e)}")
     
     def switch_encryption_method(self, new_method, password=None, salt=None):
         """Switch to a different encryption method, re-encrypting (or decrypting) saved_accounts.json in place"""

@@ -14,7 +14,8 @@ import string
 import threading
 from typing import Callable
 
-from features.account_actions import get_browser_path
+from classes.operation_result import OperationResult, ensure_result
+from features.account_actions import get_browser_result
 
 MAX_CREATOR_BROWSERS = 5
 MAX_CREATOR_ACCOUNTS = 100
@@ -293,7 +294,14 @@ def create_accounts(
         return
     settings["password"] = custom_password
 
-    browser_path = get_browser_path()
+    browser_result = get_browser_result()
+    if not browser_result:
+        on_done(
+            False,
+            f"{browser_result.message}\n\nError code: {browser_result.code}",
+        )
+        return
+    browser_path = browser_result.data.get("browser_path", "")
 
     def _worker():
         profiles = [
@@ -305,6 +313,8 @@ def create_accounts(
         try:
             worker_count = min(MAX_CREATOR_BROWSERS, requested_amount)
             pending_profiles = Queue()
+            failure_results: list[OperationResult] = []
+            failure_lock = threading.Lock()
             for index, profile in enumerate(profiles):
                 pending_profiles.put((index, profile))
 
@@ -320,7 +330,7 @@ def create_accounts(
                             f"[Account Creator] Slot {slot_index + 1} starting "
                             f"account {index + 1}/{requested_amount}."
                         )
-                        manager.add_account(
+                        result = ensure_result(manager.add_account(
                             amount=1,
                             website=_SIGNUP_URL,
                             javascript_list=[_build_signup_script(profile)],
@@ -328,7 +338,10 @@ def create_accounts(
                             browser_path=browser_path,
                             window_slot=slot_index,
                             window_slot_count=worker_count,
-                        )
+                        ))
+                        if not result:
+                            with failure_lock:
+                                failure_results.append(result)
                     except Exception as e:
                         print(f"[Account Creator] Browser slot failed: {e}")
                     finally:
@@ -359,11 +372,19 @@ def create_accounts(
                 )
                 on_done(True, summary)
             else:
-                on_done(
-                    False,
-                    "No accounts were created. Complete any CAPTCHA shown "
-                    "in the browser and try again if the signup timed out.",
-                )
+                if failure_results:
+                    first_failure = failure_results[0]
+                    on_done(
+                        False,
+                        f"{first_failure.message}\n\n"
+                        f"Error code: {first_failure.code}",
+                    )
+                else:
+                    on_done(
+                        False,
+                        "No accounts were created. Complete any CAPTCHA shown "
+                        "in the browser and try again if the signup timed out.",
+                    )
         except Exception as e:
             print(f"[Account Creator] Failed: {e}")
             on_done(False, str(e))

@@ -209,7 +209,6 @@ class AutoRejoinWorker:
         with self._launch_lock:
             pids_before = _get_roblox_pids()
 
-            acc_data = self.manager.accounts.get(self.account, {})
             ok = self.manager.launch_roblox(
                 self.account, place_id, private_server, "default", job_id, None
             )

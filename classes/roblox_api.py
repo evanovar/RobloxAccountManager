@@ -14,17 +14,7 @@ import shutil
 import threading
 from pathlib import Path
 
-class messagebox:
-    @staticmethod
-    def showerror(title: str, message: str):
-        try:
-            import ctypes
-            # MB_OK | MB_ICONERROR | MB_SYSTEMMODAL = 0x1010
-            ctypes.windll.user32.MessageBoxW(0, str(message), str(title), 0x1010)
-        except Exception:
-            print(f"[ERROR] {title}: {message}")
-
-
+from .operation_result import OperationResult, unexpected_result
 
 class RobloxAPI:
     """Handles all Roblox API interactions"""
@@ -400,25 +390,6 @@ class RobloxAPI:
         return None
     
     @staticmethod
-    def get_user_avatar_url(user_id, size="150x150"):
-        """Get user avatar/thumbnail URL from Roblox API"""
-        try:
-            url = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size={size}&format=Png&isCircular=false"
-            response = requests.get(url, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('data') and len(data['data']) > 0:
-                    image_url = data['data'][0].get('imageUrl')
-                    return image_url
-            else:
-                print(f"[WARNING] Failed to get avatar for user ID {user_id}: Status {response.status_code}")
-        except Exception as e:
-            print(f"[ERROR] Failed to get avatar for user ID {user_id}: {e}")
-        
-        return None
-    
-    @staticmethod
     def get_player_presence(user_id, cookie):
         """Get player's current presence (online status and game info)"""
         url = "https://presence.roblox.com/v1/presence/users"
@@ -470,6 +441,13 @@ class RobloxAPI:
     @staticmethod
     def get_auth_ticket(roblosecurity_cookie):
         """Get authentication ticket for launching Roblox games"""
+        if not str(roblosecurity_cookie or "").strip():
+            return OperationResult.failure(
+                "COOKIE_MISSING",
+                "Account Cookie Missing",
+                "This account does not have a Roblox security cookie.",
+            )
+
         url = "https://auth.roblox.com/v1/authentication-ticket/"
         headers = {
             "User-Agent": "Roblox/WinInet",
@@ -480,89 +458,136 @@ class RobloxAPI:
         }
 
         try:
-            response = requests.post(url, headers=headers, timeout=5)
-            if response.status_code == 403 and "x-csrf-token" in response.headers:
-                csrf_token = response.headers["x-csrf-token"]
-                RobloxAPI._last_error = None
-            elif response.status_code == 403:
-                print(f"[ERROR] Failed to get auth ticket, status: 403 (cookie expired or invalid)")
-                RobloxAPI._last_error = "expired_cookie"
-                return None
-            else:
-                print(f"[ERROR] Failed to get auth ticket, status: {response.status_code}")
-                RobloxAPI._last_error = None
-                return None
+            csrf_token = ""
+            for attempt in range(4):
+                response = requests.post(url, headers=headers, timeout=8)
+                if response.status_code == 403 and response.headers.get("x-csrf-token"):
+                    csrf_token = response.headers["x-csrf-token"]
+                    break
+                if response.status_code in (401, 403):
+                    print(
+                        f"[ERROR] Authentication ticket rejected with HTTP "
+                        f"{response.status_code}."
+                    )
+                    return OperationResult.failure(
+                        "COOKIE_INVALID",
+                        "Account Cookie Invalid",
+                        "Roblox rejected this account cookie. Re-add or re-import the account.",
+                        detail=f"Authentication ticket request returned HTTP {response.status_code}.",
+                    )
+                if response.status_code == 429:
+                    wait = 2 ** attempt
+                    print(
+                        f"[WARNING] Authentication ticket request rate limited. "
+                        f"Retrying in {wait}s."
+                    )
+                    time.sleep(wait)
+                    continue
+                return OperationResult.failure(
+                    "AUTH_REQUEST_FAILED",
+                    "Roblox Authentication Failed",
+                    "Roblox did not accept the authentication request.",
+                    detail=f"Initial authentication request returned HTTP {response.status_code}.",
+                    retryable=response.status_code >= 500,
+                )
+
+            if not csrf_token:
+                return OperationResult.failure(
+                    "RATE_LIMITED",
+                    "Roblox Rate Limit",
+                    "Roblox temporarily rate-limited authentication. Wait a moment and try again.",
+                    detail="The CSRF request remained rate limited after four attempts.",
+                    retryable=True,
+                )
 
             headers["X-CSRF-TOKEN"] = csrf_token
-
             for attempt in range(4):
-                response2 = requests.post(url, headers=headers, timeout=5)
-                if response2.status_code == 200:
-                    auth_ticket = response2.headers.get("rbx-authentication-ticket")
+                response = requests.post(url, headers=headers, timeout=8)
+                if response.status_code == 200:
+                    auth_ticket = response.headers.get("rbx-authentication-ticket")
                     if auth_ticket:
-                        return auth_ticket
-                    print("[ERROR] Authentication ticket header missing in response.")
-                    return None
-                elif response2.status_code == 429:
+                        return OperationResult.success(data=auth_ticket)
+                    return OperationResult.failure(
+                        "AUTH_TICKET_MISSING",
+                        "Authentication Ticket Missing",
+                        "Roblox responded without an authentication ticket. Try again shortly.",
+                        detail="HTTP 200 response did not include rbx-authentication-ticket.",
+                        retryable=True,
+                    )
+                if response.status_code in (401, 403):
+                    return OperationResult.failure(
+                        "COOKIE_INVALID",
+                        "Account Cookie Invalid",
+                        "Roblox rejected this account cookie. Re-add or re-import the account.",
+                        detail=f"Ticket request returned HTTP {response.status_code}.",
+                    )
+                if response.status_code == 429:
                     wait = 2 ** attempt
-                    print(f"[WARNING] Auth ticket rate limited (429), retrying in {wait}s... (attempt {attempt + 1}/4)")
+                    print(
+                        f"[WARNING] Authentication ticket rate limited. "
+                        f"Retrying in {wait}s."
+                    )
                     time.sleep(wait)
-                else:
-                    print(f"[ERROR] Failed to get auth ticket, status: {response2.status_code}")
-                    return None
+                    continue
+                return OperationResult.failure(
+                    "AUTH_REQUEST_FAILED",
+                    "Roblox Authentication Failed",
+                    "Roblox could not issue an authentication ticket.",
+                    detail=f"Ticket request returned HTTP {response.status_code}.",
+                    retryable=response.status_code >= 500,
+                )
 
-            print("[ERROR] Auth ticket still rate limited after retries.")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Request failed: {e}")
-            return None
+            return OperationResult.failure(
+                "RATE_LIMITED",
+                "Roblox Rate Limit",
+                "Roblox temporarily rate-limited authentication. Wait a moment and try again.",
+                detail="The ticket request remained rate limited after four attempts.",
+                retryable=True,
+            )
+        except requests.Timeout as exc:
+            return OperationResult.failure(
+                "NETWORK_TIMEOUT",
+                "Roblox Request Timed Out",
+                "Roblox did not respond in time. Check your connection and try again.",
+                detail=str(exc),
+                retryable=True,
+            )
+        except requests.ConnectionError as exc:
+            return OperationResult.failure(
+                "NETWORK_UNAVAILABLE",
+                "Roblox Could Not Be Reached",
+                "Check your internet connection and try again.",
+                detail=str(exc),
+                retryable=True,
+            )
+        except requests.RequestException as exc:
+            return OperationResult.failure(
+                "NETWORK_REQUEST_FAILED",
+                "Roblox Request Failed",
+                "The authentication request could not be completed.",
+                detail=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+            )
     
     @staticmethod
-    def get_smallest_server(place_id):
-        """Get the game server with the smallest player count for a given place ID"""
-        try:
-            url = f"https://games.roblox.com/v1/games/{place_id}/servers/Public?sortOrder=Asc&limit=100"
-            headers = {
-                "User-Agent": "Roblox/WinInet"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                servers = data.get('data', [])
-                
-                if servers:
-                    available_servers = [s for s in servers if s.get('playing', 0) < s.get('maxPlayers', 100)]
-                    
-                    if available_servers:
-                        smallest = min(available_servers, key=lambda x: x.get('playing', 0))
-                        return smallest.get('id')
-                    else:
-                        smallest = min(servers, key=lambda x: x.get('playing', 0))
-                        return smallest.get('id')
-                else:
-                    print("[WARNING] No servers found for place")
-                    return None
-            else:
-                print(f"[ERROR] Failed to get servers: HTTP {response.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"[ERROR] Failed to get smallest server: {e}")
-            return None
-    
-    
-    @staticmethod
-    def launch_roblox(username, cookie, game_id, private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
+    def launch_roblox(username, cookie, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         """Launch Roblox game with specified account"""
+        if not str(username or "").strip():
+            return OperationResult.failure(
+                "ACCOUNT_MISSING",
+                "Account Missing",
+                "Select an account before launching Roblox.",
+            )
 
         print(f"[INFO] Getting authentication ticket for {username}...")
-        auth_ticket = RobloxAPI.get_auth_ticket(cookie)
-        if not auth_ticket:
-            print("[ERROR] Failed to get authentication ticket")
-            return False
+        ticket_result = RobloxAPI.get_auth_ticket(cookie)
+        if not ticket_result:
+            print(
+                f"[ERROR] Failed to get authentication ticket: "
+                f"{ticket_result.code}"
+            )
+            return ticket_result
+        auth_ticket = ticket_result.data
 
         print("[SUCCESS] Got authentication ticket!")
 
@@ -591,22 +616,26 @@ class RobloxAPI:
                     if not game_id:
                         game_id = resolved_pid
                     link_code = resolved_lc
-                    print(f"[INFO] Private server link code extracted")
+                    print("[INFO] Private server link code extracted")
                 else:
                     print("[ERROR] Invalid private server input. Expected a numeric code, VIP URL, or share link.")
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "PRIVATE_SERVER_INVALID",
                         "Invalid Private Server",
                         "Could not parse the private server input.\n\n"
                         "Accepted formats:\n"
-                        "• Numeric link code (e.g. 12345678...)\n"
-                        "• VIP URL (.../games/{id}/...?privateServerLinkCode=...)\n"
-                        "• Share URL (roblox.com/share?code=...&type=Server)"
+                        "- Numeric link code\n"
+                        "- VIP URL with privateServerLinkCode\n"
+                        "- Roblox share URL"
                     )
-                    return False
 
         if not game_id:
             print("[ERROR] No Place ID provided.")
-            return False
+            return OperationResult.failure(
+                "GAME_ID_MISSING",
+                "Place ID Missing",
+                "Enter a Place ID or a valid private-server link.",
+            )
 
         url = (
             "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
@@ -642,144 +671,214 @@ class RobloxAPI:
         """Execute the Roblox launch with the specified launcher"""
         try:
             if launcher_preference == "custom":
-                custom_path = Path(str(custom_launcher_path or "").strip())
-                if not custom_path:
-                    messagebox.showerror("Custom Launcher Not Set", "Please choose a custom launcher .exe path in Roblox Launcher settings.")
-                    return False
+                raw_custom_path = str(custom_launcher_path or "").strip()
+                if not raw_custom_path:
+                    return OperationResult.failure(
+                        "CUSTOM_LAUNCHER_NOT_SET",
+                        "Custom Launcher Not Set",
+                        "Choose a custom launcher executable in Roblox Launcher settings.",
+                    )
+                custom_path = Path(raw_custom_path)
                 if custom_path.suffix.lower() != ".exe":
-                    messagebox.showerror("Invalid Custom Launcher", f"Custom launcher must be an .exe file.\n\nSelected:\n{custom_path}")
-                    return False
+                    return OperationResult.failure(
+                        "CUSTOM_LAUNCHER_INVALID",
+                        "Invalid Custom Launcher",
+                        "The custom launcher must be an executable file.",
+                        detail=f"Selected path: {custom_path}",
+                    )
                 if not custom_path.exists():
-                    messagebox.showerror("Custom Launcher Not Found", f"Custom launcher executable was not found.\n\nPath:\n{custom_path}")
-                    return False
+                    return OperationResult.failure(
+                        "LAUNCHER_NOT_FOUND",
+                        "Custom Launcher Not Found",
+                        "The selected custom launcher could not be found.",
+                        detail=f"Expected path: {custom_path}",
+                    )
 
                 subprocess.Popen([str(custom_path), url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print(f"[SUCCESS] Launched with Custom Launcher: {custom_path}")
-                return True
+                return OperationResult.success()
 
             if launcher_preference == "bloxstrap":
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
-                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
-                    return False
+                    return OperationResult.failure(
+                        "LOCALAPPDATA_MISSING",
+                        "Windows App Data Missing",
+                        "The LOCALAPPDATA directory could not be located.",
+                    )
                 
                 bloxstrap_path = Path(local_appdata) / 'Bloxstrap' / 'Bloxstrap.exe'
                 if not bloxstrap_path.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "LAUNCHER_NOT_FOUND",
                         "Bloxstrap Not Found",
-                        f"Bloxstrap is not installed.\n\nExpected location:\n{bloxstrap_path}\n\nPlease install Bloxstrap or select a different launcher."
+                        "Bloxstrap is not installed. Install it or select another launcher.",
+                        detail=f"Expected path: {bloxstrap_path}",
                     )
-                    return False
                 
                 subprocess.Popen([str(bloxstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print("[SUCCESS] Launched with Bloxstrap!")
-                return True
+                return OperationResult.success()
             
             elif launcher_preference == "fishstrap":
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
-                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
-                    return False
+                    return OperationResult.failure(
+                        "LOCALAPPDATA_MISSING",
+                        "Windows App Data Missing",
+                        "The LOCALAPPDATA directory could not be located.",
+                    )
                 
                 fishstrap_path = Path(local_appdata) / 'Fishstrap' / 'Fishstrap.exe'
                 if not fishstrap_path.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "LAUNCHER_NOT_FOUND",
                         "Fishstrap Not Found",
-                        f"Fishstrap is not installed.\n\nExpected location:\n{fishstrap_path}\n\nPlease install Fishstrap or select a different launcher."
+                        "Fishstrap is not installed. Install it or select another launcher.",
+                        detail=f"Expected path: {fishstrap_path}",
                     )
-                    return False
                 
                 subprocess.Popen([str(fishstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print("[SUCCESS] Launched with Fishstrap!")
-                return True
+                return OperationResult.success()
             
             elif launcher_preference == "froststrap":
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
-                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
-                    return False
+                    return OperationResult.failure(
+                        "LOCALAPPDATA_MISSING",
+                        "Windows App Data Missing",
+                        "The LOCALAPPDATA directory could not be located.",
+                    )
                 
                 froststrap_path = Path(local_appdata) / 'Froststrap' / 'Froststrap.exe'
                 if not froststrap_path.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "LAUNCHER_NOT_FOUND",
                         "Froststrap Not Found",
-                        f"Froststrap is not installed.\n\nExpected location:\n{froststrap_path}\n\nPlease install Froststrap or select a different launcher."
+                        "Froststrap is not installed. Install it or select another launcher.",
+                        detail=f"Expected path: {froststrap_path}",
                     )
-                    return False
                 
                 subprocess.Popen([str(froststrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print("[SUCCESS] Launched with Froststrap!")
-                return True
+                return OperationResult.success()
             
             elif launcher_preference == "voidstrap":
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
-                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
-                    return False
+                    return OperationResult.failure(
+                        "LOCALAPPDATA_MISSING",
+                        "Windows App Data Missing",
+                        "The LOCALAPPDATA directory could not be located.",
+                    )
                 
                 voidstrap_path = Path(local_appdata) / 'Voidstrap' / 'Voidstrap.exe'
                 if not voidstrap_path.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "LAUNCHER_NOT_FOUND",
                         "Voidstrap Not Found",
-                        f"Voidstrap is not installed.\n\nExpected location:\n{voidstrap_path}\n\nPlease install Voidstrap or select a different launcher."
+                        "Voidstrap is not installed. Install it or select another launcher.",
+                        detail=f"Expected path: {voidstrap_path}",
                     )
-                    return False
                 
                 subprocess.Popen([str(voidstrap_path), "-player", url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print("[SUCCESS] Launched with Voidstrap!")
-                return True
+                return OperationResult.success()
             
             elif launcher_preference == "client":
                 RobloxAPI.quarantine_installers()
                 
                 local_appdata = os.getenv('LOCALAPPDATA')
                 if not local_appdata:
-                    messagebox.showerror("Error", "Could not find LOCALAPPDATA directory.")
-                    return False
+                    return OperationResult.failure(
+                        "LOCALAPPDATA_MISSING",
+                        "Windows App Data Missing",
+                        "The LOCALAPPDATA directory could not be located.",
+                    )
                 
                 versions_dir = Path(local_appdata) / 'Roblox' / 'Versions'
                 if not versions_dir.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "ROBLOX_NOT_INSTALLED",
                         "Roblox Client Not Found",
-                        f"Roblox client directory not found.\n\nExpected location:\n{versions_dir}\n\nPlease install Roblox or select a different launcher."
+                        "Roblox Player does not appear to be installed.",
+                        detail=f"Expected directory: {versions_dir}",
                     )
-                    return False
                 
                 version_folders = [d for d in versions_dir.iterdir() if d.is_dir() and d.name.startswith('version-')]
                 if not version_folders:
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "ROBLOX_NOT_INSTALLED",
                         "Roblox Client Not Found",
-                        f"No Roblox version found in:\n{versions_dir}\n\nPlease reinstall Roblox or select a different launcher."
+                        "No installed Roblox Player version could be found.",
+                        detail=f"Versions directory: {versions_dir}",
                     )
-                    return False
                 
                 latest_version = max(version_folders, key=lambda x: x.stat().st_mtime)
                 client_path = latest_version / 'RobloxPlayerBeta.exe'
                 
                 if not client_path.exists():
-                    messagebox.showerror(
+                    return OperationResult.failure(
+                        "ROBLOX_EXECUTABLE_MISSING",
                         "Roblox Client Not Found",
-                        f"RobloxPlayerBeta.exe not found in:\n{latest_version}\n\nPlease reinstall Roblox or select a different launcher."
+                        "The Roblox Player executable is missing. Reinstall Roblox or select another launcher.",
+                        detail=f"Expected path: {client_path}",
                     )
-                    return False
                 
                 subprocess.Popen([str(client_path), url], creationflags=subprocess.CREATE_NO_WINDOW)
                 print(f"[SUCCESS] Launched with Roblox Client from {latest_version.name}!")
-                return True
+                return OperationResult.success()
             
-            else:  # default
+            elif launcher_preference == "default":
                 os.startfile(url)
                 print("[SUCCESS] Roblox launched successfully!")
-                return True
+                return OperationResult.success()
+
+            return OperationResult.failure(
+                "LAUNCHER_INVALID",
+                "Invalid Roblox Launcher",
+                "The configured Roblox launcher is not supported.",
+                detail=f"Configured launcher: {launcher_preference}",
+            )
                 
-        except Exception as e:
-            print(f"[ERROR] Failed to launch Roblox: {e}")
-            messagebox.showerror("Launch Error", f"Failed to launch Roblox:\n\n{str(e)}")
-            return False
+        except PermissionError as exc:
+            print(f"[ERROR] Roblox launch permission error: {exc}")
+            return OperationResult.failure(
+                "LAUNCH_PERMISSION_DENIED",
+                "Roblox Launch Blocked",
+                "Windows denied permission to start the selected launcher.",
+                detail=str(exc),
+            )
+        except FileNotFoundError as exc:
+            print(f"[ERROR] Roblox launcher file missing: {exc}")
+            return OperationResult.failure(
+                "LAUNCHER_NOT_FOUND",
+                "Roblox Launcher Not Found",
+                "The selected Roblox launcher could not be found.",
+                detail=str(exc),
+            )
+        except OSError as exc:
+            print(f"[ERROR] Failed to launch Roblox: {exc}")
+            return OperationResult.failure(
+                "ROBLOX_LAUNCH_FAILED",
+                "Roblox Could Not Start",
+                "Windows could not start Roblox. Check the selected launcher and try again.",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception as exc:
+            print(f"[ERROR] Failed to launch Roblox: {exc}")
+            return unexpected_result("Launching Roblox", exc)
     
     @staticmethod
-    def validate_account(username, cookie):
-        """Validate if an account's cookie is still valid"""
+    def validate_cookie(cookie):
+        """Validate a Roblox security cookie with detailed status."""
+        if not str(cookie or "").strip():
+            return OperationResult.failure(
+                "COOKIE_MISSING",
+                "Account Cookie Missing",
+                "No Roblox security cookie was provided.",
+            )
         try:
             headers = {
                 'Cookie': f'.ROBLOSECURITY={cookie}'
@@ -787,8 +886,45 @@ class RobloxAPI:
             response = requests.get(
                 'https://users.roblox.com/v1/users/authenticated',
                 headers=headers,
-                timeout=3
+                timeout=8
             )
-            return response.status_code == 200
-        except Exception:
-            return False
+            if response.status_code == 200:
+                return OperationResult.success()
+            if response.status_code in (401, 403):
+                return OperationResult.failure(
+                    "COOKIE_INVALID",
+                    "Account Cookie Invalid",
+                    "Roblox rejected this account cookie. Copy a new cookie and try again.",
+                    detail=f"Cookie validation returned HTTP {response.status_code}.",
+                )
+            if response.status_code == 429:
+                return OperationResult.failure(
+                    "RATE_LIMITED",
+                    "Roblox Rate Limit",
+                    "Roblox temporarily rate-limited validation. Wait a moment and try again.",
+                    detail="Cookie validation returned HTTP 429.",
+                    retryable=True,
+                )
+            return OperationResult.failure(
+                "COOKIE_VALIDATION_FAILED",
+                "Cookie Could Not Be Verified",
+                "Roblox could not verify the account cookie. Try again shortly.",
+                detail=f"Cookie validation returned HTTP {response.status_code}.",
+                retryable=response.status_code >= 500,
+            )
+        except requests.Timeout as exc:
+            return OperationResult.failure(
+                "NETWORK_TIMEOUT",
+                "Roblox Request Timed Out",
+                "Roblox did not respond in time. Check your connection and try again.",
+                detail=str(exc),
+                retryable=True,
+            )
+        except requests.RequestException as exc:
+            return OperationResult.failure(
+                "NETWORK_REQUEST_FAILED",
+                "Roblox Could Not Be Reached",
+                "The cookie could not be verified because Roblox could not be reached.",
+                detail=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+            )

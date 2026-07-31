@@ -125,9 +125,7 @@ class CookieValidator:
         self._stop_evt.set()
 
     def _run(self) -> None:
-        # print("[INFO] Cookie validation started.")
         accounts_snapshot = list(self._manager.accounts.items())
-        checked = 0
 
         for username, data in accounts_snapshot:
             if self._stop_evt.is_set():
@@ -140,7 +138,6 @@ class CookieValidator:
                 continue
 
             status, detail = _check(cookie)
-            checked += 1
             _set_status(self._manager, username, status)
 
             if status == INVALID:
@@ -162,7 +159,6 @@ class CookieValidator:
             if not self._stop_evt.wait(timeout=self._delay):
                 pass
 
-        # print(f"[INFO] Cookie validation complete. Checked {checked} account(s).")
         try:
             self._on_done()
         except Exception:

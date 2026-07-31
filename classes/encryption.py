@@ -97,7 +97,6 @@ class HardwareEncryption:
         if self.legacy_key and self.legacy_key != self.key:
             keys.append(self.legacy_key)
 
-        last_error = None
         for key in keys:
             try:
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -107,8 +106,8 @@ class HardwareEncryption:
                     return json.loads(data_string)
                 except Exception:
                     return data_string
-            except Exception as exc:
-                last_error = exc
+            except Exception:
+                pass
 
         raise Exception("Decryption failed. This program may have been encrypted on a different machine.")
 
@@ -254,13 +253,8 @@ class EncryptionConfig:
         self.config['encryption_method'] = 'password'
         self.config['salt'] = salt
         self.config['password_hash'] = password_hash
-        self.config['password_verified'] = True
         self.config['setup_completed'] = True
         self.save_config()
-    
-    def is_password_verified(self):
-        """Check if password has been verified with actual data"""
-        return self.config.get('password_verified', False)
     
     def disable_encryption(self):
         """Disable encryption"""

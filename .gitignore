@@ -52,3 +52,4 @@ website/
 .claude/
 AGENTS.md
 .agents/
+tests/
