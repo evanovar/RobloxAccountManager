@@ -37,7 +37,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
-    QPalette, QPixmap, QPolygon, QTextCharFormat,
+    QKeySequence, QPalette, QPixmap, QPolygon, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
@@ -69,6 +69,7 @@ import features.roblox_downloader as roblox_downloader_mod
 import features.updater as updater_mod
 import features.webhook as webhook
 import features.websocket_server as ws_mod
+import features.window_grid as window_grid_mod
 
 
 class _DragDropFilter(QObject):
@@ -440,12 +441,114 @@ class _FloatingTooltip(QWidget):
         except Exception:
             pass
 
+class _HotkeyCaptureButton(QPushButton):
+    recording_started = Signal()
+    recording_canceled = Signal()
+    sequence_changed = Signal(str)
+
+    _MODIFIER_KEYS = {
+        Qt.Key.Key_Control,
+        Qt.Key.Key_Shift,
+        Qt.Key.Key_Alt,
+        Qt.Key.Key_Meta,
+    }
+
+    def __init__(self, sequence: str, parent=None):
+        super().__init__(parent)
+        self._sequence = sequence or window_grid_mod.DEFAULT_HOTKEY
+        self._recording = False
+        self._pending_sequence = ""
+        self._pending_key = 0
+        self.setText(self._sequence)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.clicked.connect(self._begin_recording)
+
+    def set_sequence(self, sequence: str) -> None:
+        self._sequence = sequence or window_grid_mod.DEFAULT_HOTKEY
+        if not self._recording:
+            self.setText(self._sequence)
+
+    def _begin_recording(self) -> None:
+        if self._recording:
+            return
+        self._recording = True
+        self._pending_sequence = ""
+        self._pending_key = 0
+        self.setText("Recording...")
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.grabKeyboard()
+        self.recording_started.emit()
+
+    def _finish_recording(self) -> None:
+        sequence = self._pending_sequence
+        self._recording = False
+        self._pending_sequence = ""
+        self._pending_key = 0
+        self.releaseKeyboard()
+        self._sequence = sequence
+        self.setText(sequence)
+        self.sequence_changed.emit(sequence)
+
+    def _cancel_recording(self) -> None:
+        if not self._recording:
+            return
+        self._recording = False
+        self._pending_sequence = ""
+        self._pending_key = 0
+        self.releaseKeyboard()
+        self.setText(self._sequence)
+        self.recording_canceled.emit()
+
+    def keyPressEvent(self, event) -> None:
+        if not self._recording:
+            super().keyPressEvent(event)
+            return
+        if event.isAutoRepeat():
+            event.accept()
+            return
+
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self._cancel_recording()
+            event.accept()
+            return
+        if key in self._MODIFIER_KEYS:
+            event.accept()
+            return
+
+        sequence = QKeySequence(event.keyCombination()).toString(
+            QKeySequence.SequenceFormat.PortableText
+        )
+        if sequence:
+            self._pending_sequence = sequence
+            self._pending_key = key
+            self.setText("Release to assign")
+        event.accept()
+
+    def keyReleaseEvent(self, event) -> None:
+        if not self._recording:
+            super().keyReleaseEvent(event)
+            return
+        if (
+            self._pending_sequence
+            and event.key() == self._pending_key
+        ):
+            self._finish_recording()
+        event.accept()
+
+    def focusOutEvent(self, event) -> None:
+        if self._recording:
+            self._cancel_recording()
+        super().focusOutEvent(event)
+
 class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
         self.manager = manager
         self._last_operation_error = ("", 0.0)
         self._chromium_download_active = False
+        self._window_grid_hotkey_registered = False
+        self._window_grid_hotkey_hwnd = 0
         self._diagnostics_heartbeat = QTimer(self)
         self._diagnostics_heartbeat.setInterval(5000)
         self._diagnostics_heartbeat.timeout.connect(diagnostics.pulse_ui)
@@ -601,6 +704,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         if S.get("headless_manager_enabled", False):
             self._start_headless_manager()
+
+        if S.get("window_grid_enabled", False):
+            QTimer.singleShot(
+                0,
+                lambda: self._apply_window_grid_hotkey(show_error=False),
+            )
 
         QTimer.singleShot(2000, self._start_cookie_validator)
         QTimer.singleShot(500, self._start_update_check)
@@ -2121,6 +2230,52 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if actions.load_ui_settings().get("presence_indicator", False):
             self._start_presence_scanner()
 
+        f.addWidget(_sec("WINDOW GRID"))
+        self._sett_window_grid_chk = _chk(
+            "window_grid_enabled", "Enable Window Grid Keybind",
+            "Register a global keybind that arranges every visible Roblox window\n"
+            "into an equal grid on the monitor under your cursor.",
+            on_change=self._on_sett_window_grid,
+        )
+        f.addWidget(self._sett_window_grid_chk)
+
+        window_grid_row = QHBoxLayout()
+        window_grid_row.setContentsMargins(20, 0, 0, 0)
+        window_grid_label = QLabel("Keybind")
+        window_grid_label.setToolTip(
+            "Click the button, press a shortcut, then release its main key."
+        )
+        window_grid_row.addWidget(window_grid_label)
+        window_grid_row.addStretch(1)
+        self._sett_window_grid_key_btn = _HotkeyCaptureButton(
+            str(
+                S.get(
+                    "window_grid_keybind",
+                    window_grid_mod.DEFAULT_HOTKEY,
+                )
+                or window_grid_mod.DEFAULT_HOTKEY
+            )
+        )
+        self._sett_window_grid_key_btn.setFixedWidth(150)
+        self._sett_window_grid_key_btn.setEnabled(
+            bool(S.get("window_grid_enabled", False))
+        )
+        self._sett_window_grid_key_btn.setToolTip(
+            "Click to record a global keybind. Press Escape to cancel.\n"
+            f"Default: {window_grid_mod.DEFAULT_HOTKEY}"
+        )
+        self._sett_window_grid_key_btn.recording_started.connect(
+            self._unregister_window_grid_hotkey
+        )
+        self._sett_window_grid_key_btn.recording_canceled.connect(
+            self._restore_window_grid_hotkey_after_recording
+        )
+        self._sett_window_grid_key_btn.sequence_changed.connect(
+            self._on_sett_window_grid_keybind
+        )
+        window_grid_row.addWidget(self._sett_window_grid_key_btn)
+        f.addLayout(window_grid_row)
+
         f.addWidget(_sec("FIXES"))
         self._sett_installer_fix_chk = _chk(
             "roblox_installer_fix", "Roblox Installer Fix",
@@ -2560,9 +2715,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         current = bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
         if current == enabled:
             return
+        restore_window_grid = self._window_grid_hotkey_registered
+        if restore_window_grid:
+            self._unregister_window_grid_hotkey()
         self.hide()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
         self.show()
+        if restore_window_grid:
+            QTimer.singleShot(
+                0,
+                lambda: self._apply_window_grid_hotkey(show_error=False),
+            )
         print(f"[INFO] Always on Top {'enabled' if enabled else 'disabled'}")
 
     def _on_sett_multi_select(self, enabled: bool):
@@ -2649,6 +2812,92 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 RobloxAPI.set_framerate_cap(value)
             except Exception as e:
                 print(f"[ERROR] Failed to apply framerate cap: {e}")
+
+    def _unregister_window_grid_hotkey(self) -> None:
+        if self._window_grid_hotkey_registered:
+            window_grid_mod.unregister_hotkey(
+                self._window_grid_hotkey_hwnd
+            )
+        self._window_grid_hotkey_registered = False
+        self._window_grid_hotkey_hwnd = 0
+
+    def _apply_window_grid_hotkey(self, show_error: bool = True) -> bool:
+        self._unregister_window_grid_hotkey()
+        settings = actions.load_ui_settings()
+        if not settings.get("window_grid_enabled", False):
+            return True
+
+        sequence = str(
+            settings.get(
+                "window_grid_keybind",
+                window_grid_mod.DEFAULT_HOTKEY,
+            )
+            or window_grid_mod.DEFAULT_HOTKEY
+        )
+        window_handle = int(self.winId())
+        result = window_grid_mod.register_hotkey(window_handle, sequence)
+        if result:
+            self._window_grid_hotkey_registered = True
+            self._window_grid_hotkey_hwnd = window_handle
+            print(f"[Window Grid] Keybind enabled: {sequence}")
+            return True
+
+        print(f"[Window Grid] {result.code}: {result.message}")
+        if result.code == "WINDOW_GRID_KEYBIND_INVALID":
+            invalid_result = result
+            default_sequence = window_grid_mod.DEFAULT_HOTKEY
+            actions.save_ui_setting(
+                "window_grid_keybind",
+                default_sequence,
+            )
+            if hasattr(self, "_sett_window_grid_key_btn"):
+                self._sett_window_grid_key_btn.set_sequence(
+                    default_sequence
+                )
+
+            result = window_grid_mod.register_hotkey(
+                window_handle,
+                default_sequence,
+            )
+            if result:
+                self._window_grid_hotkey_registered = True
+                self._window_grid_hotkey_hwnd = window_handle
+                print(
+                    f"[Window Grid] Invalid keybind reset to "
+                    f"{default_sequence}."
+                )
+                if show_error:
+                    self._show_operation_error(invalid_result)
+                return True
+
+        actions.save_ui_setting("window_grid_enabled", False)
+        if hasattr(self, "_sett_window_grid_chk"):
+            self._sett_window_grid_chk.blockSignals(True)
+            self._sett_window_grid_chk.setChecked(False)
+            self._sett_window_grid_chk.blockSignals(False)
+        if hasattr(self, "_sett_window_grid_key_btn"):
+            self._sett_window_grid_key_btn.setEnabled(False)
+        if show_error:
+            self._show_operation_error(result)
+        return False
+
+    def _on_sett_window_grid(self, enabled: bool) -> None:
+        if hasattr(self, "_sett_window_grid_key_btn"):
+            self._sett_window_grid_key_btn.setEnabled(enabled)
+        if enabled:
+            self._apply_window_grid_hotkey()
+        else:
+            self._unregister_window_grid_hotkey()
+            print("[Window Grid] Keybind disabled.")
+
+    def _restore_window_grid_hotkey_after_recording(self) -> None:
+        if actions.load_ui_settings().get("window_grid_enabled", False):
+            self._apply_window_grid_hotkey(show_error=False)
+
+    def _on_sett_window_grid_keybind(self, sequence: str) -> None:
+        actions.save_ui_setting("window_grid_keybind", sequence)
+        if actions.load_ui_settings().get("window_grid_enabled", False):
+            self._apply_window_grid_hotkey()
 
     _HM_HIDDEN_COLOR = "#4CAF50"
     _HM_SHOWN_COLOR = "#EF5350"
@@ -3897,7 +4146,21 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._ar_workers.clear()
         self._ar_refresh_list()
 
+    def nativeEvent(self, event_type, message):
+        if window_grid_mod.is_hotkey_message(message):
+            result = window_grid_mod.tile_roblox_windows()
+            if not result:
+                print(f"[Window Grid] {result.code}: {result.message}")
+                if result.detail:
+                    print(f"[Window Grid] {result.detail}")
+            return True, 0
+        return super().nativeEvent(event_type, message)
+
     def closeEvent(self, event):
+        try:
+            self._unregister_window_grid_hotkey()
+        except Exception:
+            pass
         try:
             for worker in list(self._ar_workers.values()):
                 worker.stop(join_timeout=1.0)
