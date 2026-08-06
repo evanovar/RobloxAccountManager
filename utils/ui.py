@@ -36,7 +36,7 @@ from PySide6.QtCore import (
     QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
+    QAction, QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
     QKeySequence, QPalette, QPixmap, QPolygon, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
-    QSizePolicy, QSpinBox, QStackedWidget, QTabWidget, QTextEdit,
+    QSizePolicy, QSpinBox, QStackedWidget, QSystemTrayIcon, QTabWidget, QTextEdit,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -547,6 +547,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self.manager = manager
         self._last_operation_error = ("", 0.0)
         self._chromium_download_active = False
+        self._tray_icon: QSystemTrayIcon | None = None
+        self._tray_menu: QMenu | None = None
+        self._tray_exit_requested = False
+        self._tray_restore_maximized = False
+        self._shutdown_cleanup_done = False
         self._window_grid_hotkey_registered = False
         self._window_grid_hotkey_hwnd = 0
         self._diagnostics_heartbeat = QTimer(self)
@@ -640,6 +645,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._apply_stylesheet()
         self._build_ui()
+        self._setup_system_tray()
 
         _data_folder = get_data_dir()
         _enc_cfg = EncryptionConfig(os.path.join(_data_folder, "encryption_config.json"))
@@ -2071,6 +2077,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_change=self._on_sett_topmost,
         )
         f.addWidget(self._sett_topmost_chk)
+
+        self._sett_tray_chk = _chk(
+            "hide_to_system_tray", "Hide to System Tray",
+            "Keep Evanovar RAM running in the system tray when the main window is closed.\n"
+            "Use the tray icon to show the window again or exit the application.",
+            on_change=self._on_sett_tray,
+        )
+        f.addWidget(self._sett_tray_chk)
 
         f.addWidget(_sec("LAUNCH"))
         self._sett_confirm_chk = _chk(
@@ -4161,7 +4175,135 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return True, 0
         return super().nativeEvent(event_type, message)
 
-    def closeEvent(self, event):
+    def _setup_system_tray(self) -> None:
+        if actions.load_ui_settings().get("hide_to_system_tray", False):
+            result = self._enable_system_tray()
+            if not result:
+                self._set_tray_checkbox(False)
+                actions.save_ui_setting("hide_to_system_tray", False)
+                self._show_operation_error(result)
+
+    def _set_tray_checkbox(self, enabled: bool) -> None:
+        if not hasattr(self, "_sett_tray_chk"):
+            return
+        self._sett_tray_chk.blockSignals(True)
+        self._sett_tray_chk.setChecked(enabled)
+        self._sett_tray_chk.blockSignals(False)
+
+    def _enable_system_tray(self) -> OperationResult:
+        if self._tray_icon:
+            self._tray_icon.show()
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            return OperationResult.success()
+
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return OperationResult.failure(
+                "SYSTEM_TRAY_UNAVAILABLE",
+                "System Tray Unavailable",
+                "Windows did not provide a system tray for Evanovar RAM.",
+                detail="QSystemTrayIcon.isSystemTrayAvailable() returned false.",
+            )
+
+        try:
+            icon = QIcon(self._icon_path) if self._icon_path else QApplication.windowIcon()
+            if icon.isNull():
+                return OperationResult.failure(
+                    "SYSTEM_TRAY_SETUP_FAILED",
+                    "System Tray Setup Failed",
+                    "The application icon could not be loaded for the system tray.",
+                    detail="No valid application icon was available.",
+                )
+
+            tray_icon = QSystemTrayIcon(icon, self)
+            tray_icon.setToolTip("Evanovar's Roblox Account Manager")
+            menu = QMenu(self)
+            show_action = QAction("Show UI", self)
+            exit_action = QAction("Exit", self)
+            show_action.triggered.connect(self._show_from_tray)
+            exit_action.triggered.connect(self._exit_from_tray)
+            menu.addAction(show_action)
+            menu.addSeparator()
+            menu.addAction(exit_action)
+            tray_icon.setContextMenu(menu)
+            tray_icon.activated.connect(self._on_tray_activated)
+            tray_icon.show()
+
+            self._tray_icon = tray_icon
+            self._tray_menu = menu
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            return OperationResult.success()
+        except Exception as exc:
+            print(f"[ERROR] Failed to create system tray icon: {exc}")
+            return OperationResult.failure(
+                "SYSTEM_TRAY_SETUP_FAILED",
+                "System Tray Setup Failed",
+                "The system tray icon could not be created.",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+
+    def _disable_system_tray(self) -> None:
+        tray_icon = self._tray_icon
+        tray_menu = self._tray_menu
+        self._tray_icon = None
+        self._tray_menu = None
+        if tray_icon:
+            tray_icon.hide()
+            tray_icon.setContextMenu(None)
+            tray_icon.deleteLater()
+        if tray_menu:
+            tray_menu.deleteLater()
+        app = QApplication.instance()
+        if app:
+            app.setQuitOnLastWindowClosed(True)
+
+    def _on_sett_tray(self, enabled: bool) -> None:
+        if enabled:
+            result = self._enable_system_tray()
+            if result:
+                actions.save_ui_setting("hide_to_system_tray", True)
+                return
+            self._set_tray_checkbox(False)
+            actions.save_ui_setting("hide_to_system_tray", False)
+            self._show_operation_error(result)
+            return
+
+        actions.save_ui_setting("hide_to_system_tray", False)
+        self._disable_system_tray()
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._show_from_tray()
+
+    def _show_from_tray(self) -> None:
+        try:
+            self.show()
+            if self._tray_restore_maximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        except Exception as exc:
+            print(f"[ERROR] Failed to restore UI from system tray: {exc}")
+            _show_error(
+                self,
+                "System Tray Restore Failed",
+                "The main window could not be restored from the system tray.\n\n"
+                f"Error code: SYSTEM_TRAY_RESTORE_FAILED\n\n{exc}",
+            )
+
+    def _exit_from_tray(self) -> None:
+        self._tray_exit_requested = True
+        self.close()
+
+    def _perform_shutdown_cleanup(self) -> None:
+        if self._shutdown_cleanup_done:
+            return
+        self._shutdown_cleanup_done = True
+
         try:
             self._unregister_window_grid_hotkey()
         except Exception:
@@ -4209,6 +4351,20 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._stop_headless_manager()
         except Exception as e:
             print(f"[ERROR] Failed to restore Roblox windows: {e}")
+        self._disable_system_tray()
+
+    def closeEvent(self, event):
+        hide_to_tray = actions.load_ui_settings().get(
+            "hide_to_system_tray",
+            False,
+        )
+        if hide_to_tray and not self._tray_exit_requested:
+            self._tray_restore_maximized = self.isMaximized()
+            event.ignore()
+            self.hide()
+            return
+
+        self._perform_shutdown_cleanup()
         super().closeEvent(event)
 
     def _ar_on_remove(self):
@@ -6549,6 +6705,7 @@ def main(icon_path: str | None = None) -> int:
     try:
         diagnostics.set_startup_stage("creating main window")
         window = AccountManagerUIQt(manager, icon_path=icon_path)
+        app.aboutToQuit.connect(window._perform_shutdown_cleanup)
     except Exception as exc:
         crash_path = diagnostics.report_exception(
             "Creating the main window",
