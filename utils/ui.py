@@ -70,6 +70,7 @@ import features.updater as updater_mod
 import features.webhook as webhook
 import features.websocket_server as ws_mod
 import features.window_grid as window_grid_mod
+import features.windows_startup as windows_startup_mod
 
 
 class _DragDropFilter(QObject):
@@ -2131,6 +2132,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         f.addWidget(self._sett_startmenu_chk)
 
+        _startup_enabled = windows_startup_mod.is_startup_enabled()
+        actions.save_ui_setting("start_with_windows", _startup_enabled)
+        self._sett_startup_chk = QCheckBox("Start with Windows")
+        self._sett_startup_chk.setChecked(_startup_enabled)
+        self._sett_startup_chk.setToolTip(
+            "Start Evanovar RAM automatically when you sign in to Windows.\n"
+            "This creates a shortcut in your Windows Startup folder."
+        )
+        self._sett_startup_chk.stateChanged.connect(self._on_sett_startup)
+        f.addWidget(self._sett_startup_chk)
+
         f.addWidget(_sec("RECENT GAMES"))
         mg_row = QHBoxLayout()
         mg_row.setContentsMargins(0, 0, 0, 0)
@@ -2782,6 +2794,29 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     print("[INFO] Start Menu shortcut removed")
             except Exception as e:
                 print(f"[ERROR] Failed to remove shortcut: {e}")
+
+    def _set_startup_checkbox(self, enabled: bool) -> None:
+        if not hasattr(self, "_sett_startup_chk"):
+            return
+        self._sett_startup_chk.blockSignals(True)
+        self._sett_startup_chk.setChecked(enabled)
+        self._sett_startup_chk.blockSignals(False)
+
+    def _on_sett_startup(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        result = (
+            windows_startup_mod.enable_startup()
+            if enabled
+            else windows_startup_mod.disable_startup()
+        )
+        if result:
+            actions.save_ui_setting("start_with_windows", enabled)
+            print(f"[INFO] Start with Windows {'enabled' if enabled else 'disabled'}")
+            return
+
+        self._set_startup_checkbox(not enabled)
+        actions.save_ui_setting("start_with_windows", not enabled)
+        self._show_operation_error(result)
 
     def _on_sett_boost_ram(self, enabled: bool):
         if hasattr(self, "_sett_ram_spin"):
