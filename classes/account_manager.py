@@ -159,7 +159,7 @@ class RobloxAccountManager:
         return self.secure_settings.get(key, default)
 
     def create_temp_profile(self):
-        # Create a temporary Chrome profile directory.
+        # Create a temporary browser profile directory.
         self.temp_profile_dir = tempfile.mkdtemp(prefix="roblox_login_")
         return self.temp_profile_dir
     
@@ -172,113 +172,163 @@ class RobloxAccountManager:
             except:
                 pass
     
-    def setup_chrome_driver(self, browser_path=None):
-        print(f"[INFO] setup_chrome_driver called with browser_path: {browser_path}")
+    @staticmethod
+    def _browser_value(browser, key, default=""):
+        if isinstance(browser, dict):
+            return browser.get(key, default)
+        return getattr(browser, key, default)
+
+    def setup_browser_driver(self, browser=None, browser_path=None):
+        if browser is None:
+            selected_key = "chromium" if browser_path and "chromium" in browser_path.lower() else "chrome"
+            bundled_driver = (
+                os.path.join(os.path.dirname(browser_path), "chromedriver.exe")
+                if selected_key == "chromium" and browser_path
+                else ""
+            )
+            browser = {
+                "key": selected_key,
+                "label": "Chromium" if selected_key == "chromium" else "Google Chrome",
+                "driver_type": "chrome",
+                "executable_path": browser_path or "",
+                "driver_path": bundled_driver,
+                "bundled": selected_key == "chromium",
+            }
+
+        browser_key = str(self._browser_value(browser, "key", "chrome")).lower()
+        browser_label = self._browser_value(browser, "label", browser_key)
+        executable_path = self._browser_value(browser, "executable_path", "")
+        driver_path = self._browser_value(browser, "driver_path", "")
+        bundled = bool(self._browser_value(browser, "bundled", False))
         profile_dir = self.create_temp_profile()
-        # to make startup faster
+
         from selenium import webdriver
         from selenium.common.exceptions import SessionNotCreatedException
         from selenium.common.exceptions import WebDriverException
-        from selenium.webdriver.chrome.service import Service
-        from selenium.webdriver.chrome.options import Options
-        from webdriver_manager.chrome import ChromeDriverManager
 
-        if browser_path and not os.path.isfile(browser_path):
+        if executable_path and not os.path.isfile(executable_path):
             self.cleanup_temp_profile(profile_dir)
             return OperationResult.failure(
-                "BROWSER_EXECUTABLE_MISSING",
-                "Browser Executable Missing",
-                "The selected browser executable could not be found.",
-                detail=f"Expected path: {browser_path}",
+                f"{browser_key.upper()}_NOT_INSTALLED",
+                f"{browser_label} Not Found",
+                (
+                    f"{browser_label} could not be found. Select another browser or "
+                    "use the built-in Chromium under Settings -> Misc."
+                ),
+                detail=f"Expected path: {executable_path}",
             )
-        
-        chrome_options = Options()
-        
-        if browser_path:
-            chrome_options.binary_location = browser_path
-        
-        chrome_options.add_argument(f"--user-data-dir={profile_dir}")
-        chrome_options.add_argument("--no-first-run")
-        chrome_options.add_argument("--no-default-browser-check")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        chrome_options.add_argument("--log-level=3")
-        chrome_options.add_argument("--silent")
-        chrome_options.add_argument("--disable-logging")
-        chrome_options.add_argument("--disable-gpu-logging")
-        chrome_options.add_argument("--disable-dev-tools")
-        chrome_options.add_argument("--no-default-browser-check")
-        chrome_options.add_argument("--disable-default-apps")
-        chrome_options.add_argument("--disable-web-security")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-plugins")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
-        chrome_options.add_argument("--disable-background-timer-throttling")
-        chrome_options.add_argument("--disable-renderer-backgrounding")
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-        chrome_options.add_argument("--disable-component-extensions-with-background-pages")
-        chrome_options.add_argument("--disable-ipc-flooding-protection")
-        chrome_options.add_argument("--disable-hang-monitor")
-        chrome_options.add_argument("--disable-prompt-on-repost")
-        chrome_options.add_argument("--disable-domain-reliability")
-        chrome_options.add_argument("--disable-component-update")
-        chrome_options.add_argument("--disable-background-networking")
-        chrome_options.add_argument("--aggressive-cache-discard")
-        
+
         try:
+            if browser_key == "firefox":
+                from selenium.webdriver.firefox.options import Options
+
+                options = Options()
+                if executable_path:
+                    options.binary_location = executable_path
+                options.add_argument("-profile")
+                options.add_argument(profile_dir)
+                options.set_preference("dom.webdriver.enabled", False)
+                options.set_preference("useAutomationExtension", False)
+            elif browser_key in ("chrome", "chromium"):
+                from selenium.webdriver.chrome.options import Options
+
+                options = Options()
+                if executable_path:
+                    options.binary_location = executable_path
+                options.add_argument(f"--user-data-dir={profile_dir}")
+                options.add_argument("--no-first-run")
+                options.add_argument("--no-default-browser-check")
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+                options.add_experimental_option("useAutomationExtension", False)
+                options.add_argument("--log-level=3")
+                options.add_argument("--silent")
+                options.add_argument("--disable-logging")
+                options.add_argument("--disable-gpu-logging")
+                options.add_argument("--disable-default-apps")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-plugins")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--disable-background-timer-throttling")
+                options.add_argument("--disable-renderer-backgrounding")
+                options.add_argument("--disable-backgrounding-occluded-windows")
+                options.add_argument("--disable-component-extensions-with-background-pages")
+                options.add_argument("--disable-hang-monitor")
+                options.add_argument("--disable-prompt-on-repost")
+                options.add_argument("--disable-domain-reliability")
+                options.add_argument("--disable-component-update")
+                options.add_argument("--disable-background-networking")
+                options.add_argument("--aggressive-cache-discard")
+            elif browser_key == "edge":
+                from selenium.webdriver.edge.options import Options
+
+                options = Options()
+                if executable_path:
+                    options.binary_location = executable_path
+                options.add_argument(f"--user-data-dir={profile_dir}")
+                options.add_argument("--no-first-run")
+                options.add_argument("--no-default-browser-check")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-background-networking")
+            else:
+                self.cleanup_temp_profile(profile_dir)
+                return OperationResult.failure(
+                    "BROWSER_SELECTION_INVALID",
+                    "Invalid Browser Selection",
+                    "Select Chrome, Firefox, Edge, or Chromium in Browser Engine settings.",
+                    detail=f"Configured browser: {browser_key}",
+                )
+
             with self._browser_setup_lock:
-                if browser_path and "chromium" in browser_path.lower():
-                    chromedriver_path = os.path.join(
-                        os.path.dirname(browser_path),
-                        "chromedriver.exe",
-                    )
-                    if os.path.exists(chromedriver_path):
-                        print(f"[INFO] Using bundled chromedriver: {chromedriver_path}")
-                        service = Service(chromedriver_path, log_path=os.devnull)
-                    else:
+                if browser_key == "firefox":
+                    driver = webdriver.Firefox(options=options)
+                elif browser_key == "edge":
+                    driver = webdriver.Edge(options=options)
+                elif bundled:
+                    if not driver_path or not os.path.isfile(driver_path):
                         self.cleanup_temp_profile(profile_dir)
                         return OperationResult.failure(
                             "BROWSER_DRIVER_MISSING",
                             "Chromium Driver Missing",
                             "The Chromium installation is incomplete. Download Chromium again.",
-                            detail=f"Missing driver: {chromedriver_path}",
+                            detail=f"Missing driver: {driver_path}",
                         )
-                else:
-                    service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+                    from selenium.webdriver.chrome.service import Service
 
-                driver = webdriver.Chrome(service=service, options=chrome_options)
-                driver._ram_profile_dir = profile_dir
-                driver.set_page_load_timeout(120)
-                driver.implicitly_wait(10)
+                    driver = webdriver.Chrome(
+                        service=Service(driver_path),
+                        options=options,
+                    )
+                else:
+                    driver = webdriver.Chrome(options=options)
+
+            driver._ram_profile_dir = profile_dir
+            driver.set_page_load_timeout(120)
+            driver.implicitly_wait(10)
+            if browser_key != "firefox":
                 driver.execute_script(
                     "Object.defineProperty(navigator, 'webdriver', "
                     "{get: () => undefined})"
                 )
-                return OperationResult.success(data=driver)
+            return OperationResult.success(data=driver)
         except SessionNotCreatedException as exc:
             self.cleanup_temp_profile(profile_dir)
-            print(f"[ERROR] Browser and driver versions do not match: {exc}")
+            print(f"[ERROR] {browser_label} driver version mismatch: {exc}")
             return OperationResult.failure(
                 "BROWSER_DRIVER_MISMATCH",
                 "Browser Driver Version Mismatch",
-                "The browser and ChromeDriver versions do not match.",
+                f"The {browser_label} browser and its WebDriver versions do not match.",
                 detail=str(exc),
             )
         except WebDriverException as exc:
             self.cleanup_temp_profile(profile_dir)
-            print(f"[ERROR] Selenium could not start the browser: {exc}")
+            print(f"[ERROR] Selenium could not start {browser_label}: {exc}")
             return OperationResult.failure(
                 "BROWSER_START_FAILED",
-                "Browser Could Not Start",
-                "The selected browser could not be opened.",
+                f"{browser_label} Could Not Start",
+                f"The selected {browser_label} browser could not be opened.",
                 detail=str(exc),
             )
         except PermissionError as exc:
@@ -290,16 +340,20 @@ class RobloxAccountManager:
                 "Windows denied permission to start the browser.",
                 detail=str(exc),
             )
-        except Exception as e:
+        except Exception as exc:
             self.cleanup_temp_profile(profile_dir)
-            print(f"[ERROR] Error setting up Chrome driver: {e}")
+            print(f"[ERROR] Error setting up {browser_label}: {exc}")
             traceback.print_exc()
             return OperationResult.failure(
                 "BROWSER_SETUP_FAILED",
                 "Browser Setup Failed",
                 "The browser could not be prepared. Check the Console tab or session log.",
-                detail=f"{type(e).__name__}: {e}",
+                detail=f"{type(exc).__name__}: {exc}",
             )
+
+    def setup_chrome_driver(self, browser_path=None):
+        # Preserve the old method for external callers while using the browser factory.
+        return self.setup_browser_driver(browser_path=browser_path)
     
     def wait_for_login(self, driver, timeout=300):
         from selenium.common.exceptions import WebDriverException
@@ -548,7 +602,7 @@ class RobloxAccountManager:
             print(f"[ERROR] Error extracting user info: {e}")
             return None, None, None, None, ""
     
-    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", javascript_list=None, browser_path=None, password_list=None, window_slot=None, window_slot_count=None):
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", javascript_list=None, browser=None, browser_path=None, password_list=None, window_slot=None, window_slot_count=None):
         # Add accounts through one or more browser instances.
         # javascript_list and password_list map each value to the same browser index.
         if javascript_list:
@@ -570,7 +624,10 @@ class RobloxAccountManager:
             print(f"[INFO] Launching {amount} browser instance(s)...")
             
             for i in range(amount):
-                setup_result = self.setup_chrome_driver(browser_path)
+                setup_result = self.setup_browser_driver(
+                    browser=browser,
+                    browser_path=browser_path,
+                )
                 if not setup_result:
                     print(
                         f"[ERROR] Failed to setup browser for instance "

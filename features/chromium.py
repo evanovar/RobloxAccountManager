@@ -1,5 +1,5 @@
 """
-Chromium installation, validation, and browser path resolution.
+Chromium installation, validation, and update handling.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import winreg
 import zipfile
 
 import requests
@@ -299,68 +298,6 @@ def check_chromium_status(on_done) -> None:
         daemon=True,
         name="chromium-status",
     ).start()
-
-
-def resolve_browser(browser_type: str) -> OperationResult:
-    selected = str(browser_type or "chrome").strip().lower()
-    if selected == "chromium":
-        return validate_chromium()
-    if selected != "chrome":
-        return OperationResult.failure(
-            "BROWSER_SELECTION_INVALID",
-            "Invalid Browser Selection",
-            "Select Chrome or Chromium in Browser Engine settings.",
-            detail=f"Configured browser: {selected}",
-        )
-
-    candidates = []
-    program_files = os.environ.get("ProgramFiles")
-    program_files_x86 = os.environ.get("ProgramFiles(x86)")
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if program_files:
-        candidates.append(os.path.join(
-            program_files, "Google", "Chrome", "Application", "chrome.exe"
-        ))
-    if program_files_x86:
-        candidates.append(os.path.join(
-            program_files_x86, "Google", "Chrome", "Application", "chrome.exe"
-        ))
-    if local_appdata:
-        candidates.append(os.path.join(
-            local_appdata, "Google", "Chrome", "Application", "chrome.exe"
-        ))
-    path_candidate = shutil.which("chrome.exe")
-    if path_candidate:
-        candidates.append(path_candidate)
-
-    registry_paths = (
-        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-    )
-    for root_key, subkey in registry_paths:
-        try:
-            with winreg.OpenKey(root_key, subkey) as key:
-                registry_path = str(winreg.QueryValue(key, None) or "").strip()
-                if registry_path:
-                    candidates.append(registry_path)
-        except OSError:
-            pass
-
-    for candidate in dict.fromkeys(candidates):
-        if os.path.isfile(candidate):
-            return OperationResult.success(data={
-                "browser_path": candidate,
-                "driver_path": "",
-                "browser_version": "",
-                "driver_version": "",
-            })
-
-    return OperationResult.failure(
-        "CHROME_NOT_INSTALLED",
-        "Google Chrome Not Found",
-        "Google Chrome could not be found. Install Chrome or select Chromium.",
-        detail="Checked:\n" + "\n".join(candidates),
-    )
 
 
 def _download_file(

@@ -28,7 +28,7 @@ from ctypes import wintypes
 from typing import Callable
 from classes.operation_result import OperationResult, ensure_result, unexpected_result
 from classes.roblox_api import RobloxAPI
-import features.chromium as chromium_mod
+import features.browsers as browsers_mod
 import features.headless_manager as headless_manager_mod
 from utils.app_paths import get_app_dir, get_data_dir
 
@@ -660,7 +660,7 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
     if not browser_result:
         on_done(False, browser_result)
         return
-    browser_path = browser_result.data.get("browser_path", "")
+    browser = browser_result.data.get("browser")
 
     def _worker():
         success_count = 0
@@ -675,7 +675,7 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
                 add_result = ensure_result(manager.add_account(
                     amount=len(batch),
                     javascript_list=scripts,
-                    browser_path=browser_path,
+                    browser=browser,
                 ))
                 new_names = set(manager.accounts.keys()) - existing_before
                 if new_names:
@@ -707,7 +707,7 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
 def get_browser_result() -> OperationResult:
     S = load_ui_settings()
     browser_type = S.get("browser_type", "chrome")
-    return chromium_mod.resolve_browser(browser_type)
+    return browsers_mod.resolve_browser(browser_type)
 
 
 def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *_: None, javascript: str = "") -> None:
@@ -715,14 +715,14 @@ def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *
     if not browser_result:
         on_done(False, browser_result)
         return
-    browser_path = browser_result.data.get("browser_path", "")
+    browser = browser_result.data.get("browser")
 
     def _worker():
         existing_before = set(manager.accounts.keys())
         try:
             result = ensure_result(manager.add_account(
                 javascript=javascript or "",
-                browser_path=browser_path,
+                browser=browser,
             ))
             if result:
                 new_names = set(manager.accounts.keys()) - existing_before

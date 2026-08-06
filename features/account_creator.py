@@ -301,7 +301,7 @@ def create_accounts(
             f"{browser_result.message}\n\nError code: {browser_result.code}",
         )
         return
-    browser_path = browser_result.data.get("browser_path", "")
+    browser = browser_result.data.get("browser")
 
     def _worker():
         profiles = [
@@ -335,7 +335,7 @@ def create_accounts(
                             website=_SIGNUP_URL,
                             javascript_list=[_build_signup_script(profile)],
                             password_list=[profile["password"]],
-                            browser_path=browser_path,
+                            browser=browser,
                             window_slot=slot_index,
                             window_slot_count=worker_count,
                         ))

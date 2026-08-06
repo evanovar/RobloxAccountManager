@@ -2586,7 +2586,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addWidget(_sec("BROWSER ENGINE"))
         _br_lbl = QLabel(
-            "Browser used when adding accounts via the browser method."
+            "Supported browsers: Chrome, Firefox, Edge, and built-in Chromium. "
+            "Brave and Opera GX users should select Chromium."
         )
         _br_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
         _br_lbl.setWordWrap(True)
@@ -2596,9 +2597,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         _br_grp = QButtonGroup(sa)
         for br_key, br_label, br_tip in [
             ("chrome", "Google Chrome",
-             "Use Google Chrome via ChromeDriver (recommended). Chrome must be installed."),
+             "Use Google Chrome through Selenium. Google Chrome must be installed."),
+            ("firefox", "Mozilla Firefox",
+             "Use Mozilla Firefox through Selenium. Mozilla Firefox must be installed."),
+            ("edge", "Microsoft Edge",
+             "Use Microsoft Edge through Selenium. Microsoft Edge must be installed."),
             ("chromium", "Chromium",
-             "Use Chromium (open-source base of Chrome). Download it with the button below."),
+             "Use the built-in Chromium and matching driver. Download it with the button below."),
         ]:
             rb = QRadioButton(br_label)
             rb.setChecked(br_key == _cur_br)
