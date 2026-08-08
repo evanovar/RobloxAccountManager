@@ -14,7 +14,7 @@ import threading
 import requests
 
 from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
-from .operation_result import OperationResult
+from .operation_result import OperationResult, unexpected_result
 from .roblox_api import RobloxAPI
 from utils.app_paths import get_data_dir
 
@@ -32,6 +32,7 @@ class RobloxAccountManager:
         self._entered_password_hash = None
         self._accounts_lock = threading.RLock()
         self._browser_setup_lock = threading.Lock()
+        self._pre_launch_hook = None
         
         if self.encryption_config.is_encryption_enabled():
             method = self.encryption_config.get_encryption_method()
@@ -46,6 +47,10 @@ class RobloxAccountManager:
         
         self.accounts = self.load_accounts()
         self.temp_profile_dir = None
+
+    def set_pre_launch_hook(self, callback) -> None:
+        # Set the callback that runs before Roblox launches.
+        self._pre_launch_hook = callback
         
     def load_accounts(self):
         """Load saved accounts from JSON file"""
@@ -919,6 +924,33 @@ class RobloxAccountManager:
                 "Account Not Found",
                 f"The account '{username}' is no longer available.",
             )
+
+        if self._pre_launch_hook:
+            try:
+                hook_result = self._pre_launch_hook()
+                if hook_result is not None and not hook_result:
+                    print(
+                        f"[ERROR] Pre-launch settings apply failed: "
+                        f"{getattr(hook_result, 'code', 'UNKNOWN_ERROR')} "
+                        f"{getattr(hook_result, 'message', hook_result)}"
+                    )
+                    if isinstance(hook_result, OperationResult):
+                        return hook_result
+                    return OperationResult.failure(
+                        "ROBLOX_SETTINGS_PRE_LAUNCH_FAILED",
+                        "Roblox Settings Could Not Be Applied",
+                        "Roblox was not launched because its settings could not be applied.",
+                        detail=str(hook_result),
+                    )
+            except Exception as exc:
+                print(
+                    f"[ERROR] Pre-launch settings apply failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                return unexpected_result(
+                    "Applying Roblox settings before launch",
+                    exc,
+                )
 
         cookie = self.accounts[username]['cookie']
         launched = RobloxAPI.launch_roblox(
