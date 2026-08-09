@@ -629,11 +629,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._on_roblox_settings_auto_applied
         )
 
-        # Presence Indicator
+        # Account Activity Monitor
         self._presence_mod = presence_mod
         self._presence_scanner = None
         self._presence_dots: dict[str, QLabel] = {}
         self._online_usernames: set[str] = set()
+        self._activity_snapshot: dict[str, dict] = {}
+        self._activity_widgets: dict[str, QWidget] = {}
 
         # Cookie Validator
         self._cv_mod = cookie_validator_mod
@@ -788,6 +790,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             QLabel#accountName {{ color: {TEXT};  font-size: 11px; }}
             QLabel#noteSep {{ color: #7A7A7A; font-size: 11px; }}
             QLabel#noteText {{ color: {NOTE};  font-size: 11px; font-weight: 600; }}
+            QLabel#performanceSep {{ color: #7A7A7A; font-size: 11px; }}
+            QLabel#ramUsage {{ color: #5DBBFF; font-size: 10px; }}
+            QLabel#cpuUsage {{ color: #2ECC71; font-size: 10px; }}
 
             QLineEdit {{
                 background: {INPUT}; border: 1px solid {LINE};
@@ -2200,7 +2205,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addWidget(_launcher_lbl)
 
         LAUNCHERS = [
-            ("default",   "Default (Roblox)",
+            ("default",   "Automatic (roblox://)",
              "Launch via the standard roblox:// URI protocol (roblox-player)."),
             ("bloxstrap", "Bloxstrap",
              "Launch using Bloxstrap, an open-source Roblox bootstrapper with extra features."),
@@ -2209,7 +2214,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             ("froststrap", "Froststrap",
              "Launch using Froststrap."),
             ("client", "Roblox Client (direct .exe)",
-             "Directly invoke the RobloxPlayerBeta.exe binary without a bootstrapper."),
+             "Directly invoke the RobloxPlayerBeta.exe."),
             ("custom",    "Custom",
              "Specify a custom executable path to use as the launcher."),
         ]
@@ -2266,9 +2271,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addWidget(self._sett_rename_chk)
 
         self._sett_monitoring_chk = _chk(
-            "presence_indicator", "Presence Indicator",
-            "Show a green dot on accounts that currently have Roblox running.\n"
-            "Scans running processes every 10 seconds - no Roblox API used.",
+            "presence_indicator", "Account Activity Monitor",
+            "Show online status and local Roblox RAM and CPU usage.\n"
+            "Scans saved accounts every 5 seconds without using the Roblox API.",
             on_change=self._on_sett_presence_indicator,
         )
         f.addWidget(self._sett_monitoring_chk)
@@ -4048,28 +4053,70 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         self._presence_scanner = self._presence_mod.PresenceScanner(
             self.manager,
-            on_update=lambda online: self._bridge.presence_update.emit(online),
-            interval_sec=10,
+            on_update=lambda snapshot: self._bridge.presence_update.emit(snapshot),
+            interval_sec=5,
         )
         self._presence_scanner.start()
-        print("[INFO] Presence Indicator started.")
+        print("[INFO] Account Activity Monitor started.")
 
     def _stop_presence_scanner(self) -> None:
         if self._presence_scanner is None:
+            self._online_usernames = set()
+            self._activity_snapshot = {}
+            self._update_presence_dots()
+            self._update_activity_rows()
             return
         self._presence_scanner.stop()
         self._presence_scanner = None
         self._online_usernames = set()
+        self._activity_snapshot = {}
         self._update_presence_dots()
-        print("[INFO] Presence Indicator stopped.")
+        self._update_activity_rows()
+        print("[INFO] Account Activity Monitor stopped.")
 
-    def _on_presence_update(self, online: object) -> None:
-        self._online_usernames = set(online) if online else set()
+    def _on_presence_update(self, snapshot: object) -> None:
+        if isinstance(snapshot, dict):
+            self._activity_snapshot = {
+                str(username): dict(metrics)
+                for username, metrics in snapshot.items()
+                if isinstance(metrics, dict)
+            }
+        else:
+            self._activity_snapshot = {}
+        self._online_usernames = set(self._activity_snapshot)
         self._update_presence_dots()
+        self._update_activity_rows()
 
     def _update_presence_dots(self) -> None:
         for username, dot in self._presence_dots.items():
             dot.setVisible(username in self._online_usernames)
+
+    def _update_activity_rows(self) -> None:
+        for username, container in self._activity_widgets.items():
+            metrics = self._activity_snapshot.get(username)
+            if not metrics:
+                container.setVisible(False)
+                continue
+
+            ram_mb = float(metrics.get("ram_mb", 0.0) or 0.0)
+            cpu_percent = float(metrics.get("cpu_percent", 0.0) or 0.0)
+            ram_text = (
+                f"{ram_mb:.0f} MB"
+                if metrics.get("ram_available", False)
+                else "N/A"
+            )
+            cpu_text = (
+                f"{cpu_percent:.1f}%"
+                if metrics.get("cpu_available", False)
+                else "N/A"
+            )
+            labels = container.findChildren(QLabel)
+            for label in labels:
+                if label.objectName() == "ramUsage":
+                    label.setText(ram_text)
+                elif label.objectName() == "cpuUsage":
+                    label.setText(cpu_text)
+            container.setVisible(True)
 
     # RAM boost background worker
     def _start_ram_boost(self):
@@ -5368,6 +5415,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._account_list.clear()
         self._avatar_labels.clear()
         self._presence_dots.clear()
+        self._activity_widgets.clear()
         self._invalid_badges.clear()
         account_items = list(self.manager.accounts.items())
 
@@ -5473,6 +5521,34 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 row_lay.addWidget(sep)
                 row_lay.addWidget(note_lbl)
 
+            activity_container = QWidget(row)
+            activity_lay = QHBoxLayout(activity_container)
+            activity_lay.setContentsMargins(0, 0, 0, 0)
+            activity_lay.setSpacing(4)
+
+            ram_sep = QLabel("|")
+            ram_sep.setObjectName("performanceSep")
+            ram_lbl = QLabel("0 MB")
+            ram_lbl.setObjectName("ramUsage")
+            ram_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+
+            cpu_sep = QLabel("|")
+            cpu_sep.setObjectName("performanceSep")
+            cpu_lbl = QLabel("0.0%")
+            cpu_lbl.setObjectName("cpuUsage")
+            cpu_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+
+            activity_lay.addWidget(ram_sep)
+            activity_lay.addWidget(ram_lbl)
+            activity_lay.addWidget(cpu_sep)
+            activity_lay.addWidget(cpu_lbl)
+            row_lay.addWidget(activity_container)
+            self._activity_widgets[username] = activity_container
+            activity_container.setVisible(username in self._activity_snapshot)
             row_lay.addStretch(1)
             row.setFixedHeight(ITEM_H)
 
@@ -5503,6 +5579,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._rebuild_group_bar()
         self._load_avatars_async()
+        self._update_activity_rows()
 
 
     def _rebuild_group_bar(self):
