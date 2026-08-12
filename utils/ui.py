@@ -8,10 +8,8 @@ from __future__ import annotations
 import collections
 import ctypes
 from ctypes import wintypes
-from datetime import datetime, timezone
 import hashlib
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -29,8 +27,6 @@ if _ROOT_DIR not in sys.path:
 
 import psutil
 import requests
-import win32gui
-import win32process
 
 from PySide6.QtCore import (
     QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal,
@@ -72,6 +68,7 @@ import features.updater as updater_mod
 import features.webhook as webhook
 import features.websocket_server as ws_mod
 import features.window_grid as window_grid_mod
+import features.window_renamer as window_renamer_mod
 import features.windows_startup as windows_startup_mod
 
 
@@ -636,6 +633,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._online_usernames: set[str] = set()
         self._activity_snapshot: dict[str, dict] = {}
         self._activity_widgets: dict[str, QWidget] = {}
+
+        # Roblox Window Renamer
+        self._window_renamer: window_renamer_mod.RobloxWindowRenamer | None = None
 
         # Cookie Validator
         self._cv_mod = cookie_validator_mod
@@ -4156,132 +4156,20 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _stop_ram_boost(self):
         self._ram_boost_stop = True
 
-    # Rename Roblox Windows background worker
+    # Rename Roblox Windows worker
     def _start_rename_windows(self):
-        if getattr(self, "_rename_running", False):
+        if self._window_renamer is not None:
             return
-        self._rename_running = True
-        self._rename_stop = False
-
-        def _worker():
-            renamed: set[int] = set()
-            print("[INFO] Rename Roblox Windows started")
-
-            def _get_user_id_from_pid(pid, used_logs):
-                try:
-                    proc = psutil.Process(pid)
-                    if not (proc.is_running() and proc.name().lower() == "robloxplayerbeta.exe"):
-                        return None
-                    create_time_utc = datetime.fromtimestamp(proc.create_time(), tz=timezone.utc).replace(tzinfo=None)
-                    logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
-                    if not os.path.exists(logs_dir):
-                        return None
-                    matching = []
-                    for fn in os.listdir(logs_dir):
-                        if not fn.endswith("_last.log"):
-                            continue
-                        full = os.path.join(logs_dir, fn)
-                        if full in used_logs:
-                            continue
-                        m = re.search(r"(\d{8}T\d{6}Z)", fn)
-                        if not m:
-                            continue
-                        try:
-                            log_time = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ")
-                            diff = (log_time - create_time_utc).total_seconds()
-                            if 0 <= diff <= 60: # 60s window for slow machines
-                                matching.append((diff, full))
-                        except ValueError:
-                            continue
-                    matching.sort(key=lambda x: x[0])
-                    for _, log_path in matching:
-                        try:
-                            with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
-                                content = fh.read(50000)
-                            if "userid:" in content:
-                                uid = content.split("userid:")[1].split(",")[0].strip()
-                                if uid.isdigit():
-                                    used_logs.add(log_path)
-                                    return uid
-                        except Exception:
-                            continue
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                    pass
-                except Exception as e:
-                    print(f"[ERROR] _get_user_id_from_pid({pid}): {e}")
-                return None
-
-            def _rename_window(pid, username):
-                def _cb(hwnd, _pid):
-                    _, found = win32process.GetWindowThreadProcessId(hwnd)
-                    if found == _pid and win32gui.IsWindowVisible(hwnd):
-                        title = win32gui.GetWindowText(hwnd)
-                        if "roblox" in title.lower():
-                            win32gui.SetWindowText(hwnd, username)
-                            return False
-                    return True
-                try:
-                    win32gui.EnumWindows(_cb, pid)
-                except Exception:
-                    pass
-
-            while not self._rename_stop:
-                try:
-                    current_pids = set()
-                    for proc in psutil.process_iter(["pid", "name"]):
-                        try:
-                            if proc.info["name"] and proc.info["name"].lower() == "robloxplayerbeta.exe":
-                                current_pids.add(proc.info["pid"])
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            continue
-
-                    new_pids = current_pids - renamed
-                    used_logs: set[str] = set()
-
-                    for pid in new_pids:
-                        if self._rename_stop:
-                            break
-                        user_id = _get_user_id_from_pid(pid, used_logs)
-                        if user_id:
-                            username = RobloxAPI.get_username_from_user_id(user_id)
-                            if username:
-                                _did = [False]
-                                def _cb_track(hwnd, _pid=pid, _un=username, _d=_did):
-                                    _, found = win32process.GetWindowThreadProcessId(hwnd)
-                                    if found == _pid and win32gui.IsWindowVisible(hwnd):
-                                        title = win32gui.GetWindowText(hwnd)
-                                        if title and ("roblox" in title.lower() or title == _un):
-                                            try:
-                                                win32gui.SetWindowText(hwnd, _un)
-                                                _d[0] = True
-                                                return False
-                                            except Exception:
-                                                pass
-                                    return True
-                                try:
-                                    win32gui.EnumWindows(_cb_track, pid)
-                                except Exception:
-                                    pass
-                                if _did[0]:
-                                    renamed.add(pid)
-                                    print(f"[INFO] Renamed Roblox window PID {pid} -> '{username}'")
-                                else:
-                                    print(f"[INFO] Roblox window for PID {pid} ({username}) not visible yet, will retry")
-                        time.sleep(0.5)
-
-                    renamed = renamed & current_pids
-
-                except Exception as e:
-                    print(f"[ERROR] Rename Windows error: {e}")
-                time.sleep(2)
-
-            self._rename_running = False
-            print("[INFO] Rename Roblox Windows stopped")
-
-        threading.Thread(target=_worker, daemon=True, name="RenameWindows").start()
+        self._window_renamer = window_renamer_mod.RobloxWindowRenamer(
+            self.manager,
+        )
+        self._window_renamer.start()
 
     def _stop_rename_windows(self):
-        self._rename_stop = True
+        renamer = self._window_renamer
+        self._window_renamer = None
+        if renamer is not None:
+            renamer.stop()
 
     def _on_sett_browse_launcher(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -5122,6 +5010,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Stop presence scanner
         try:
             self._stop_presence_scanner()
+        except Exception:
+            pass
+        # Stop Roblox window renamer
+        try:
+            self._stop_rename_windows()
         except Exception:
             pass
         # Cleanup drag-drop filter

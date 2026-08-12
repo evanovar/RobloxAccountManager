@@ -4,7 +4,8 @@ Account Activity Monitor process scanning.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import os
 import re
 import threading
@@ -12,6 +13,21 @@ from typing import Callable
 
 import psutil
 import win32api
+
+
+_TRACKER_PATTERN = re.compile(
+    r"browsertrackerid[^0-9]{0,32}(\d+)",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class RobloxLogEntry:
+    timestamp: datetime
+    path: str
+    user_id: str
+    browser_tracker_id: str
+
 
 def _get_user_id_from_pid(
     pid: int,
@@ -24,56 +40,23 @@ def _get_user_id_from_pid(
             tz=timezone.utc,
         ).replace(tzinfo=None)
 
-        logs_dir = os.path.join(
-            os.getenv("LOCALAPPDATA", ""),
-            "Roblox",
-            "logs",
+        entries = get_roblox_log_entries(
+            earliest_time=create_utc,
+            latest_time=create_utc + timedelta(seconds=60),
         )
-        if not os.path.isdir(logs_dir):
-            return None
-
-        candidates: list[tuple[float, str]] = []
-        for filename in os.listdir(logs_dir):
-            if not filename.endswith("_last.log"):
-                continue
-            match = re.search(r"(\d{8}T\d{6}Z)", filename)
-            if not match:
-                continue
-            try:
-                log_time = datetime.strptime(
-                    match.group(1),
-                    "%Y%m%dT%H%M%SZ",
-                )
-                diff = (log_time - create_utc).total_seconds()
-                if 0 <= diff <= 60:
-                    candidates.append((
-                        diff,
-                        os.path.join(logs_dir, filename),
-                    ))
-            except ValueError:
-                continue
+        candidates: list[tuple[float, RobloxLogEntry]] = []
+        for entry in entries:
+            diff = (entry.timestamp - create_utc).total_seconds()
+            if 0 <= diff <= 60:
+                candidates.append((diff, entry))
 
         candidates.sort(key=lambda item: item[0])
-        for _, log_path in candidates:
-            if used_logs is not None and log_path in used_logs:
+        for _, entry in candidates:
+            if used_logs is not None and entry.path in used_logs:
                 continue
-            try:
-                with open(
-                    log_path,
-                    "r",
-                    encoding="utf-8",
-                    errors="ignore",
-                ) as handle:
-                    content = handle.read(50_000)
-                if "userid:" not in content:
-                    continue
-                user_id = content.split("userid:", 1)[1].split(",", 1)[0].strip()
-                if user_id.isdigit():
-                    if used_logs is not None:
-                        used_logs.add(log_path)
-                    return user_id
-            except (OSError, UnicodeError):
-                continue
+            if used_logs is not None:
+                used_logs.add(entry.path)
+            return entry.user_id
     except (
         OSError,
         psutil.NoSuchProcess,
@@ -84,6 +67,70 @@ def _get_user_id_from_pid(
     except Exception:
         return None
     return None
+
+
+def get_roblox_log_entries(
+    earliest_time: datetime | None = None,
+    latest_time: datetime | None = None,
+) -> list[RobloxLogEntry]:
+    logs_dir = os.path.join(
+        os.getenv("LOCALAPPDATA", ""),
+        "Roblox",
+        "logs",
+    )
+    if not os.path.isdir(logs_dir):
+        return []
+
+    entries: list[RobloxLogEntry] = []
+    try:
+        filenames = os.listdir(logs_dir)
+    except OSError:
+        return entries
+
+    for filename in filenames:
+        if not filename.endswith("_last.log"):
+            continue
+        match = re.search(r"(\d{8}T\d{6}Z)", filename)
+        if not match:
+            continue
+        try:
+            log_time = datetime.strptime(
+                match.group(1),
+                "%Y%m%dT%H%M%SZ",
+            )
+            if earliest_time is not None and log_time < earliest_time:
+                continue
+            if latest_time is not None and log_time > latest_time:
+                continue
+            log_path = os.path.join(logs_dir, filename)
+            with open(
+                log_path,
+                "r",
+                encoding="utf-8",
+                errors="ignore",
+            ) as handle:
+                content = handle.read(50_000)
+            if "userid:" not in content:
+                continue
+            user_id = content.split("userid:", 1)[1].split(",", 1)[0].strip()
+            if user_id.isdigit():
+                tracker_match = _TRACKER_PATTERN.search(content)
+                browser_tracker_id = (
+                    tracker_match.group(1)
+                    if tracker_match
+                    else ""
+                )
+                entries.append(RobloxLogEntry(
+                    timestamp=log_time,
+                    path=log_path,
+                    user_id=user_id,
+                    browser_tracker_id=browser_tracker_id,
+                ))
+        except (OSError, UnicodeError, ValueError):
+            continue
+
+    entries.sort(key=lambda entry: (entry.timestamp, entry.path))
+    return entries
 
 
 def _get_exe_description(pid: int) -> str:
@@ -106,7 +153,7 @@ def _get_exe_description(pid: int) -> str:
         return ""
 
 
-def _is_valid_roblox_game_client(
+def is_valid_roblox_game_client(
     pid: int,
     process_name_lower: str | None = None,
 ) -> bool:
@@ -129,7 +176,14 @@ def _is_valid_roblox_game_client(
         return process_name_lower == "robloxplayerbeta.exe" if process_name_lower else False
 
 
-def _get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
+def _is_valid_roblox_game_client(
+    pid: int,
+    process_name_lower: str | None = None,
+) -> bool:
+    return is_valid_roblox_game_client(pid, process_name_lower)
+
+
+def get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
     processes: dict[int, tuple[float, psutil.Process]] = {}
     try:
         process_iter = psutil.process_iter(
@@ -142,7 +196,7 @@ def _get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
                     continue
 
                 pid = int(process.info["pid"])
-                if not _is_valid_roblox_game_client(pid, process_name):
+                if not is_valid_roblox_game_client(pid, process_name):
                     continue
 
                 create_time = process.info.get("create_time")
@@ -164,6 +218,10 @@ def _get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
     ):
         pass
     return processes
+
+
+def _get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
+    return get_roblox_processes()
 
 
 def _get_roblox_pids() -> set[int]:
@@ -249,7 +307,7 @@ class PresenceScanner:
 
     def _do_scan(self) -> None:
         try:
-            discovered_processes = _get_roblox_processes()
+            discovered_processes = get_roblox_processes()
             current_pids = set(discovered_processes)
             self._pid_uid_cache = {
                 pid: value

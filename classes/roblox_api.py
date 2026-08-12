@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import time
-import random
+import secrets
 import requests
 import subprocess
 import shutil
@@ -591,7 +591,9 @@ class RobloxAPI:
 
         print("[SUCCESS] Got authentication ticket!")
 
-        browser_tracker_id = random.randint(55393295400, 55393295500)
+        browser_tracker_id = secrets.randbelow(
+            8_000_000_000_000_000
+        ) + 1_000_000_000_000_000
         launch_time = int(time.time() * 1000)
 
         if not game_id and not private_server_id:
