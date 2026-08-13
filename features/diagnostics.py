@@ -32,6 +32,7 @@ _ORIGINAL_THREAD_EXCEPTHOOK = None
 _LAST_UI_HEARTBEAT = 0.0
 _HEALTH_STOP = threading.Event()
 _HEALTH_THREAD = None
+_SESSION_LOG_HANDLE = None
 
 _REDACTION_PATTERNS = (
     (
@@ -89,7 +90,22 @@ def _record_line(line: str, stream_name: str = "stdout") -> None:
     entry = f"[{_timestamp()}] [{stream_name}] {cleaned}"
     with _LOCK:
         _RECENT_LINES.append(entry)
-        _safe_write(_SESSION_LOG_PATH, entry + "\n")
+        if _SESSION_LOG_HANDLE is not None:
+            try:
+                _SESSION_LOG_HANDLE.write(entry + "\n")
+            except Exception:
+                pass
+        else:
+            _safe_write(_SESSION_LOG_PATH, entry + "\n")
+
+
+def flush_session_log() -> None:
+    with _LOCK:
+        if _SESSION_LOG_HANDLE is not None:
+            try:
+                _SESSION_LOG_HANDLE.flush()
+            except Exception:
+                pass
 
 
 class DiagnosticStream:
@@ -320,6 +336,7 @@ def install(app_version: str) -> str:
     global _ORIGINAL_THREAD_EXCEPTHOOK
     global _SESSION_LOG_PATH
     global _HEALTH_THREAD
+    global _SESSION_LOG_HANDLE
 
     if _INSTALLED:
         return _SESSION_LOG_PATH
@@ -330,6 +347,15 @@ def install(app_version: str) -> str:
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     _SESSION_LOG_PATH = os.path.join(log_dir, f"session-{stamp}.log")
+    try:
+        _SESSION_LOG_HANDLE = open(
+            _SESSION_LOG_PATH,
+            "a",
+            encoding="utf-8",
+            buffering=8192,
+        )
+    except OSError:
+        _SESSION_LOG_HANDLE = None
 
     _ORIGINAL_STDOUT = sys.stdout or getattr(sys, "__stdout__", None)
     _ORIGINAL_STDERR = sys.stderr or getattr(sys, "__stderr__", None)
@@ -358,6 +384,7 @@ def install(app_version: str) -> str:
 
 
 def shutdown(exit_code: int = 0) -> None:
+    global _SESSION_LOG_HANDLE
     _HEALTH_STOP.set()
     record_message(f"Application exit code: {exit_code}")
     try:
@@ -368,3 +395,11 @@ def shutdown(exit_code: int = 0) -> None:
         sys.stderr.flush()
     except Exception:
         pass
+    with _LOCK:
+        if _SESSION_LOG_HANDLE is not None:
+            try:
+                _SESSION_LOG_HANDLE.flush()
+                _SESSION_LOG_HANDLE.close()
+            except Exception:
+                pass
+            _SESSION_LOG_HANDLE = None

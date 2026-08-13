@@ -29,6 +29,8 @@ class RobloxAccountManager:
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.encryptor = None
         self.secure_settings = {}
+        self._secure_settings_encryptor = None
+        self._unavailable_secure_settings = None
         self._entered_password_hash = None
         self._accounts_lock = threading.RLock()
         self._browser_setup_lock = threading.Lock()
@@ -102,15 +104,54 @@ class RobloxAccountManager:
         """Support legacy account-only files and wrapped account+secure-settings files."""
         if not isinstance(data, dict):
             self.secure_settings = {}
+            self._unavailable_secure_settings = None
             return {}
 
         if isinstance(data.get('accounts'), dict):
             secure = data.get('secure_settings', {})
-            self.secure_settings = secure if isinstance(secure, dict) else {}
+            self.secure_settings = self._deserialize_secure_settings(secure)
             return data.get('accounts', {})
 
         self.secure_settings = {}
+        self._unavailable_secure_settings = None
         return data
+
+    def _get_secure_settings_encryptor(self):
+        # Keep support for secure settings written by older no-encryption builds.
+        if self._secure_settings_encryptor is None:
+            self._secure_settings_encryptor = HardwareEncryption()
+        return self._secure_settings_encryptor
+
+    def _serialize_secure_settings(self):
+        if self._unavailable_secure_settings is not None:
+            return dict(self._unavailable_secure_settings)
+        return dict(self.secure_settings)
+
+    def _deserialize_secure_settings(self, secure):
+        if not isinstance(secure, dict):
+            self._unavailable_secure_settings = None
+            return {}
+        if not secure.get('encrypted'):
+            self._unavailable_secure_settings = None
+            return dict(secure)
+        if (
+            secure.get('method') != 'hardware'
+            or secure.get('version') != 1
+            or not isinstance(secure.get('data'), dict)
+        ):
+            self._unavailable_secure_settings = dict(secure)
+            print("[ERROR] Secure settings use an unsupported encrypted format")
+            return {}
+        try:
+            decrypted = self._get_secure_settings_encryptor().decrypt_data(secure['data'])
+            if isinstance(decrypted, dict):
+                self._unavailable_secure_settings = None
+                return decrypted
+            print("[ERROR] Decrypted secure settings are not valid")
+        except Exception as e:
+            print(f"[ERROR] Failed to decrypt secure settings: {type(e).__name__}")
+        self._unavailable_secure_settings = dict(secure)
+        return {}
     
     def _migrate_accounts(self, accounts):
         """Migrate old account data to include new fields"""
@@ -123,9 +164,13 @@ class RobloxAccountManager:
     
     def save_accounts(self):
         """Save accounts to JSON file"""
+        with self._accounts_lock:
+            self._save_accounts_unlocked()
+
+    def _save_accounts_unlocked(self):
         payload = {
             'accounts': self.accounts,
-            'secure_settings': self.secure_settings,
+            'secure_settings': self._serialize_secure_settings(),
         }
         temp_file = self.accounts_file + ".tmp"
         try:
@@ -161,7 +206,80 @@ class RobloxAccountManager:
 
     def get_secure_setting(self, key, default=""):
         """Read a sensitive setting stored alongside encrypted account data."""
-        return self.secure_settings.get(key, default)
+        with self._accounts_lock:
+            return self.secure_settings.get(key, default)
+
+    def set_secure_setting(self, key, value):
+        setting_key = str(key or "").strip()
+        if not setting_key:
+            return OperationResult.failure(
+                "SECURE_SETTING_KEY_INVALID",
+                "Secure Setting Could Not Be Saved",
+                "The secure setting name is invalid.",
+            )
+        if self._unavailable_secure_settings is not None:
+            return OperationResult.failure(
+                "SECURE_SETTINGS_UNAVAILABLE",
+                "Secure Setting Could Not Be Saved",
+                "Encrypted secure settings could not be opened on this computer.",
+                detail="The existing encrypted secure settings were preserved.",
+            )
+        had_previous = setting_key in self.secure_settings
+        previous = self.secure_settings.get(setting_key)
+        try:
+            with self._accounts_lock:
+                self.secure_settings[setting_key] = value
+                self.save_accounts()
+            return OperationResult.success()
+        except Exception as e:
+            with self._accounts_lock:
+                if had_previous:
+                    self.secure_settings[setting_key] = previous
+                else:
+                    self.secure_settings.pop(setting_key, None)
+            print(
+                f"[ERROR] Failed to save secure setting '{setting_key}': "
+                f"{type(e).__name__}: {e}"
+            )
+            return unexpected_result(
+                f"Saving secure setting '{setting_key}'",
+                e,
+            )
+
+    def remove_secure_setting(self, key):
+        setting_key = str(key or "").strip()
+        if not setting_key:
+            return OperationResult.failure(
+                "SECURE_SETTING_KEY_INVALID",
+                "Secure Setting Could Not Be Removed",
+                "The secure setting name is invalid.",
+            )
+        if self._unavailable_secure_settings is not None:
+            return OperationResult.failure(
+                "SECURE_SETTINGS_UNAVAILABLE",
+                "Secure Setting Could Not Be Removed",
+                "Encrypted secure settings could not be opened on this computer.",
+                detail="The existing encrypted secure settings were preserved.",
+            )
+        had_previous = setting_key in self.secure_settings
+        previous = self.secure_settings.get(setting_key)
+        try:
+            with self._accounts_lock:
+                self.secure_settings.pop(setting_key, None)
+                self.save_accounts()
+            return OperationResult.success()
+        except Exception as e:
+            with self._accounts_lock:
+                if had_previous:
+                    self.secure_settings[setting_key] = previous
+            print(
+                f"[ERROR] Failed to remove secure setting '{setting_key}': "
+                f"{type(e).__name__}: {e}"
+            )
+            return unexpected_result(
+                f"Removing secure setting '{setting_key}'",
+                e,
+            )
 
     def create_temp_profile(self):
         # Create a temporary browser profile directory.
@@ -736,11 +854,11 @@ class RobloxAccountManager:
                                     'avatar_url': avatar_url or '',
                                     'cookie_valid': True,
                                 }
-                                self.save_accounts()
 
                             print(f"[SUCCESS] Successfully added account: {username}")
                             nonlocal success_count
-                            success_count += 1
+                            with failure_lock:
+                                success_count += 1
                         else:
                             print(f"[ERROR] Failed to extract account information for instance {driver_index + 1}")
                             with failure_lock:
@@ -787,6 +905,10 @@ class RobloxAccountManager:
             
             for thread in threads:
                 thread.join()
+
+            if success_count:
+                with self._accounts_lock:
+                    self.save_accounts()
             
             if success_count:
                 return OperationResult.success(
@@ -817,7 +939,7 @@ class RobloxAccountManager:
                 detail=f"{type(e).__name__}: {e}",
             )
     
-    def import_cookie_account_result(self, cookie):
+    def import_cookie_account_result(self, cookie, save: bool = True):
         if not cookie:
             print("[ERROR] Cookie is required")
             return OperationResult.failure(
@@ -878,16 +1000,18 @@ class RobloxAccountManager:
             except Exception:
                 pass
 
-            self.accounts[username] = {
-                'username':   username,
-                'cookie':     cookie,
-                'user_id':    user_id,
-                'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'note':       '',
-                'avatar_url': avatar_url,
-                'cookie_valid': True,
-            }
-            self.save_accounts()
+            with self._accounts_lock:
+                self.accounts[username] = {
+                    'username':   username,
+                    'cookie':     cookie,
+                    'user_id':    user_id,
+                    'added_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'note':       '',
+                    'avatar_url': avatar_url,
+                    'cookie_valid': True,
+                }
+                if save:
+                    self.save_accounts()
 
             print(f"[SUCCESS] Successfully imported account: {username}")
             return OperationResult.success(
@@ -1025,7 +1149,5 @@ class RobloxAccountManager:
             self._entered_password_hash = None
 
         self.accounts = current_data
-        self.save_accounts()
-        print(f"[SUCCESS] Encryption method switched to '{new_method}' and saved_accounts.json re-encrypted")
         self.save_accounts()
         print(f"[SUCCESS] Switched to {new_method} encryption")

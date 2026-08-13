@@ -14,6 +14,9 @@ from Crypto.Random import get_random_bytes  # nosec B413
 from Crypto.Protocol.KDF import PBKDF2  # nosec B413
 
 
+_MACHINE_ID_CACHE = None
+
+
 class HardwareEncryption:
     """Hardware-based encryption using machine-specific identifiers"""
     
@@ -27,25 +30,40 @@ class HardwareEncryption:
     
     def _get_machine_id(self):
         """Generate unique machine ID from hardware identifiers"""
+        global _MACHINE_ID_CACHE
+        if _MACHINE_ID_CACHE is not None:
+            return _MACHINE_ID_CACHE
         identifiers = []
 
         try:
             if platform.system() == "Windows":
                 CREATE_NO_WINDOW = 0x08000000
 
-                def _ps(cmd: str) -> str:
-                    out = subprocess.check_output(
-                        ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-                        creationflags=CREATE_NO_WINDOW,
-                        stderr=subprocess.DEVNULL,
-                        timeout=10,
-                    )
-                    return out.decode(errors="ignore").strip()
-
-                # i just knew that wmic is going to be removed
-                identifiers.append(_ps("(Get-CimInstance Win32_ComputerSystemProduct).UUID"))
-                identifiers.append(_ps("(Get-CimInstance Win32_Processor).ProcessorId"))
-                identifiers.append(_ps("(Get-CimInstance Win32_BaseBoard).SerialNumber"))
+                command = (
+                    "$computer=Get-CimInstance Win32_ComputerSystemProduct;"
+                    "$processor=Get-CimInstance Win32_Processor;"
+                    "$board=Get-CimInstance Win32_BaseBoard;"
+                    "Write-Output $computer.UUID;"
+                    "Write-Output $processor.ProcessorId;"
+                    "Write-Output $board.SerialNumber"
+                )
+                output = subprocess.check_output(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        command,
+                    ],
+                    creationflags=CREATE_NO_WINDOW,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+                identifiers.extend(
+                    line.strip()
+                    for line in output.decode(errors="ignore").splitlines()
+                    if line.strip()
+                )
             else:
                 identifiers.append(platform.node())
                 identifiers.append(str(os.getuid()) if hasattr(os, 'getuid') else "0")
@@ -54,7 +72,8 @@ class HardwareEncryption:
             identifiers.append(platform.machine())
         
         machine_string = "-".join(identifiers)
-        return hashlib.sha256(machine_string.encode()).hexdigest()
+        _MACHINE_ID_CACHE = hashlib.sha256(machine_string.encode()).hexdigest()
+        return _MACHINE_ID_CACHE
 
     def _get_legacy_machine_id(self):
         identifiers = [platform.node(), platform.machine()]

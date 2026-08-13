@@ -9,45 +9,27 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
-import psutil
 import win32con
 import win32gui
-import win32process
 
 import features.presence as presence_mod
 from classes.roblox_api import RobloxAPI
 
-_ENFORCE_INTERVAL = 0.05
+_ENFORCE_INTERVAL = 1.0
 
 def _get_roblox_pids() -> set[int]:
-    try:
-        pids = set()
-        for p in psutil.process_iter(["pid", "name"]):
-            if (p.info.get("name") or "").lower() == "robloxplayerbeta.exe":
-                pids.add(p.info["pid"])
-        return pids
-    except Exception:
-        return set()
+    return set(presence_mod.get_roblox_processes())
 
 
 def _get_roblox_hwnds_for_pid(pid: int, expected_titles: set[str] | None = None) -> list[int]:
-    hwnds: list[int] = []
     titles = expected_titles or {"Roblox"}
-
-    def _callback(hwnd, _):
+    hwnds = []
+    for hwnd in presence_mod.get_windows_by_pid({pid}).get(pid, []):
         try:
             if win32gui.GetWindowText(hwnd) in titles:
-                _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if found_pid == pid:
-                    hwnds.append(hwnd)
+                hwnds.append(hwnd)
         except Exception:
             pass
-        return True
-
-    try:
-        win32gui.EnumWindows(_callback, None)
-    except Exception:
-        pass
     return hwnds
 
 
@@ -98,6 +80,7 @@ class HeadlessManager:
         self._uid_cache: dict[int, str] = {}   # pid -> user_id
         self._name_cache: dict[str, str] = {}  # user_id -> username
         self._pid_username: dict[int, str] = {}  # pid -> username, for window title matching
+        self._last_results: list[dict] = []
 
     def start(self) -> None:
         global _active_manager
@@ -174,8 +157,26 @@ class HeadlessManager:
             with self._lock:
                 pids = list(self._hidden_pids)
                 usernames = dict(self._pid_username)
+            windows = presence_mod.get_windows_by_pid(set(pids))
             for pid in pids:
-                hide_roblox_window(pid, usernames.get(pid))
+                titles = {"Roblox"}
+                username = usernames.get(pid)
+                if username:
+                    titles.add(username)
+                for hwnd in windows.get(pid, []):
+                    try:
+                        if win32gui.GetWindowText(hwnd) not in titles:
+                            continue
+                        if win32gui.IsWindowVisible(hwnd):
+                            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                            win32gui.PostMessage(
+                                hwnd,
+                                win32con.WM_SYSCOMMAND,
+                                win32con.SC_MINIMIZE,
+                                0,
+                            )
+                    except Exception:
+                        pass
             if self._stop_evt.wait(_ENFORCE_INTERVAL):
                 break
 
@@ -224,6 +225,8 @@ class HeadlessManager:
             with self._lock:
                 self._pid_username = {p: u for p, u in self._pid_username.items() if p in pids}
 
-            self._on_update(results)
+            if results != self._last_results:
+                self._last_results = [dict(row) for row in results]
+                self._on_update(results)
         except Exception:
             pass

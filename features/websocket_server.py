@@ -19,18 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import re
 import secrets
 import shlex
 import threading
 import websockets
-import psutil
-from datetime import datetime, timezone
 from typing import Callable
 import features.auto_rejoin as _ar
+import features.presence as presence_mod
 from classes.roblox_api import RobloxAPI
-from classes.account_manager import RobloxAccountManager
 
 
 class WebSocketServer:
@@ -56,6 +52,7 @@ class WebSocketServer:
         self._thread: threading.Thread | None = None
         self._loop:   asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
+        self._async_stop: asyncio.Event | None = None
         self.running = False
 
 
@@ -73,7 +70,7 @@ class WebSocketServer:
         loop = self._loop
         if loop is not None:
             try:
-                loop.call_soon_threadsafe(lambda: None)
+                loop.call_soon_threadsafe(self._signal_async_stop)
             except Exception:
                 pass
         if self._thread and self._thread.is_alive():
@@ -87,6 +84,10 @@ class WebSocketServer:
         s = self._get_settings()
         if s.get("websocket_enabled") and s.get("developer_mode"):
             self.start()
+
+    def _signal_async_stop(self) -> None:
+        if self._async_stop is not None:
+            self._async_stop.set()
 
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()
@@ -110,14 +111,17 @@ class WebSocketServer:
         try:
             async with websockets.serve(self._client_handler, host, port):
                 self.running = True
+                self._async_stop = asyncio.Event()
                 print(f"[INFO] WebSocket server started at ws://{host}:{port}")
-                while not self._stop.is_set():
-                    await asyncio.sleep(0.2)
+                if self._stop.is_set():
+                    self._async_stop.set()
+                await self._async_stop.wait()
         except OSError as exc:
             print(f"[ERROR] WebSocket server failed on port {port}: {exc}")
         finally:
             if self.running:
                 print("[INFO] WebSocket server stopped")
+            self._async_stop = None
             self.running = False
 
     async def _client_handler(self, websocket) -> None:
@@ -399,13 +403,9 @@ class WebSocketServer:
     def _cmd_get_status(self) -> dict:
         data = []
         try:
-            pids = [
-                p.info["pid"]
-                for p in psutil.process_iter(["pid", "name"])
-                if (p.info.get("name") or "").lower() == "robloxplayerbeta.exe"
-            ]
+            pids = sorted(presence_mod.get_roblox_processes())
             for pid in pids:
-                uid = _get_user_id_from_pid(pid)
+                uid = presence_mod._get_user_id_from_pid(pid)
                 if uid:
                     username = RobloxAPI.get_username_from_user_id(uid)
                     data.append({"pid": pid, "username": username or None, "user_id": uid})
@@ -454,43 +454,3 @@ class WebSocketServer:
             parts = text.split("_|WARNING:-")
             return ["_|WARNING:-" + p.strip() for p in parts if p.strip()]
         return [c.strip() for c in text.split() if c.strip()]
-
-
-
-def _get_user_id_from_pid(pid: int) -> str | None:
-    try:
-        proc = psutil.Process(pid)
-        create_utc = datetime.fromtimestamp(
-            proc.create_time(), tz=timezone.utc
-        ).replace(tzinfo=None)
-        logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
-        if not os.path.isdir(logs_dir):
-            return None
-        candidates = []
-        for fn in os.listdir(logs_dir):
-            if not fn.endswith("_last.log"):
-                continue
-            m = re.search(r"(\d{8}T\d{6}Z)", fn)
-            if not m:
-                continue
-            try:
-                log_time = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ")
-                diff = (log_time - create_utc).total_seconds()
-                if 0 <= diff <= 60:
-                    candidates.append((diff, os.path.join(logs_dir, fn)))
-            except ValueError:
-                continue
-        candidates.sort(key=lambda x: x[0])
-        for _, log_path in candidates:
-            try:
-                with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
-                    content = fh.read(50000)
-                if "userid:" in content:
-                    uid = content.split("userid:")[1].split(",")[0].strip()
-                    if uid.isdigit():
-                        return uid
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return None

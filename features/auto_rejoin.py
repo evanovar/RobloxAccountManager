@@ -11,7 +11,6 @@ import subprocess
 import threading
 import time
 import random
-import psutil
 import requests
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
@@ -19,26 +18,41 @@ import features.presence as presence_mod
 from utils.app_paths import get_data_dir
 
 _CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
+_CONFIG_LOCK = threading.RLock()
+_CONFIG_CACHE: dict | None = None
+_INTERNET_LOCK = threading.Lock()
+_INTERNET_CACHE = (0.0, False)
 
 def load_configs() -> dict:
-    if os.path.exists(_CONFIG_FILE):
-        try:
-            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-    return {}
+    global _CONFIG_CACHE
+    with _CONFIG_LOCK:
+        if _CONFIG_CACHE is None:
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        data = loaded
+                except (OSError, ValueError, TypeError):
+                    pass
+            _CONFIG_CACHE = data
+        return dict(_CONFIG_CACHE)
 
 
 def save_configs(configs: dict) -> None:
+    global _CONFIG_CACHE
+    with _CONFIG_LOCK:
+        if _CONFIG_CACHE == configs:
+            return
     os.makedirs(get_data_dir(), exist_ok=True)
     temp_file = _CONFIG_FILE + ".tmp"
     try:
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(configs, f, indent=2)
         os.replace(temp_file, _CONFIG_FILE)
+        with _CONFIG_LOCK:
+            _CONFIG_CACHE = dict(configs)
     except Exception as e:
         print(f"[WARNING] Safe configs save failed: {e}. Falling back to original direct write.")
         if os.path.exists(temp_file):
@@ -54,33 +68,32 @@ def save_configs(configs: dict) -> None:
             pass
 
 def _has_internet(timeout: int = 3) -> bool:
+    global _INTERNET_CACHE
+    now = time.monotonic()
+    with _INTERNET_LOCK:
+        checked_at, cached = _INTERNET_CACHE
+        if now - checked_at < 10.0:
+            return cached
     for url in ("https://www.google.com/generate_204",
                 "https://www.cloudflare.com/cdn-cgi/trace"):
         try:
             if requests.get(url, timeout=timeout).status_code < 500:
+                with _INTERNET_LOCK:
+                    _INTERNET_CACHE = (time.monotonic(), True)
                 return True
         except Exception:
             pass
+    with _INTERNET_LOCK:
+        _INTERNET_CACHE = (time.monotonic(), False)
     return False
 
 
 def _get_roblox_pids() -> set:
-    try:
-        pids = set()
-        for p in psutil.process_iter(["pid", "name"]):
-            if (p.info["name"] or "").lower() == "robloxplayerbeta.exe":
-                pids.add(p.info["pid"])
-        return pids
-    except Exception:
-        return set()
+    return set(presence_mod.get_roblox_processes())
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        p = psutil.Process(pid)
-        return p.is_running() and p.name().lower() == "robloxplayerbeta.exe"
-    except Exception:
-        return False
+    return pid in presence_mod.get_roblox_processes()
 
 
 def _kill_pid(pid: int) -> None:

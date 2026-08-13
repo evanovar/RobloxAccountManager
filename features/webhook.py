@@ -122,7 +122,10 @@ def stop_screenshot_loop() -> None:
     """Signal the screenshot loop to stop."""
     global _ss_thread
     _ss_stop.set()
+    thread = _ss_thread
     _ss_thread = None
+    if thread and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=1.0)
 
 
 
@@ -138,6 +141,10 @@ class WebhookStdoutInterceptor:
         self._timer: threading.Timer | None = None
 
         self._console_queue: collections.deque = collections.deque(maxlen=2000)
+        self._console_wakeup: Callable[[], None] | None = None
+
+    def set_console_wakeup(self, callback: Callable[[], None] | None) -> None:
+        self._console_wakeup = callback
 
     def write(self, text: str) -> int:
         with self._write_lock:
@@ -210,7 +217,13 @@ class WebhookStdoutInterceptor:
             if line.startswith(prefix):
                 color = col
                 break
+        was_empty = not self._console_queue
         self._console_queue.append((text, color))
+        if was_empty and self._console_wakeup is not None:
+            try:
+                self._console_wakeup()
+            except Exception:
+                pass
 
     def _enqueue(self, ts: str, line: str, color: int, url: str, cfg: dict) -> None:
         with self._lock:

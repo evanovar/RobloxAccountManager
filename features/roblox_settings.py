@@ -18,6 +18,7 @@ import threading
 import xml.etree.ElementTree as ET
 
 from classes.operation_result import OperationResult, unexpected_result
+import features.settings_store as settings_store_mod
 from utils.app_paths import get_data_dir
 
 
@@ -86,48 +87,21 @@ def _get_ui_settings_path() -> Path:
 
 
 def _load_ui_settings() -> dict:
-    path = _get_ui_settings_path()
-    try:
-        if path.is_file():
-            with path.open("r", encoding="utf-8") as handle:
-                data = json.load(handle)
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
+    return settings_store_mod.load()
 
 
 def _save_ui_settings(settings: dict) -> OperationResult:
     path = _get_ui_settings_path()
-    temp_path: Path | None = None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        file_descriptor, temp_name = tempfile.mkstemp(
-            prefix=f".{_UI_SETTINGS_FILENAME}.",
-            suffix=".tmp",
-            dir=str(path.parent),
-        )
-        os.close(file_descriptor)
-        temp_path = Path(temp_name)
-        with temp_path.open("w", encoding="utf-8") as handle:
-            json.dump(settings, handle, indent=2)
-        os.replace(temp_path, path)
-        temp_path = None
+        settings_store_mod.replace(settings)
         return OperationResult.success()
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
         return OperationResult.failure(
             "ROBLOX_SETTINGS_CONFIG_WRITE_FAILED",
             "Roblox Settings Configuration Could Not Be Saved",
             "The Roblox settings configuration could not be saved.",
             detail=f"Path: {path}\n{type(exc).__name__}: {exc}",
         )
-    finally:
-        if temp_path and temp_path.exists():
-            try:
-                temp_path.unlink()
-            except OSError:
-                pass
 
 
 def get_local_profile_path() -> Path:
@@ -179,6 +153,27 @@ def _load_local_profile_file() -> dict | None:
     except (OSError, ValueError, TypeError):
         return None
     return None
+
+
+def has_startup_customizations() -> bool:
+    profile = _load_local_profile_file()
+    if profile is not None:
+        if bool(profile.get("advanced_auto_apply", False)):
+            return True
+        basic = profile.get("basic", {})
+        if isinstance(basic, dict):
+            return any(
+                isinstance(entry, dict) and bool(entry.get("enabled", False))
+                for entry in basic.values()
+            )
+
+    settings = _load_ui_settings()
+    return any(bool(settings.get(key, False)) for key in (
+        "roblox_settings_auto_apply",
+        "framerate_cap_enabled",
+        "master_volume_enabled",
+        "start_quality_enabled",
+    ))
 
 
 def _legacy_profile_values() -> dict[str, object]:
@@ -505,13 +500,6 @@ def save_advanced_auto_apply(enabled: bool) -> OperationResult:
         return _save_local_profile(profile)
 
 
-def save_local_setting(key: str, value: str, apply: bool = True) -> OperationResult:
-    # Preserve the old API for callers while routing settings to their owner.
-    if key in _BASIC_KEYS:
-        return save_basic_setting(key, value=value, enabled=apply)
-    return save_advanced_setting(key, value)
-
-
 def get_customization_config(
     settings: dict | None = None,
     records: dict[str, dict] | None = None,
@@ -554,45 +542,6 @@ def get_customization_config(
         "start_quality_value": str(quality.get("value", "0")),
         "lock_owned": bool(profile.get("lock_owned", False)),
     }
-
-
-def save_customization_config(config: dict[str, object]) -> OperationResult:
-    profile = _load_local_profile_file()
-    if profile is None:
-        loaded = load_local_profile()
-        if not loaded:
-            return loaded
-        profile = dict((loaded.data or {}).get("profile", {}))
-    profile["advanced_auto_apply"] = bool(config.get(
-        "auto_apply",
-        profile.get("advanced_auto_apply", False),
-    ))
-    profile["lock_owned"] = bool(config.get("lock_owned", profile.get("lock_owned", False)))
-    managed = (
-        ("FramerateCap", "framerate_enabled", "framerate_value"),
-        ("MasterVolume", "master_volume_enabled", "master_volume_value"),
-        ("SavedQualityLevel", "start_quality_enabled", "start_quality_value"),
-    )
-    for key, enabled_key, value_key in managed:
-        entry = profile.get("settings", {}).get(key)
-        if not isinstance(entry, dict):
-            continue
-        value = str(config.get(value_key, entry.get("value", "")))
-        validation = _validate_managed_value(key, value) if key in {
-            "FramerateCap",
-            "MasterVolume",
-            "SavedQualityLevel",
-        } else validate_value(
-            str(entry.get("xml_type", entry.get("type", "string"))),
-            value,
-        )
-        if not validation:
-            return validation
-        profile.setdefault("basic", {})[key] = {
-            "enabled": bool(config.get(enabled_key, False)),
-            "value": str(validation.data),
-        }
-    return _save_local_profile(profile)
 
 
 def _validate_managed_value(key: str, value: str) -> OperationResult:
@@ -639,41 +588,6 @@ def _validate_managed_value(key: str, value: str) -> OperationResult:
         return OperationResult.success(data=str(parsed))
 
     return OperationResult.success(data=str(value))
-
-
-def build_managed_changes(
-    config: dict[str, object],
-    records: dict[str, dict],
-) -> OperationResult:
-    changes: dict[str, str] = {}
-    managed = (
-        ("framerate_enabled", "framerate_value", "FramerateCap"),
-        ("master_volume_enabled", "master_volume_value", "MasterVolume"),
-        ("start_quality_enabled", "start_quality_value", "SavedQualityLevel"),
-    )
-    for enabled_key, value_key, xml_key in managed:
-        if not bool(config.get(enabled_key, False)):
-            continue
-        record = records.get(xml_key)
-        if record is None:
-            return OperationResult.failure(
-                "ROBLOX_MANAGED_SETTING_MISSING",
-                "Roblox Setting Not Found",
-                f"The enabled setting '{xml_key}' was not found in the Roblox XML file.",
-                detail=f"Setting: {xml_key}",
-            )
-        validation = _validate_managed_value(
-            xml_key,
-            str(config.get(value_key, record.get("value", ""))),
-        )
-        if not validation:
-            return validation
-        changes[xml_key] = str(validation.data)
-    return OperationResult.success(data=changes)
-
-
-def should_lock_file(config: dict[str, object]) -> bool:
-    return bool(config.get("auto_apply", False))
 
 
 def _customization_signature(config: dict[str, object]) -> str:
@@ -1066,14 +980,6 @@ def apply_settings(
                     pass
 
 
-def load_settings_async(on_done) -> None:
-    threading.Thread(
-        target=lambda: on_done(load_settings()),
-        daemon=True,
-        name="roblox-settings-load",
-    ).start()
-
-
 def load_local_profile_async(on_done) -> None:
     threading.Thread(
         target=lambda: on_done(load_local_profile()),
@@ -1087,23 +993,6 @@ def reload_local_profile_from_roblox_async(on_done) -> None:
         target=lambda: on_done(reload_local_profile_from_roblox()),
         daemon=True,
         name="roblox-settings-profile-reload",
-    ).start()
-
-
-def apply_settings_async(
-    changes: dict[str, str],
-    expected_hash: str,
-    framerate_locked: bool | None,
-    on_done,
-) -> None:
-    threading.Thread(
-        target=lambda: on_done(apply_settings(
-            changes,
-            expected_hash=expected_hash,
-            framerate_locked=framerate_locked,
-        )),
-        daemon=True,
-        name="roblox-settings-apply",
     ).start()
 
 

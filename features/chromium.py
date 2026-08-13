@@ -49,10 +49,6 @@ def get_chromium_path() -> str:
     return _CHROMIUM_EXE
 
 
-def get_chromedriver_path() -> str:
-    return _CHROMEDRIVER_EXE
-
-
 def get_installed_build() -> str:
     try:
         with open(_SNAPSHOT_BUILD_FILE, "r", encoding="utf-8") as handle:

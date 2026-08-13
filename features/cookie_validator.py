@@ -25,10 +25,10 @@ def is_flagged(data: dict) -> bool:
     return data.get("valid") is False
 
 
-def _set_status(manager, username: str, status: str) -> None:
+def _set_status(manager, username: str, status: str) -> bool:
     data = manager.accounts.get(username)
     if not isinstance(data, dict):
-        return
+        return False
 
     value = {
         VALID: True,
@@ -41,40 +41,32 @@ def _set_status(manager, username: str, status: str) -> None:
         or "valid" in data
     )
     if not changed:
-        return
-
-    def _save():
-        data["cookie_valid"] = value
-        data.pop("valid", None)
-        try:
-            manager.save_accounts()
-        except Exception as exc:
-            print(
-                f"[WARNING] Cookie validation: could not save status for "
-                f"{username}: {exc}"
-            )
+        return False
 
     account_lock = getattr(manager, "_accounts_lock", None)
     if account_lock is None:
-        _save()
+        data["cookie_valid"] = value
+        data.pop("valid", None)
     else:
         with account_lock:
-            _save()
+            data["cookie_valid"] = value
+            data.pop("valid", None)
+    return True
 
 
-def _check(cookie: str) -> tuple[str, str]:
+def _check(cookie: str, session: requests.Session) -> tuple[str, str, bool]:
     last_detail = "No response from Roblox."
     authentication_failures = 0
 
     for attempt in range(_VALIDATION_ATTEMPTS):
         try:
-            response = requests.get(
+            response = session.get(
                 _VALIDATION_URL,
                 headers={"Cookie": f".ROBLOSECURITY={cookie}"},
                 timeout=8,
             )
             if response.status_code == 200:
-                return VALID, "Authenticated successfully."
+                return VALID, "Authenticated successfully.", False
             if response.status_code in (401, 403):
                 authentication_failures += 1
                 last_detail = (
@@ -82,6 +74,7 @@ def _check(cookie: str) -> tuple[str, str]:
                 )
             elif response.status_code == 429:
                 last_detail = "Roblox rate limited validation with HTTP 429."
+                return UNKNOWN, last_detail, True
             else:
                 last_detail = f"Roblox returned HTTP {response.status_code}."
         except requests.RequestException as exc:
@@ -93,8 +86,8 @@ def _check(cookie: str) -> tuple[str, str]:
             time.sleep(_RETRY_DELAY)
 
     if authentication_failures == _VALIDATION_ATTEMPTS:
-        return INVALID, last_detail
-    return UNKNOWN, last_detail
+        return INVALID, last_detail, False
+    return UNKNOWN, last_detail, False
 
 
 class CookieValidator:
@@ -125,39 +118,72 @@ class CookieValidator:
         self._stop_evt.set()
 
     def _run(self) -> None:
-        accounts_snapshot = list(self._manager.accounts.items())
+        account_lock = getattr(self._manager, "_accounts_lock", None)
+        if account_lock is None:
+            accounts_snapshot = list(self._manager.accounts.items())
+        else:
+            with account_lock:
+                accounts_snapshot = list(self._manager.accounts.items())
+        changed = False
+        checked = 0
+        invalid = 0
+        unknown = 0
+        rate_limited = False
+        session = requests.Session()
 
-        for username, data in accounts_snapshot:
-            if self._stop_evt.is_set():
-                break
-            if not isinstance(data, dict):
-                continue
+        try:
+            for username, data in accounts_snapshot:
+                if self._stop_evt.is_set():
+                    break
+                if not isinstance(data, dict):
+                    continue
 
-            cookie = data.get("cookie", "")
-            if not cookie:
-                continue
+                cookie = data.get("cookie", "")
+                if not cookie:
+                    continue
 
-            status, detail = _check(cookie)
-            _set_status(self._manager, username, status)
+                status, detail, rate_limited = _check(cookie, session)
+                changed = _set_status(self._manager, username, status) or changed
+                checked += 1
 
-            if status == INVALID:
-                print(
-                    f"[WARNING] Cookie validation: {username} received "
-                    f"repeated unauthorized responses."
-                )
-            elif status == UNKNOWN:
-                print(
-                    f"[WARNING] Cookie validation: could not verify {username}. "
-                    f"{detail} The account was not marked invalid."
-                )
+                if status == INVALID:
+                    invalid += 1
+                    print(
+                        f"[WARNING] Cookie validation: {username} received "
+                        f"repeated unauthorized responses."
+                    )
+                elif status == UNKNOWN:
+                    unknown += 1
+                    print(
+                        f"[WARNING] Cookie validation: could not verify {username}. "
+                        f"{detail} The account was not marked invalid."
+                    )
 
+                try:
+                    self._on_result(username, status)
+                except Exception as exc:
+                    print(f"[WARNING] cookie_validator on_result error: {exc}")
+
+                if rate_limited:
+                    print(
+                        "[WARNING] Cookie validation paused because Roblox "
+                        "returned HTTP 429."
+                    )
+                    break
+                self._stop_evt.wait(timeout=self._delay)
+        finally:
+            session.close()
+
+        if changed:
             try:
-                self._on_result(username, status)
+                self._manager.save_accounts()
             except Exception as exc:
-                print(f"[WARNING] cookie_validator on_result error: {exc}")
+                print(f"[WARNING] Cookie validation statuses could not be saved: {exc}")
 
-            if not self._stop_evt.wait(timeout=self._delay):
-                pass
+        print(
+            f"[INFO] Cookie validation complete: checked {checked}, "
+            f"invalid {invalid}, unknown {unknown}."
+        )
 
         try:
             self._on_done()

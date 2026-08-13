@@ -336,6 +336,7 @@ class _Bridge(QObject):
     roblox_settings_loaded = Signal(object) # OperationResult from Roblox settings load
     roblox_settings_applied = Signal(object) # OperationResult from Roblox settings apply
     roblox_settings_auto_applied = Signal(object) # OperationResult from Roblox settings Auto Apply
+    console_wakeup = Signal()
 
 
 BG = "#0E0E0E"
@@ -614,6 +615,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.roblox_download_done.connect(self._on_roblox_download_done)
         self._bridge.presence_update.connect(self._on_presence_update)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
+        self._bridge.console_wakeup.connect(self._drain_console_queue)
+        if isinstance(sys.stdout, webhook.WebhookStdoutInterceptor):
+            sys.stdout.set_console_wakeup(self._bridge.console_wakeup.emit)
         self._bridge.update_available.connect(self._on_update_available)
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
@@ -633,6 +637,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._online_usernames: set[str] = set()
         self._activity_snapshot: dict[str, dict] = {}
         self._activity_widgets: dict[str, QWidget] = {}
+        self._activity_labels: dict[str, tuple[QLabel, QLabel]] = {}
 
         # Roblox Window Renamer
         self._window_renamer: window_renamer_mod.RobloxWindowRenamer | None = None
@@ -641,6 +646,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._cv_mod = cookie_validator_mod
         self._cv_validator = None
         self._invalid_badges: dict[str, QLabel] = {}
+        self._account_avatar_containers: dict[str, QWidget] = {}
+        self._account_name_labels: dict[str, QLabel] = {}
+        self._account_rows: dict[str, QWidget] = {}
+        self._placeholder_pixmaps: dict[int, QPixmap] = {}
 
         self._avatar_labels: dict[str, QLabel] = {}
         self._current_group: str | None = None
@@ -649,6 +658,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._ar_configs: dict = ar.load_configs() # {username: config_dict}
         self._ar_workers: dict[str, ar.AutoRejoinWorker] = {} # {username: worker}
         self._ar_list: QListWidget | None = None
+        self._headless_manager: headless_manager_mod.HeadlessManager | None = None
+        self._headless_latest_rows: list[dict] = []
+        self._headless_avatar_labels: dict[int, QLabel] = {}
+        self._headless_status_labels: dict[int, QLabel] = {}
 
         # WebSocket server
         self._ws_server: ws_mod.WebSocketServer | None = ws_mod.WebSocketServer(
@@ -686,22 +699,19 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._bridge.game_name_ready.connect(self._game_name_label.setText)
 
-        self._console_poll_timer = QTimer(self)
-        self._console_poll_timer.timeout.connect(self._drain_console_queue)
-        self._console_poll_timer.start(50)
-
-        webhook.start_screenshot_loop(
-            lambda: actions.load_ui_settings().get("discord_webhook", {})
-        )
-
         self._refresh_account_list()
-        QTimer.singleShot(750, self._sync_missing_avatars_async)
         self._refresh_recent_games()
         self._update_encryption_badge()
-        QTimer.singleShot(0, self._load_roblox_settings)
-
         # Apply persisted settings that affect widgets built in _build_ui
         S = actions.load_ui_settings()
+        discord_settings = S.get("discord_webhook", {})
+        if (
+            discord_settings.get("enabled", False)
+            and discord_settings.get("screenshot_enabled", False)
+        ):
+            webhook.start_screenshot_loop(
+                lambda: actions.get_ui_setting("discord_webhook", {})
+            )
         self._place_id_edit.setCurrentText(S.get("last_place_id", ""))
         self._private_server_edit.setText(S.get("last_private_server", ""))
 
@@ -721,6 +731,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if S.get("rename_roblox_windows", False):
             self._start_rename_windows()
 
+        if S.get("presence_indicator", False):
+            self._start_presence_scanner()
+
         if S.get("roblox_installer_fix", False):
             try:
                 RobloxAPI.quarantine_installers()
@@ -739,9 +752,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 lambda: self._apply_window_grid_hotkey(show_error=False),
             )
 
-        QTimer.singleShot(2000, self._start_cookie_validator)
+        if roblox_settings_mod.has_startup_customizations():
+            QTimer.singleShot(0, self._start_roblox_auto_apply)
+
+        QTimer.singleShot(2500, self._start_cookie_validator)
         QTimer.singleShot(500, self._start_update_check)
-        QTimer.singleShot(1000, self._start_chromium_status_check)
+        if S.get("browser_type", "chrome") == "chromium":
+            QTimer.singleShot(1500, self._start_chromium_status_check)
         print("[INFO] UI ready")
 
     def _apply_stylesheet(self):
@@ -896,6 +913,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         outer.addWidget(self._build_title_bar())
 
         self._page_stack = QStackedWidget()
+        self._built_pages = {0, 1, 2, 3, 7}
+        self._lazy_page_builders = {
+            4: self._build_settings_panel,
+            5: self._build_console_panel,
+            6: self._build_donations_panel,
+        }
 
         _accounts_page = QWidget()
         _acc_lay = QHBoxLayout(_accounts_page)
@@ -908,9 +931,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._page_stack.addWidget(self._build_auto_rejoin_panel()) # idx 1
         self._page_stack.addWidget(self._build_anti_afk_panel()) # idx 2
         self._page_stack.addWidget(self._build_multi_roblox_panel()) # idx 3
-        self._page_stack.addWidget(self._build_settings_panel()) # idx 4
-        self._page_stack.addWidget(self._build_console_panel()) # idx 5
-        self._page_stack.addWidget(self._build_donations_panel()) # idx 6
+        self._page_stack.addWidget(QWidget()) # idx 4, built on first use
+        self._page_stack.addWidget(QWidget()) # idx 5, built on first use
+        self._page_stack.addWidget(QWidget()) # idx 6, built on first use
         self._page_stack.addWidget(self._build_setup_panel()) # idx 7
 
         body = QHBoxLayout()
@@ -919,6 +942,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         body.addWidget(self._build_nav_panel())
         body.addWidget(self._page_stack, 1)
         outer.addLayout(body, 1)
+
+    def _show_page(self, index: int) -> None:
+        if index not in self._built_pages:
+            builder = self._lazy_page_builders.get(index)
+            if builder is not None:
+                placeholder = self._page_stack.widget(index)
+                page = builder()
+                self._page_stack.removeWidget(placeholder)
+                placeholder.deleteLater()
+                self._page_stack.insertWidget(index, page)
+                self._built_pages.add(index)
+                if index == 4:
+                    if hasattr(self, "_headless_list"):
+                        self._refresh_headless_list(self._headless_latest_rows)
+                    self._start_chromium_status_check()
+                elif index == 5:
+                    self._drain_console_queue()
+        self._page_stack.setCurrentIndex(index)
 
     # Title bar
     def _build_title_bar(self) -> QFrame:
@@ -1016,7 +1057,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             if label in _NAV_PAGES:
                 page_idx = _NAV_PAGES[label]
                 btn.clicked.connect(
-                    lambda _=False, idx=page_idx: self._page_stack.setCurrentIndex(idx)
+                    lambda _=False, idx=page_idx: self._show_page(idx)
                 )
             lay.addWidget(btn)
             self._normal_nav_btns.append(btn)
@@ -2157,7 +2198,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addWidget(self._sett_startmenu_chk)
 
         _startup_enabled = windows_startup_mod.is_startup_enabled()
-        actions.save_ui_setting("start_with_windows", _startup_enabled)
         self._sett_startup_chk = QCheckBox("Start with Windows")
         self._sett_startup_chk.setChecked(_startup_enabled)
         self._sett_startup_chk.setToolTip(
@@ -2237,8 +2277,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_custom_launcher_edit.setPlaceholderText("Path to launcher .exe ...")
         self._sett_custom_launcher_edit.setText(str(S.get("custom_roblox_launcher_path", "") or ""))
         self._sett_custom_launcher_edit.setEnabled(_cur_launcher == "custom")
-        self._sett_custom_launcher_edit.textChanged.connect(
-            lambda t: actions.save_ui_setting("custom_roblox_launcher_path", t)
+        self._sett_custom_launcher_edit.editingFinished.connect(
+            lambda: actions.save_ui_setting(
+                "custom_roblox_launcher_path",
+                self._sett_custom_launcher_edit.text(),
+            )
         )
         _custom_row.addWidget(self._sett_custom_launcher_edit)
         _browse_btn = QPushButton("Browse")
@@ -2339,7 +2382,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addWidget(_sec("RAM OPTIMIZATION"))
         self._sett_boost_ram_chk = _chk(
-            "optimize_roblox_ram", "Boost Roblox RAM Limit",
+            "optimize_roblox_ram", "Boost Roblox RAM Limit (May Cause Crash)",
             "Periodically trim Roblox working-set memory to reduce RAM usage.\n"
             "May causes crash when using this feature, use with caution.",
             on_change=self._on_sett_boost_ram,
@@ -2406,8 +2449,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_roblox_downloader_version_edit.setEnabled(
             _roblox_downloader_custom
         )
-        self._sett_roblox_downloader_version_edit.textChanged.connect(
-            lambda text: actions.save_ui_setting("roblox_downloader_version", text)
+        self._sett_roblox_downloader_version_edit.editingFinished.connect(
+            lambda: actions.save_ui_setting(
+                "roblox_downloader_version",
+                self._sett_roblox_downloader_version_edit.text(),
+            )
         )
         roblox_version_row.addWidget(self._sett_roblox_downloader_version_edit, 1)
         f.addLayout(roblox_version_row)
@@ -2436,8 +2482,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_roblox_downloader_location_edit.setEnabled(
             _roblox_downloader_custom
         )
-        self._sett_roblox_downloader_location_edit.textChanged.connect(
-            lambda text: actions.save_ui_setting("roblox_downloader_location", text)
+        self._sett_roblox_downloader_location_edit.editingFinished.connect(
+            lambda: actions.save_ui_setting(
+                "roblox_downloader_location",
+                self._sett_roblox_downloader_location_edit.text(),
+            )
         )
         roblox_location_row.addWidget(
             self._sett_roblox_downloader_location_edit,
@@ -2488,9 +2537,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._headless_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._headless_list.customContextMenuRequested.connect(self._headless_on_context_menu)
         f.addWidget(self._headless_list)
-        self._headless_avatar_labels: dict[int, QLabel] = {}
-        self._headless_status_labels: dict[int, QLabel] = {}
-        self._headless_manager: headless_manager_mod.HeadlessManager | None = None
         self._refresh_headless_list([])
 
         f.addWidget(_sec("ROBLOX SETTINGS"))
@@ -2772,7 +2818,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_dc_url_edit = QLineEdit()
         self._sett_dc_url_edit.setPlaceholderText("https://discord.com/api/webhooks/...")
         self._sett_dc_url_edit.setText(dc.get("url", ""))
-        self._sett_dc_url_edit.textChanged.connect(self._on_dc_save)
+        self._sett_dc_url_edit.editingFinished.connect(self._on_dc_save)
         f.addWidget(self._sett_dc_url_edit)
 
         f.addWidget(_sec("PINGS"))
@@ -2787,7 +2833,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_dc_pingid_edit.setPlaceholderText("User ID (e.g. 123456789)")
         self._sett_dc_pingid_edit.setText(dc.get("ping_user_id", ""))
         self._sett_dc_pingid_edit.setFixedWidth(160)
-        self._sett_dc_pingid_edit.textChanged.connect(self._on_dc_save)
+        self._sett_dc_pingid_edit.editingFinished.connect(self._on_dc_save)
         ping_row.addWidget(self._sett_dc_pingid_edit)
         f.addLayout(ping_row)
 
@@ -2976,9 +3022,36 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._sett_ws_pw_chk = _chk(
             "websocket_require_password", "Require Password",
             "Clients must supply a password to connect to the WebSocket server.",
+            on_change=self._on_sett_ws_password_required,
         )
         f.addLayout(_sub_indent(self._sett_ws_pw_chk))
-        self._sett_ws_pw_chk.setEnabled(_dev_on and S.get("websocket_enabled", False))
+
+        self._sett_ws_saved_password = str(
+            self.manager.get_secure_setting("websocket_password", "") or ""
+        )
+        ws_password_row = QHBoxLayout()
+        ws_password_row.setContentsMargins(20, 0, 0, 0)
+        ws_password_label = QLabel("Password")
+        ws_password_row.addWidget(ws_password_label)
+        ws_password_row.addStretch(1)
+        self._sett_ws_password_edit = QLineEdit()
+        self._sett_ws_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._sett_ws_password_edit.setMaxLength(256)
+        self._sett_ws_password_edit.setFixedWidth(180)
+        self._sett_ws_password_edit.setText(self._sett_ws_saved_password)
+        self._sett_ws_password_edit.setToolTip(
+            "Password used by AUTH <password> | <command>."
+        )
+        ws_password_row.addWidget(self._sett_ws_password_edit)
+        self._sett_ws_password_set_btn = QPushButton("Set")
+        self._sett_ws_password_set_btn.setFixedWidth(60)
+        self._sett_ws_password_set_btn.clicked.connect(
+            self._on_sett_ws_password_save
+        )
+        ws_password_row.addWidget(self._sett_ws_password_set_btn)
+        f.addLayout(ws_password_row)
+
+        self._update_ws_password_controls()
 
         ws_docs_btn = QPushButton("Read Documentation")
         ws_docs_btn.clicked.connect(
@@ -3085,6 +3158,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._start_presence_scanner()
         else:
             self._stop_presence_scanner()
+        self._refresh_account_list()
 
     def _on_sett_installer_fix(self, enabled: bool):
         try:
@@ -3563,6 +3637,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             self._show_operation_error(result)
             return
+        if 4 not in self._built_pages:
+            return
         data = result.data or {}
         self._roblox_settings_file_hash = str(data.get("file_hash", ""))
         self._roblox_settings_records = {
@@ -3694,7 +3770,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         self._headless_manager.stop(restore=True)
         self._headless_manager = None
-        self._refresh_headless_list([])
+        self._headless_latest_rows = []
+        if hasattr(self, "_headless_list"):
+            self._refresh_headless_list([])
         print("[INFO] Headless Manager stopped, Roblox windows restored.")
 
     def _headless_selected_pid(self) -> int | None:
@@ -3716,7 +3794,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _on_headless_update(self, rows: list[dict]):
         if self._headless_manager is None:
             return
-        self._refresh_headless_list(rows)
+        self._headless_latest_rows = [dict(row) for row in rows]
+        if hasattr(self, "_headless_list"):
+            self._refresh_headless_list(rows)
 
     def _refresh_headless_list(self, rows: list[dict]):
         cur = self._headless_selected_pid()
@@ -3999,7 +4079,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         dl_btn.clicked.connect(_on_download_clicked)
         manual_btn.clicked.connect(lambda: (
-            __import__("webbrowser").open(updater_mod.RELEASES_PAGE),
+            webbrowser.open(updater_mod.RELEASES_PAGE),
             dlg.accept(),
         ))
         ignore_btn.clicked.connect(dlg.accept)
@@ -4021,12 +4101,36 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._cv_validator.start()
 
     def _on_cookie_validated(self, username: str, status: str) -> None:
-        if status == self._cv_mod.INVALID:
-            print(
-                f"[WARNING] {username}: cookie received repeated "
-                f"unauthorized responses."
+        self._apply_cookie_status_to_row(
+            username,
+            status == self._cv_mod.INVALID,
+        )
+
+    def _apply_cookie_status_to_row(self, username: str, flagged: bool) -> None:
+        badge = self._invalid_badges.get(username)
+        if badge is None and flagged:
+            container = self._account_avatar_containers.get(username)
+            if container is not None:
+                badge = self._create_invalid_badge(container)
+                self._invalid_badges[username] = badge
+        if badge is not None:
+            badge.setVisible(flagged)
+        name_label = self._account_name_labels.get(username)
+        if name_label is not None:
+            name_label.setStyleSheet(
+                "color: #E8A020; font-style: italic;" if flagged else ""
             )
-        self._refresh_account_list()
+            name_label.setToolTip(
+                "Cookie validation received repeated unauthorized responses.\n"
+                "You can still try launching this account."
+                if flagged else ""
+            )
+        row = self._account_rows.get(username)
+        if row is not None:
+            row.setStyleSheet(
+                "QWidget { background: rgba(200, 50, 50, 0.06); }"
+                if flagged else ""
+            )
 
     def _is_account_invalid(self, username: str) -> bool:
         data = self.manager.accounts.get(username)
@@ -4110,12 +4214,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 if metrics.get("cpu_available", False)
                 else "N/A"
             )
-            labels = container.findChildren(QLabel)
-            for label in labels:
-                if label.objectName() == "ramUsage":
-                    label.setText(ram_text)
-                elif label.objectName() == "cpuUsage":
-                    label.setText(cpu_text)
+            labels = self._activity_labels.get(username)
+            if labels is not None:
+                ram_label, cpu_label = labels
+                if ram_label.text() != ram_text:
+                    ram_label.setText(ram_text)
+                if cpu_label.text() != cpu_text:
+                    cpu_label.setText(cpu_text)
             container.setVisible(True)
 
     # RAM boost background worker
@@ -4551,7 +4656,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _on_sett_developer_mode(self, enabled: bool):
         self._sett_copycookie_chk.setEnabled(enabled)
         self._sett_ws_chk.setEnabled(enabled)
-        self._sett_ws_pw_chk.setEnabled(enabled and self._sett_ws_chk.isChecked())
+        self._update_ws_password_controls()
         if not enabled:
             self._sett_copycookie_chk.setChecked(False)
             self._sett_ws_chk.setChecked(False)
@@ -4560,13 +4665,62 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._stop_ws_server()
 
     def _on_sett_ws_changed(self, enabled: bool):
-        self._sett_ws_pw_chk.setEnabled(
-            enabled and actions.load_ui_settings().get("developer_mode", False)
-        )
+        self._update_ws_password_controls()
         if enabled:
             self._start_ws_server()
         else:
             self._stop_ws_server()
+
+    def _update_ws_password_controls(self):
+        if not hasattr(self, "_sett_ws_pw_chk"):
+            return
+        developer_enabled = bool(
+            hasattr(self, "_sett_devmode_chk")
+            and self._sett_devmode_chk.isChecked()
+        )
+        websocket_enabled = bool(
+            hasattr(self, "_sett_ws_chk")
+            and self._sett_ws_chk.isChecked()
+        )
+        controls_enabled = developer_enabled and websocket_enabled
+        self._sett_ws_pw_chk.setEnabled(controls_enabled)
+        password_enabled = controls_enabled and self._sett_ws_pw_chk.isChecked()
+        if hasattr(self, "_sett_ws_password_edit"):
+            self._sett_ws_password_edit.setEnabled(password_enabled)
+        if hasattr(self, "_sett_ws_password_set_btn"):
+            self._sett_ws_password_set_btn.setEnabled(password_enabled)
+
+    def _on_sett_ws_password_required(self, enabled: bool):
+        self._update_ws_password_controls()
+        if enabled and not self._sett_ws_saved_password:
+            self._sett_ws_password_edit.setFocus()
+
+    def _on_sett_ws_password_save(self):
+        password = self._sett_ws_password_edit.text()
+        previous = self._sett_ws_saved_password
+        if password == previous:
+            return True
+        if not password:
+            self._sett_ws_password_edit.setText(previous)
+            self._show_operation_error(OperationResult.failure(
+                "WEBSOCKET_PASSWORD_REQUIRED",
+                "WebSocket Password Required",
+                "Enter a WebSocket password before clicking Set.",
+            ))
+            return False
+
+        result = self.manager.set_secure_setting(
+            "websocket_password",
+            password,
+        )
+
+        if not result:
+            self._sett_ws_password_edit.setText(previous)
+            self._show_operation_error(result)
+            return False
+
+        self._sett_ws_saved_password = password
+        return True
 
     def _start_ws_server(self) -> None:
         if self._ws_server:
@@ -4589,6 +4743,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             for key, cb in self._sett_dc_log_chks.items():
                 dc[key] = cb.isChecked()
             actions.save_ui_setting("discord_webhook", dc)
+            if dc.get("enabled") and dc.get("screenshot_enabled"):
+                webhook.start_screenshot_loop(
+                    lambda: actions.get_ui_setting("discord_webhook", {})
+                )
+            else:
+                webhook.stop_screenshot_loop()
         except Exception as e:
             print(f"[Discord] Failed to save settings: {e}")
 
@@ -5252,8 +5412,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         painter.end()
         return result
 
-    @staticmethod
-    def _make_placeholder_pixmap(size: int = avatars.AVATAR_SIZE) -> QPixmap: # Gray icon
+    def _make_placeholder_pixmap(self, size: int = avatars.AVATAR_SIZE) -> QPixmap: # Gray icon
+        cached = self._placeholder_pixmaps.get(size)
+        if cached is not None:
+            return cached
         result = QPixmap(size, size)
         result.fill(Qt.GlobalColor.transparent)
         painter = QPainter(result)
@@ -5262,7 +5424,28 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, size, size)
         painter.end()
+        self._placeholder_pixmaps[size] = result
         return result
+
+    @staticmethod
+    def _create_invalid_badge(container: QWidget) -> QLabel:
+        badge_size = 6
+        ring = 1
+        badge = QLabel(container)
+        badge.setFixedSize(badge_size + ring * 2, badge_size + ring * 2)
+        badge.move(0, 0)
+        badge.setStyleSheet(f"""
+            QLabel {{
+                background: #E8A020;
+                border-radius: {(badge_size + ring * 2) // 2}px;
+                border: {ring}px solid {BG};
+            }}
+        """)
+        badge.setToolTip(
+            "Cookie validation received repeated unauthorized responses.\n"
+            "You can still try launching this account."
+        )
+        return badge
 
     def _get_selected_username(self) -> str | None:
         item = self._account_list.currentItem()
@@ -5309,14 +5492,22 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._avatar_labels.clear()
         self._presence_dots.clear()
         self._activity_widgets.clear()
+        self._activity_labels.clear()
         self._invalid_badges.clear()
+        self._account_avatar_containers.clear()
+        self._account_name_labels.clear()
+        self._account_rows.clear()
         account_items = list(self.manager.accounts.items())
+        activity_enabled = bool(
+            actions.load_ui_settings().get("presence_indicator", False)
+        )
 
         # Filter by groups
         if self._current_group is not None:
+            assignments = groups.get_assignments()
             account_items = [
                 (u, d) for u, d in account_items
-                if groups.get_account_group(u) == self._current_group
+                if assignments.get(u) == self._current_group
             ]
 
         if not account_items:
@@ -5370,27 +5561,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
             row_lay.addWidget(av_container)
             self._avatar_labels[username] = av_lbl
+            self._account_avatar_containers[username] = av_container
 
             flagged = self._cv_mod.is_flagged(data) if isinstance(data, dict) else False
 
             if flagged:
-                BAD_SIZE = 6
-                BAD_RING = 1
-                bad_lbl = QLabel(av_container)
-                bad_lbl.setFixedSize(BAD_SIZE + BAD_RING * 2, BAD_SIZE + BAD_RING * 2)
-                bad_lbl.move(0, 0)
-                bad_lbl.setStyleSheet(f"""
-                    QLabel {{
-                        background: #E8A020;
-                        border-radius: {(BAD_SIZE + BAD_RING * 2) // 2}px;
-                        border: {BAD_RING}px solid {BG};
-                    }}
-                """)
-                bad_lbl.setToolTip(
-                    "Cookie validation received repeated unauthorized responses.\n"
-                    "You can still try launching this account."
-                )
-                bad_lbl.setVisible(True)
+                bad_lbl = self._create_invalid_badge(av_container)
                 self._invalid_badges[username] = bad_lbl
 
             name_lbl = QLabel(username)
@@ -5403,6 +5579,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     "You can still try launching this account."
                 )
             row_lay.addWidget(name_lbl)
+            self._account_name_labels[username] = name_lbl
 
             if note: # Note display
                 sep = QLabel("|")
@@ -5414,34 +5591,36 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 row_lay.addWidget(sep)
                 row_lay.addWidget(note_lbl)
 
-            activity_container = QWidget(row)
-            activity_lay = QHBoxLayout(activity_container)
-            activity_lay.setContentsMargins(0, 0, 0, 0)
-            activity_lay.setSpacing(4)
+            if activity_enabled:
+                activity_container = QWidget(row)
+                activity_lay = QHBoxLayout(activity_container)
+                activity_lay.setContentsMargins(0, 0, 0, 0)
+                activity_lay.setSpacing(4)
 
-            ram_sep = QLabel("|")
-            ram_sep.setObjectName("performanceSep")
-            ram_lbl = QLabel("0 MB")
-            ram_lbl.setObjectName("ramUsage")
-            ram_lbl.setAlignment(
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-            )
+                ram_sep = QLabel("|")
+                ram_sep.setObjectName("performanceSep")
+                ram_lbl = QLabel("0 MB")
+                ram_lbl.setObjectName("ramUsage")
+                ram_lbl.setAlignment(
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
 
-            cpu_sep = QLabel("|")
-            cpu_sep.setObjectName("performanceSep")
-            cpu_lbl = QLabel("0.0%")
-            cpu_lbl.setObjectName("cpuUsage")
-            cpu_lbl.setAlignment(
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-            )
+                cpu_sep = QLabel("|")
+                cpu_sep.setObjectName("performanceSep")
+                cpu_lbl = QLabel("0.0%")
+                cpu_lbl.setObjectName("cpuUsage")
+                cpu_lbl.setAlignment(
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
 
-            activity_lay.addWidget(ram_sep)
-            activity_lay.addWidget(ram_lbl)
-            activity_lay.addWidget(cpu_sep)
-            activity_lay.addWidget(cpu_lbl)
-            row_lay.addWidget(activity_container)
-            self._activity_widgets[username] = activity_container
-            activity_container.setVisible(username in self._activity_snapshot)
+                activity_lay.addWidget(ram_sep)
+                activity_lay.addWidget(ram_lbl)
+                activity_lay.addWidget(cpu_sep)
+                activity_lay.addWidget(cpu_lbl)
+                row_lay.addWidget(activity_container)
+                self._activity_widgets[username] = activity_container
+                self._activity_labels[username] = (ram_lbl, cpu_lbl)
+                activity_container.setVisible(username in self._activity_snapshot)
             row_lay.addStretch(1)
             row.setFixedHeight(ITEM_H)
 
@@ -5452,6 +5631,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
             self._account_list.addItem(item)
             self._account_list.setItemWidget(item, row)
+            self._account_rows[username] = row
 
         restored_current = False
         for i in range(self._account_list.count()):
@@ -5584,19 +5764,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._refresh_account_list()
 
     def _load_avatars_async(self):
-        # Check cache, if not cached fetch from network and update
-        for username, data in self.manager.accounts.items():
-            if not isinstance(data, dict):
-                continue
-            user_id = str(data.get("user_id") or "")
-            if not user_id or user_id == "0":
-                continue
-            avatars.fetch_avatar_async(
-                user_id, username,
-                on_done=lambda u, b: self._bridge.avatar_ready.emit(u, b),
-            )
-
-    def _sync_missing_avatars_async(self):
         avatars.sync_missing_avatar_cache(
             self.manager.accounts,
             on_avatar_ready=lambda u, b: self._bridge.avatar_ready.emit(u, b),
@@ -5656,12 +5823,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
 
     def _on_place_id_changed(self, text: str):
-        actions.save_ui_setting("last_place_id", text)
         self._game_name_label.setText("")
         self._game_name_timer.start(350)
 
     def _on_private_server_changed(self, text: str):
-        actions.save_ui_setting("last_private_server", text)
         self._game_name_label.setText("")
         self._game_name_timer.start(350)
 
@@ -5682,6 +5847,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _do_fetch_game_name(self):
         place_id = self._place_id_edit.currentText().strip()
+        private = self._private_server_edit.text().strip()
+        actions.save_ui_setting("last_place_id", place_id)
+        actions.save_ui_setting("last_private_server", private)
         if place_id:
             if not place_id.isdigit():
                 self._game_name_label.setText("")
@@ -5689,7 +5857,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._fetch_game_name_for(place_id)
             return
 
-        private = self._private_server_edit.text().strip()
         if not private:
             self._game_name_label.setText("")
             return
@@ -6152,6 +6319,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     @staticmethod
     def _session_log_copy_text() -> str:
+        diagnostics.flush_session_log()
         session_log = diagnostics.get_session_log_path()
         if not session_log:
             return "The session log is unavailable."
@@ -6355,8 +6523,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             cursor.insertText(text + "\n")
         widget.setTextCursor(cursor)
         widget.ensureCursorVisible()
+        if q:
+            QTimer.singleShot(0, self._drain_console_queue)
 
-    _DONATION_URL = "https://www.roblox.com/games/718090786/donation#!/store" # donate!!
+    _DONATION_URL = "https://www.roblox.com/games/718090786/donation#!/store"
     _DONATION_USERNAME = "evedkdmdj"
 
     def _build_donations_panel(self) -> QFrame:
@@ -6495,6 +6665,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._console_view = QTextEdit()
         self._console_view.setReadOnly(True)
+        self._console_view.document().setMaximumBlockCount(3000)
         self._console_view.setStyleSheet(
             f"QTextEdit {{"
             f"  background: {INPUT};"

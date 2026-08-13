@@ -1,4 +1,4 @@
-"""Reliable Roblox window title management."""
+"""Roblox window title management."""
 
 from __future__ import annotations
 
@@ -184,18 +184,12 @@ class RobloxWindowRenamer:
     @staticmethod
     def _process_is_current(key: tuple[int, float]) -> bool:
         pid, expected_create_time = key
-        if not presence_mod.is_valid_roblox_game_client(pid):
-            return False
-        try:
-            current_create_time = psutil.Process(pid).create_time()
-            return abs(current_create_time - expected_create_time) < 0.01
-        except (
-            OSError,
-            psutil.NoSuchProcess,
-            psutil.AccessDenied,
-            psutil.ZombieProcess,
-        ):
-            return False
+        current = presence_mod.get_roblox_processes()
+        process_data = current.get(pid)
+        return bool(
+            process_data
+            and abs(process_data[0] - expected_create_time) < 0.01
+        )
 
     def _remove_exited_state(self, live_keys: set[tuple[int, float]]) -> None:
         self._identities = {
@@ -326,7 +320,8 @@ class RobloxWindowRenamer:
                 ).append(entry)
 
         for key, process in live_processes.items():
-            if not presence_mod.is_valid_roblox_game_client(key[0]):
+            identity = self._identities.get(key)
+            if identity and identity.evidence >= _EVIDENCE_OPEN_FILE:
                 continue
             tracker = self._extract_process_tracker(process)
             process_trackers[key] = tracker
@@ -441,36 +436,29 @@ class RobloxWindowRenamer:
                 f"'{username}' using {_EVIDENCE_NAMES[identity.evidence]}"
             )
 
-    def _find_main_window(self, key: tuple[int, float]) -> int:
+    def _find_main_window(
+        self,
+        key: tuple[int, float],
+        windows: list[int],
+    ) -> int:
         if not self._process_is_current(key):
             return 0
-        pid = key[0]
         candidates: list[tuple[int, int]] = []
-
-        def _callback(hwnd, _):
+        for hwnd in windows:
             try:
                 if not win32gui.IsWindowVisible(hwnd):
-                    return True
+                    continue
                 if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
-                    return True
+                    continue
                 title = (win32gui.GetWindowText(hwnd) or "").strip()
                 if not title:
-                    return True
-                _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if window_pid != pid:
-                    return True
+                    continue
                 left, top, right, bottom = win32gui.GetWindowRect(hwnd)
                 area = max(0, right - left) * max(0, bottom - top)
                 if area > 0:
                     candidates.append((area, hwnd))
             except Exception:
                 pass
-            return True
-
-        try:
-            win32gui.EnumWindows(_callback, None)
-        except Exception:
-            return 0
         if not candidates:
             return 0
         return max(candidates, key=lambda item: (item[0], item[1]))[1]
@@ -480,9 +468,10 @@ class RobloxWindowRenamer:
         key: tuple[int, float],
         identity: _ProcessIdentity,
         saved_titles: set[str],
+        windows: list[int],
     ) -> None:
         pid = key[0]
-        hwnd = self._find_main_window(key)
+        hwnd = self._find_main_window(key, windows)
         if not hwnd:
             if key not in self._waiting_for_window:
                 self._waiting_for_window.add(key)
@@ -539,7 +528,6 @@ class RobloxWindowRenamer:
             live_processes = {
                 (pid, create_time): process
                 for pid, (create_time, process) in discovered.items()
-                if presence_mod.is_valid_roblox_game_client(pid)
             }
             self._remove_exited_state(set(live_processes))
             if not live_processes:
@@ -573,6 +561,7 @@ class RobloxWindowRenamer:
             self._refresh_unresolved_usernames(saved_usernames)
 
             saved_titles = set(saved_usernames.values())
+            windows_by_pid = presence_mod.get_windows_by_pid(set(discovered))
             for key in sorted(live_processes, key=lambda item: (item[1], item[0])):
                 identity = self._identities.get(key)
                 if identity and identity.username:
@@ -580,6 +569,7 @@ class RobloxWindowRenamer:
                         key,
                         identity,
                         saved_titles,
+                        windows_by_pid.get(key[0], []),
                     )
         except Exception as exc:
             print(

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 
 from utils.app_paths import get_data_dir
 
@@ -28,8 +29,23 @@ def load_favorites() -> list[dict]:
 
 def save_favorites(favorites: list[dict]) -> None:
     os.makedirs(_DATA_DIR, exist_ok=True)
-    with open(_FAVORITES_FILE, "w", encoding="utf-8") as f:
-        json.dump(favorites, f, indent=2)
+    descriptor, temp_path = tempfile.mkstemp(
+        prefix=".favorites.", suffix=".tmp", dir=_DATA_DIR
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+            json.dump(favorites, f, indent=2)
+        os.replace(temp_path, _FAVORITES_FILE)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def add_favorite(place_id: str, name: str, private_server: str = "") -> None:

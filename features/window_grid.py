@@ -8,13 +8,12 @@ import ctypes
 from ctypes import wintypes
 import math
 
-import psutil
 import win32api
 import win32con
 import win32gui
-import win32process
 
 from classes.operation_result import OperationResult
+import features.presence as presence_mod
 
 
 DEFAULT_HOTKEY = "Ctrl+Shift+A"
@@ -162,43 +161,28 @@ def is_hotkey_message(message) -> bool:
 
 
 def _get_roblox_pids() -> set[int]:
-    pids = set()
-    try:
-        for process in psutil.process_iter(["pid", "name"]):
-            if (process.info.get("name") or "").lower() == "robloxplayerbeta.exe":
-                pids.add(int(process.info["pid"]))
-    except Exception:
-        pass
-    return pids
+    return set(presence_mod.get_roblox_processes())
 
 
 def _get_roblox_windows() -> list[int]:
     roblox_pids = _get_roblox_pids()
     largest_by_pid: dict[int, tuple[int, int]] = {}
-
-    def _callback(hwnd, _):
-        try:
-            if not win32gui.IsWindowVisible(hwnd):
-                return True
-            if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
-                return True
-            if not win32gui.GetWindowText(hwnd).strip():
-                return True
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            if pid not in roblox_pids:
-                return True
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-            area = max(0, right - left) * max(0, bottom - top)
-            if area > largest_by_pid.get(pid, (0, 0))[0]:
-                largest_by_pid[pid] = (area, hwnd)
-        except Exception:
-            pass
-        return True
-
-    try:
-        win32gui.EnumWindows(_callback, None)
-    except Exception:
-        return []
+    windows_by_pid = presence_mod.get_windows_by_pid(roblox_pids)
+    for pid, hwnds in windows_by_pid.items():
+        for hwnd in hwnds:
+            try:
+                if not win32gui.IsWindowVisible(hwnd):
+                    continue
+                if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
+                    continue
+                if not win32gui.GetWindowText(hwnd).strip():
+                    continue
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                area = max(0, right - left) * max(0, bottom - top)
+                if area > largest_by_pid.get(pid, (0, 0))[0]:
+                    largest_by_pid[pid] = (area, hwnd)
+            except Exception:
+                pass
     return [largest_by_pid[pid][1] for pid in sorted(largest_by_pid)]
 
 

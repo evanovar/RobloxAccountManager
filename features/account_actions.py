@@ -12,7 +12,6 @@ import time
 import ctypes
 import re
 import autoit
-import psutil
 import platform
 import tempfile
 import shutil
@@ -30,12 +29,13 @@ from classes.operation_result import OperationResult, ensure_result, unexpected_
 from classes.roblox_api import RobloxAPI
 import features.browsers as browsers_mod
 import features.headless_manager as headless_manager_mod
+import features.presence as presence_mod
+import features.settings_store as settings_store_mod
 from utils.app_paths import get_app_dir, get_data_dir
 
 # Paths
 _DATA_DIR = get_data_dir()
 _RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
-_SETTINGS_FILE = os.path.join(_DATA_DIR, "ui_settings.json")
 
 # Recent games
 def load_recent_games() -> list[dict]:
@@ -67,29 +67,36 @@ def save_recent_game(place_id: str, name: str, private_server: str = "") -> None
     })
     games = games[:20]
     os.makedirs(_DATA_DIR, exist_ok=True)
-    with open(_RECENT_GAMES_FILE, "w", encoding="utf-8") as f:
-        json.dump(games, f, indent=2)
+    descriptor, temp_path = tempfile.mkstemp(
+        prefix=".recent_games.", suffix=".tmp", dir=_DATA_DIR
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+            json.dump(games, f, indent=2)
+        os.replace(temp_path, _RECENT_GAMES_FILE)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
 # UI settings persistence
 
 def load_ui_settings() -> dict:
-    try:
-        if os.path.exists(_SETTINGS_FILE):
-            with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
+    return settings_store_mod.load()
+
+
+def get_ui_setting(key: str, default=None):
+    return settings_store_mod.get(key, default)
 
 
 def save_ui_setting(key: str, value) -> None:
-    settings = load_ui_settings()
-    settings[key] = value
-    os.makedirs(_DATA_DIR, exist_ok=True)
-    with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
+    settings_store_mod.save(key, value)
 
 
 # Game name lookup
@@ -581,12 +588,15 @@ def import_cookie(manager, cookie: str, on_done: Callable[[bool, str], None] = l
         failure_results: list[OperationResult] = []
 
         for cookie_value in cookies:
-            result = manager.import_cookie_account_result(cookie_value)
+            result = manager.import_cookie_account_result(cookie_value, save=False)
             if result:
                 success_count += 1
                 imported_users.append(str(result.data))
             else:
                 failure_results.append(result)
+
+        if success_count:
+            manager.save_accounts()
 
         if success_count:
             summary = f"Imported {success_count}/{len(cookies)} account(s)."
@@ -787,38 +797,27 @@ def _afk_worker():
     user32 = ctypes.windll.user32
 
     def _get_roblox_pids():
-        pids = set()
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                    pids.add(proc.info['pid'])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        return pids
+        return set(presence_mod.get_roblox_processes())
 
     def _get_roblox_hwnds(pids):
         hm = headless_manager_mod.get_active_manager()
         headless_pids = hm.get_hidden_pids() if hm else set()
 
         hwnds = []
-        def _cb(hwnd, _):
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value not in pids:
-                return True
-            if user32.IsWindowVisible(hwnd):
-                hwnds.append(hwnd)
-                return True
-            if pid.value in headless_pids:
+        windows_by_pid = presence_mod.get_windows_by_pid(set(pids))
+        for pid, windows in windows_by_pid.items():
+            for hwnd in windows:
+                if user32.IsWindowVisible(hwnd):
+                    hwnds.append(hwnd)
+                    continue
+                if pid not in headless_pids:
+                    continue
                 expected_titles = {"Roblox"}
-                username = hm.get_pid_username(pid.value) if hm else None
+                username = hm.get_pid_username(pid) if hm else None
                 if username:
                     expected_titles.add(username)
                 if win32gui.GetWindowText(hwnd) in expected_titles:
                     hwnds.append(hwnd)
-            return True
-        EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        user32.EnumWindows(EnumProc(_cb), 0)
         return hwnds
 
     def _get_placement(hwnd):
@@ -882,7 +881,6 @@ def _afk_worker():
                     _update_afk_tooltip(None)
                     return
                 msg = f"Anti-AFK Maintenance in {remaining}s"
-                print(f"[Anti-AFK] {msg}")
                 _update_afk_tooltip(msg)
                 if _afk_stop_event.wait(1):
                     _update_afk_tooltip(None)
@@ -1027,37 +1025,48 @@ def download_handle64() -> bool:
 
 
 def _mr_h64_monitor_worker():
-    target = "robloxplayerbeta.exe"
-    known: set[int] = set()
+    completed: set[tuple[int, float]] = set()
+    in_flight: set[tuple[int, float]] = set()
+    state_lock = threading.Lock()
+
+    def close_pending_handles(processes: list[tuple[int, float]]):
+        closed_pids = _mr_h64_close_handles([pid for pid, _ in processes])
+        with state_lock:
+            for identity in processes:
+                in_flight.discard(identity)
+                if identity[0] in closed_pids:
+                    completed.add(identity)
 
     while _mr_h64_monitoring and _mr_h64_path:
         try:
-            current: set[int] = set()
-            for p in psutil.process_iter(["pid", "name"]):
-                try:
-                    if p.info["name"] and p.info["name"].lower() == target:
-                        current.add(p.info["pid"])
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            new = current - known
-            if new:
-                known |= new
+            process_snapshot = presence_mod.get_roblox_processes(force=True)
+            current = {
+                (pid, process_data[0])
+                for pid, process_data in process_snapshot.items()
+            }
+            with state_lock:
+                completed.intersection_update(current)
+                pending = current - completed - in_flight
+                in_flight.update(pending)
+            if pending:
                 threading.Thread(
-                    target=_mr_h64_close_handles,
-                    args=(list(new),),
+                    target=close_pending_handles,
+                    args=(list(pending),),
                     daemon=True
                 ).start()
-            known -= known - current
-            time.sleep(0.15)
+            if not _mr_h64_monitoring:
+                break
+            time.sleep(0.5)
         except Exception as e:
             print(f"[Multi Roblox] Handle64 monitor error: {e}")
             time.sleep(1.0)
 
 
-def _mr_h64_close_handles(pids: list[int]):
+def _mr_h64_close_handles(pids: list[int]) -> set[int]:
     HANDLE = _mr_h64_path
     if not HANDLE:
-        return
+        return set()
+    closed_pids: set[int] = set()
     for pid in pids:
         handle_value = None
         try:
@@ -1077,18 +1086,24 @@ def _mr_h64_close_handles(pids: list[int]):
                     break
                 time.sleep(0.2)
             if handle_value:
-                subprocess.run(
+                close_result = subprocess.run(
                     f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL, shell=True  # nosec B602
                 )
-                print(f"[Multi Roblox] Closed singleton handle for PID:{pid}")
+                if close_result.returncode == 0:
+                    closed_pids.add(pid)
+                    print(f"[Multi Roblox] Closed singleton handle for PID:{pid}")
+                else:
+                    print(f"[Multi Roblox] Failed to close singleton handle for PID:{pid}")
             else:
                 print(f"[Multi Roblox] Handle not found for PID:{pid}")
         except Exception as e:
             print(f"[Multi Roblox] Error closing handle for PID:{pid}: {e}")
+    return closed_pids
 
 def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
+    # I know what you're here for.
     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
     disable_multi_roblox() # clean up any existing state
 

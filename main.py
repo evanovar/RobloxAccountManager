@@ -46,7 +46,9 @@ def _set_app_user_model_id():
 def main():
     diagnostics.set_startup_stage("main startup")
     _set_app_user_model_id()
-    webhook.install_console_capture(lambda: actions.load_ui_settings().get("discord_webhook", {}))
+    webhook.install_console_capture(
+        lambda: actions.get_ui_setting("discord_webhook", {})
+    )
     diagnostics.set_startup_stage("console capture installed")
     _ensure_data_folder()
     diagnostics.set_startup_stage("data folder ready")

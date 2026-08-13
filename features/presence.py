@@ -9,16 +9,26 @@ from datetime import datetime, timedelta, timezone
 import os
 import re
 import threading
+import time
 from typing import Callable
 
 import psutil
 import win32api
+import win32gui
+import win32process
 
 
 _TRACKER_PATTERN = re.compile(
     r"browsertrackerid[^0-9]{0,32}(\d+)",
     re.IGNORECASE,
 )
+_PROCESS_CACHE_LOCK = threading.RLock()
+_PROCESS_CACHE: dict[int, tuple[float, psutil.Process]] = {}
+_PROCESS_CACHE_TIME = 0.0
+_VALIDATION_CACHE: dict[tuple[int, float], bool] = {}
+_PROCESS_CACHE_MAX_AGE = 0.4
+_LOG_CACHE_LOCK = threading.RLock()
+_LOG_CACHE: dict[str, tuple[int, int, RobloxLogEntry | None]] = {}
 
 
 @dataclass(frozen=True)
@@ -87,22 +97,31 @@ def get_roblox_log_entries(
     except OSError:
         return entries
 
+    current_paths: set[str] = set()
     for filename in filenames:
         if not filename.endswith("_last.log"):
             continue
         match = re.search(r"(\d{8}T\d{6}Z)", filename)
         if not match:
             continue
+        log_path = os.path.join(logs_dir, filename)
+        current_paths.add(log_path)
         try:
-            log_time = datetime.strptime(
-                match.group(1),
-                "%Y%m%dT%H%M%SZ",
-            )
+            log_time = datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ")
             if earliest_time is not None and log_time < earliest_time:
                 continue
             if latest_time is not None and log_time > latest_time:
                 continue
-            log_path = os.path.join(logs_dir, filename)
+            stat_result = os.stat(log_path)
+            cache_key = (stat_result.st_mtime_ns, stat_result.st_size)
+            with _LOG_CACHE_LOCK:
+                cached = _LOG_CACHE.get(log_path)
+            if cached is not None and cached[:2] == cache_key:
+                entry = cached[2]
+                if entry is not None:
+                    entries.append(entry)
+                continue
+
             with open(
                 log_path,
                 "r",
@@ -110,9 +129,13 @@ def get_roblox_log_entries(
                 errors="ignore",
             ) as handle:
                 content = handle.read(50_000)
-            if "userid:" not in content:
+            entry = None
+            content_lower = content.lower()
+            if "userid:" not in content_lower:
+                with _LOG_CACHE_LOCK:
+                    _LOG_CACHE[log_path] = (*cache_key, None)
                 continue
-            user_id = content.split("userid:", 1)[1].split(",", 1)[0].strip()
+            user_id = content_lower.split("userid:", 1)[1].split(",", 1)[0].strip()
             if user_id.isdigit():
                 tracker_match = _TRACKER_PATTERN.search(content)
                 browser_tracker_id = (
@@ -120,14 +143,27 @@ def get_roblox_log_entries(
                     if tracker_match
                     else ""
                 )
-                entries.append(RobloxLogEntry(
+                entry = RobloxLogEntry(
                     timestamp=log_time,
                     path=log_path,
                     user_id=user_id,
                     browser_tracker_id=browser_tracker_id,
-                ))
+                )
+                entries.append(entry)
+            with _LOG_CACHE_LOCK:
+                _LOG_CACHE[log_path] = (*cache_key, entry)
         except (OSError, UnicodeError, ValueError):
             continue
+
+    with _LOG_CACHE_LOCK:
+        stale_paths = set(_LOG_CACHE) - current_paths
+        for path in stale_paths:
+            _LOG_CACHE.pop(path, None)
+
+    if earliest_time is not None:
+        entries = [entry for entry in entries if entry.timestamp >= earliest_time]
+    if latest_time is not None:
+        entries = [entry for entry in entries if entry.timestamp <= latest_time]
 
     entries.sort(key=lambda entry: (entry.timestamp, entry.path))
     return entries
@@ -167,23 +203,42 @@ def is_valid_roblox_game_client(
         if process_name_lower != "robloxplayerbeta.exe":
             return False
 
+        try:
+            create_time = float(psutil.Process(pid).create_time())
+        except Exception:
+            return False
+        cache_key = (pid, create_time)
+        with _PROCESS_CACHE_LOCK:
+            cached = _VALIDATION_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         description = _get_exe_description(pid)
         if description:
-            return "roblox" in description.lower()
-
-        return True
+            valid = "roblox" in description.lower()
+        else:
+            valid = True
+        with _PROCESS_CACHE_LOCK:
+            _VALIDATION_CACHE[cache_key] = valid
+        return valid
     except Exception:
         return process_name_lower == "robloxplayerbeta.exe" if process_name_lower else False
 
+def get_roblox_processes(
+    force: bool = False,
+    max_age: float = _PROCESS_CACHE_MAX_AGE,
+) -> dict[int, tuple[float, psutil.Process]]:
+    global _PROCESS_CACHE
+    global _PROCESS_CACHE_TIME
+    now = time.monotonic()
+    with _PROCESS_CACHE_LOCK:
+        if (
+            not force
+            and _PROCESS_CACHE_TIME
+            and now - _PROCESS_CACHE_TIME <= max(0.0, max_age)
+        ):
+            return dict(_PROCESS_CACHE)
 
-def _is_valid_roblox_game_client(
-    pid: int,
-    process_name_lower: str | None = None,
-) -> bool:
-    return is_valid_roblox_game_client(pid, process_name_lower)
-
-
-def get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
     processes: dict[int, tuple[float, psutil.Process]] = {}
     try:
         process_iter = psutil.process_iter(
@@ -217,7 +272,38 @@ def get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
         psutil.ZombieProcess,
     ):
         pass
-    return processes
+    live_keys = {(pid, value[0]) for pid, value in processes.items()}
+    with _PROCESS_CACHE_LOCK:
+        _VALIDATION_CACHE.clear()
+        for key in live_keys:
+            _VALIDATION_CACHE[key] = True
+        _PROCESS_CACHE = dict(processes)
+        _PROCESS_CACHE_TIME = time.monotonic()
+        return dict(_PROCESS_CACHE)
+
+
+def get_windows_by_pid(
+    pids: set[int] | None = None,
+) -> dict[int, list[int]]:
+    target_pids = set(pids) if pids is not None else set(get_roblox_processes())
+    windows: dict[int, list[int]] = {pid: [] for pid in target_pids}
+    if not target_pids:
+        return windows
+
+    def _callback(hwnd, _):
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid in target_pids:
+                windows[pid].append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_callback, None)
+    except Exception:
+        pass
+    return windows
 
 
 def _get_roblox_processes() -> dict[int, tuple[float, psutil.Process]]:
