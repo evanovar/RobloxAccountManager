@@ -2306,12 +2306,37 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addWidget(_sec("WINDOWS"))
         self._sett_rename_chk = _chk(
-            "rename_roblox_windows", "Rename Roblox Windows to Username",
-            "Set each Roblox window's title bar to the account username\n"
-            "so you can identify windows at a glance.",
+            "rename_roblox_windows", "Rename Roblox to",
+            "Set each Roblox window's title bar to the account username or saved note.",
             on_change=self._on_sett_rename_windows,
         )
         f.addWidget(self._sett_rename_chk)
+
+        rename_mode_row = QHBoxLayout()
+        rename_mode_row.setContentsMargins(20, 0, 0, 0)
+        rename_mode_label = QLabel("Mode:")
+        rename_mode_row.addWidget(rename_mode_label)
+        self._sett_rename_mode_group = QButtonGroup(self)
+        self._sett_rename_username_radio = QRadioButton("Username")
+        self._sett_rename_note_radio = QRadioButton("Note")
+        self._sett_rename_mode_group.addButton(self._sett_rename_username_radio)
+        self._sett_rename_mode_group.addButton(self._sett_rename_note_radio)
+        rename_mode = S.get("rename_roblox_windows_mode", "username")
+        if rename_mode not in ("username", "note"):
+            rename_mode = "username"
+        self._sett_rename_username_radio.setChecked(rename_mode == "username")
+        self._sett_rename_note_radio.setChecked(rename_mode == "note")
+        self._sett_rename_username_radio.toggled.connect(
+            lambda checked: self._on_sett_rename_mode("username", checked)
+        )
+        self._sett_rename_note_radio.toggled.connect(
+            lambda checked: self._on_sett_rename_mode("note", checked)
+        )
+        rename_mode_row.addWidget(self._sett_rename_username_radio)
+        rename_mode_row.addWidget(self._sett_rename_note_radio)
+        rename_mode_row.addStretch(1)
+        f.addLayout(rename_mode_row)
+        self._update_rename_mode_controls()
 
         self._sett_monitoring_chk = _chk(
             "presence_indicator", "Account Activity Monitor",
@@ -3148,10 +3173,27 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._stop_ram_boost()
 
     def _on_sett_rename_windows(self, enabled: bool):
+        self._update_rename_mode_controls()
         if enabled:
             self._start_rename_windows()
         else:
             self._stop_rename_windows()
+
+    def _update_rename_mode_controls(self):
+        if not hasattr(self, "_sett_rename_chk"):
+            return
+        enabled = self._sett_rename_chk.isChecked()
+        self._sett_rename_username_radio.setEnabled(enabled)
+        self._sett_rename_note_radio.setEnabled(enabled)
+
+    def _on_sett_rename_mode(self, mode: str, checked: bool):
+        if not checked:
+            return
+        if mode not in ("username", "note"):
+            mode = "username"
+        actions.save_ui_setting("rename_roblox_windows_mode", mode)
+        if self._window_renamer is not None:
+            self._window_renamer.set_title_mode(mode)
 
     def _on_sett_presence_indicator(self, enabled: bool):
         if enabled:
@@ -4267,6 +4309,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         self._window_renamer = window_renamer_mod.RobloxWindowRenamer(
             self.manager,
+            title_mode=actions.get_ui_setting(
+                "rename_roblox_windows_mode",
+                "username",
+            ),
         )
         self._window_renamer.start()
 

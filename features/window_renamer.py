@@ -44,9 +44,16 @@ class _ProcessIdentity:
 
 
 class RobloxWindowRenamer:
-    def __init__(self, manager, interval_sec: float = 5.0):
+    def __init__(
+        self,
+        manager,
+        interval_sec: float = 5.0,
+        title_mode: str = "username",
+    ):
         self._manager = manager
         self._interval = max(5.0, float(interval_sec))
+        self._mode_lock = threading.Lock()
+        self._title_mode = self._normalize_title_mode(title_mode)
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
         self._identities: dict[tuple[int, float], _ProcessIdentity] = {}
@@ -57,6 +64,19 @@ class RobloxWindowRenamer:
         self._ambiguities: dict[tuple[int, float], str] = {}
         self._main_windows: dict[tuple[int, float], int] = {}
         self._managed_titles: set[str] = set()
+
+    @staticmethod
+    def _normalize_title_mode(mode: str) -> str:
+        return mode if mode in ("username", "note") else "username"
+
+    def set_title_mode(self, mode: str) -> None:
+        normalized = self._normalize_title_mode(mode)
+        with self._mode_lock:
+            self._title_mode = normalized
+
+    def _get_title_mode(self) -> str:
+        with self._mode_lock:
+            return self._title_mode
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -95,8 +115,8 @@ class RobloxWindowRenamer:
                 break
         print("[INFO] Rename Roblox Windows stopped")
 
-    def _get_saved_usernames(self) -> dict[str, str]:
-        result: dict[str, str] = {}
+    def _get_saved_accounts(self) -> dict[str, dict[str, str]]:
+        result: dict[str, dict[str, str]] = {}
         accounts_lock = getattr(self._manager, "_accounts_lock", None)
         if accounts_lock is not None:
             with accounts_lock:
@@ -109,8 +129,33 @@ class RobloxWindowRenamer:
                 continue
             user_id = str(data.get("user_id", "") or "")
             if user_id and user_id != "0":
-                result[user_id] = username
+                result[user_id] = {
+                    "username": str(username),
+                    "note": str(data.get("note", "") or "").strip(),
+                }
         return result
+
+    @staticmethod
+    def _get_saved_usernames(
+        saved_accounts: dict[str, dict[str, str]],
+    ) -> dict[str, str]:
+        return {
+            user_id: account["username"]
+            for user_id, account in saved_accounts.items()
+            if account.get("username")
+        }
+
+    def _get_title_target(
+        self,
+        identity: _ProcessIdentity,
+        saved_accounts: dict[str, dict[str, str]],
+    ) -> str:
+        if self._get_title_mode() == "note":
+            account = saved_accounts.get(identity.user_id)
+            if not account:
+                return ""
+            return str(account.get("note", "") or "").strip()
+        return identity.username
 
     def _get_username(self, user_id: str, saved_usernames: dict[str, str]) -> str:
         username = saved_usernames.get(user_id)
@@ -467,6 +512,7 @@ class RobloxWindowRenamer:
         self,
         key: tuple[int, float],
         identity: _ProcessIdentity,
+        target_title: str,
         saved_titles: set[str],
         windows: list[int],
     ) -> None:
@@ -477,7 +523,7 @@ class RobloxWindowRenamer:
                 self._waiting_for_window.add(key)
                 print(
                     f"[INFO] Roblox main window for PID {pid} "
-                    f"({identity.username}) is not visible yet"
+                    f"({target_title}) is not visible yet"
                 )
             return
 
@@ -487,7 +533,7 @@ class RobloxWindowRenamer:
             current_title = (win32gui.GetWindowText(hwnd) or "").strip()
         except Exception:
             return
-        if current_title == identity.username:
+        if current_title == target_title:
             return
 
         lower_title = current_title.lower()
@@ -508,13 +554,13 @@ class RobloxWindowRenamer:
             _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
             if window_pid != pid:
                 return
-            win32gui.SetWindowText(hwnd, identity.username)
-            if win32gui.GetWindowText(hwnd) != identity.username:
+            win32gui.SetWindowText(hwnd, target_title)
+            if win32gui.GetWindowText(hwnd) != target_title:
                 return
-            self._managed_titles.add(identity.username)
+            self._managed_titles.add(target_title)
             print(
                 f"[INFO] Renamed Roblox main window HWND 0x{hwnd:08X} "
-                f"PID {pid} -> '{identity.username}'"
+                f"PID {pid} -> '{target_title}'"
             )
         except Exception as exc:
             print(
@@ -533,7 +579,8 @@ class RobloxWindowRenamer:
             if not live_processes:
                 return
 
-            saved_usernames = self._get_saved_usernames()
+            saved_accounts = self._get_saved_accounts()
+            saved_usernames = self._get_saved_usernames(saved_accounts)
             earliest_time = min(
                 self._create_time_utc(key[1])
                 for key in live_processes
@@ -561,13 +608,25 @@ class RobloxWindowRenamer:
             self._refresh_unresolved_usernames(saved_usernames)
 
             saved_titles = set(saved_usernames.values())
+            saved_titles.update(
+                account["note"]
+                for account in saved_accounts.values()
+                if account.get("note")
+            )
             windows_by_pid = presence_mod.get_windows_by_pid(set(discovered))
             for key in sorted(live_processes, key=lambda item: (item[1], item[0])):
                 identity = self._identities.get(key)
                 if identity and identity.username:
+                    target_title = self._get_title_target(
+                        identity,
+                        saved_accounts,
+                    )
+                    if not target_title:
+                        continue
                     self._enforce_window_title(
                         key,
                         identity,
+                        target_title,
                         saved_titles,
                         windows_by_pid.get(key[0], []),
                     )
