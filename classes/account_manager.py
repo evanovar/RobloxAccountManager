@@ -13,10 +13,32 @@ import traceback
 import threading
 import requests
 
-from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
+from .encryption import (
+    EncryptedDataError,
+    EncryptionConfig,
+    HardwareDecryptionError,
+    HardwareEncryption,
+    PasswordDecryptionError,
+    PasswordEncryption,
+)
 from .operation_result import OperationResult, unexpected_result
 from .roblox_api import RobloxAPI
 from utils.app_paths import get_data_dir
+
+class AccountManagerStartupError(Exception):
+    pass
+
+class PasswordRequiredError(AccountManagerStartupError):
+    pass
+
+class AccountPasswordError(AccountManagerStartupError):
+    pass
+
+class HardwareAccountDecryptionError(AccountManagerStartupError):
+    pass
+
+class AccountDataError(AccountManagerStartupError):
+    pass
 
 class RobloxAccountManager:
     
@@ -42,10 +64,21 @@ class RobloxAccountManager:
                 self.encryptor = HardwareEncryption()
             elif method == 'password':
                 if password is None:
-                    raise ValueError("Password required for password-based encryption")
+                    raise PasswordRequiredError(
+                        "Password is required for password-based encryption."
+                    )
                 self._entered_password_hash = hashlib.sha256(password.encode()).hexdigest()
                 salt = self.encryption_config.get_salt()
-                self.encryptor = PasswordEncryption(password, salt)
+                if not salt:
+                    raise AccountDataError(
+                        "Password encryption is enabled, but its salt is missing."
+                    )
+                try:
+                    self.encryptor = PasswordEncryption(password, salt)
+                except Exception as exc:
+                    raise AccountDataError(
+                        "The password encryption configuration is invalid."
+                    ) from exc
         
         self.accounts = self.load_accounts()
         self.temp_profile_dir = None
@@ -60,29 +93,48 @@ class RobloxAccountManager:
             try:
                 with open(self.accounts_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
-                if self.encryptor and isinstance(data, dict) and data.get('encrypted'):
-                    try:
-                        decrypted_data = self.encryptor.decrypt_data(data['data'])
-                        accounts = self._extract_accounts_payload(decrypted_data)
-                        self._migrate_accounts(accounts)
-                        self._repair_password_hash_if_needed()
-                        return accounts
-                    except Exception:
-                        raise ValueError("Decryption failed. Wrong password or corrupted data.")
-                
-                if isinstance(data, dict):
-                    accounts = self._extract_accounts_payload(data)
-                    self._migrate_accounts(accounts)
-                    return accounts
-                self.secure_settings = {}
-                return {}
-            except ValueError:
-                raise
-            except Exception as e:
-                print(f"[ERROR] Error loading accounts: {e}")
-                self.secure_settings = {}
-                return {}
+            except json.JSONDecodeError as exc:
+                raise AccountDataError(
+                    "saved_accounts.json does not contain valid JSON."
+                ) from exc
+            except OSError as exc:
+                raise AccountDataError(
+                    "saved_accounts.json could not be read."
+                ) from exc
+
+            if not isinstance(data, dict):
+                raise AccountDataError(
+                    "saved_accounts.json does not contain an account object."
+                )
+
+            if data.get('encrypted'):
+                if not self.encryptor:
+                    raise AccountDataError(
+                        "The account file is encrypted, but encryption is disabled in its configuration."
+                    )
+                try:
+                    decrypted_data = self.encryptor.decrypt_data(data.get('data'))
+                except PasswordDecryptionError as exc:
+                    raise AccountPasswordError(
+                        "The password did not authenticate saved_accounts.json."
+                    ) from exc
+                except HardwareDecryptionError as exc:
+                    raise HardwareAccountDecryptionError(
+                        "The hardware-encrypted account file could not be opened with a compatible key."
+                    ) from exc
+                except EncryptedDataError as exc:
+                    raise AccountDataError(
+                        "saved_accounts.json contains a malformed encrypted payload."
+                    ) from exc
+
+                accounts = self._extract_accounts_payload(decrypted_data)
+                self._migrate_accounts(accounts)
+                self._repair_password_hash_if_needed()
+                return accounts
+
+            accounts = self._extract_accounts_payload(data)
+            self._migrate_accounts(accounts)
+            return accounts
         self.secure_settings = {}
         return {}
 
@@ -103,14 +155,19 @@ class RobloxAccountManager:
     def _extract_accounts_payload(self, data):
         """Support legacy account-only files and wrapped account+secure-settings files."""
         if not isinstance(data, dict):
-            self.secure_settings = {}
-            self._unavailable_secure_settings = None
-            return {}
+            raise AccountDataError(
+                "The decrypted account payload is not an object."
+            )
 
         if isinstance(data.get('accounts'), dict):
             secure = data.get('secure_settings', {})
             self.secure_settings = self._deserialize_secure_settings(secure)
-            return data.get('accounts', {})
+            accounts = data.get('accounts', {})
+            if not isinstance(accounts, dict):
+                raise AccountDataError(
+                    "The decrypted accounts field is not an object."
+                )
+            return accounts
 
         self.secure_settings = {}
         self._unavailable_secure_settings = None

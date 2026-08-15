@@ -46,7 +46,13 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from classes import RobloxAccountManager
+from classes import (
+    AccountDataError,
+    AccountPasswordError,
+    HardwareAccountDecryptionError,
+    PasswordRequiredError,
+    RobloxAccountManager,
+)
 from classes.encryption import EncryptionConfig, PasswordEncryption
 from classes.operation_result import OperationResult, ensure_result
 from classes.roblox_api import RobloxAPI
@@ -4085,14 +4091,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             except RuntimeError:
                 pass
             if success:
-                dl_btn.setText("Done! Closing...")
+                dl_btn.setText("Downloaded. Closing...")
                 dl_btn.setStyleSheet(
                     f"QPushButton {{ background: #1E4D1E; color: {TEXT}; "
                     f"border: 1px solid #2E6D2E; border-radius: 4px; }}"
                 )
-                status_lbl.setText("Update installed. The app will close now.")
+                status_lbl.setText("The app will close and install the update.")
                 dlg.setEnabled(False)
-                QTimer.singleShot(1500, self.close)
+                QTimer.singleShot(1500, self._quit_for_update)
             else:
                 _set_buttons_enabled(True)
                 dl_btn.setText("Download Automatically")
@@ -5187,6 +5193,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _exit_from_tray(self) -> None:
         self._tray_exit_requested = True
         self.close()
+
+    def _quit_for_update(self) -> None:
+        self._tray_exit_requested = True
+        self._disable_system_tray()
+        self.close()
+        app = QApplication.instance()
+        if app:
+            app.quit()
 
     def _perform_shutdown_cleanup(self) -> None:
         if self._shutdown_cleanup_done:
@@ -7617,8 +7631,54 @@ def main(icon_path: str | None = None) -> int:
     try:
         diagnostics.set_startup_stage("initializing account manager")
         manager = RobloxAccountManager(password=password)
-    except ValueError:
-        _show_error(None, "Error", "Invalid password. Please try again.")
+    except AccountPasswordError as exc:
+        print(f"[ERROR] ACCOUNT_PASSWORD_INVALID: {exc}")
+        _show_error(
+            None,
+            "Invalid Password",
+            "The password could not unlock the encrypted account data. "
+            "Please try again.\n\n"
+            "Error code: ACCOUNT_PASSWORD_INVALID",
+        )
+        return 1
+    except PasswordRequiredError as exc:
+        print(f"[ERROR] ACCOUNT_PASSWORD_REQUIRED: {exc}")
+        _show_error(
+            None,
+            "Password Required",
+            "A password is required to open the encrypted account data.\n\n"
+            "Error code: ACCOUNT_PASSWORD_REQUIRED",
+        )
+        return 1
+    except HardwareAccountDecryptionError as exc:
+        crash_path = diagnostics.report_exception(
+            "Opening hardware-encrypted account data",
+            exc,
+            fatal=True,
+        )
+        _show_error(
+            None,
+            "Hardware Encryption Error",
+            "The hardware-encrypted account data could not be opened on "
+            "this computer. The original file was not changed.\n\n"
+            "Error code: ACCOUNT_HARDWARE_DECRYPTION_FAILED\n\n"
+            f"Details were saved to:\n{crash_path}",
+        )
+        return 1
+    except AccountDataError as exc:
+        crash_path = diagnostics.report_exception(
+            "Loading saved account data",
+            exc,
+            fatal=True,
+        )
+        _show_error(
+            None,
+            "Account Data Error",
+            "The saved account data could not be loaded. The original "
+            "file was not changed.\n\n"
+            "Error code: ACCOUNT_DATA_INVALID\n\n"
+            f"Details were saved to:\n{crash_path}",
+        )
         return 1
     except Exception as exc:
         crash_path = diagnostics.report_exception(

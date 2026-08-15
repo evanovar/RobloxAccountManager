@@ -6,6 +6,7 @@ Handles hardware-based and password-based encryption
 import os
 import json
 import base64
+import binascii
 import hashlib
 import platform
 import subprocess
@@ -13,32 +14,102 @@ from Crypto.Cipher import AES  # nosec B413
 from Crypto.Random import get_random_bytes  # nosec B413
 from Crypto.Protocol.KDF import PBKDF2  # nosec B413
 
+_MACHINE_ID_CACHE = {}
 
-_MACHINE_ID_CACHE = None
+class EncryptionError(Exception):
+    pass
 
+class EncryptedDataError(EncryptionError):
+    pass
+
+class HardwareDecryptionError(EncryptionError):
+    pass
+
+class PasswordDecryptionError(EncryptionError):
+    pass
+
+def _decode_encrypted_package(encrypted_package):
+    if not isinstance(encrypted_package, dict):
+        raise EncryptedDataError("The encrypted payload is not an object.")
+
+    required = ("nonce", "tag", "ciphertext")
+    if any(not isinstance(encrypted_package.get(key), str) for key in required):
+        raise EncryptedDataError("The encrypted payload is missing required fields.")
+
+    try:
+        return tuple(
+            base64.b64decode(encrypted_package[key], validate=True)
+            for key in required
+        )
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise EncryptedDataError(
+            "The encrypted payload contains invalid encoded data."
+        ) from exc
 
 class HardwareEncryption:
     """Hardware-based encryption using machine-specific identifiers"""
     
     def __init__(self):
         self.machine_id = self._get_machine_id()
-        self.legacy_machine_id = self._get_legacy_machine_id()
         self.key = self._derive_key_from_machine_id(self.machine_id)
-        self.legacy_key = None
-        if self.legacy_machine_id and self.legacy_machine_id != self.machine_id:
-            self.legacy_key = self._derive_key_from_machine_id(self.legacy_machine_id)
+        self.decryption_key_source = "stable"
     
     def _get_machine_id(self):
         """Generate unique machine ID from hardware identifiers"""
-        global _MACHINE_ID_CACHE
-        if _MACHINE_ID_CACHE is not None:
-            return _MACHINE_ID_CACHE
+        cached = _MACHINE_ID_CACHE.get("stable")
+        if cached:
+            return cached
         identifiers = []
 
         try:
             if platform.system() == "Windows":
                 CREATE_NO_WINDOW = 0x08000000
 
+                def _ps(command):
+                    output = subprocess.check_output(
+                        [
+                            "powershell",
+                            "-NoProfile",
+                            "-NonInteractive",
+                            "-Command",
+                            command,
+                        ],
+                        creationflags=CREATE_NO_WINDOW,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                    return output.decode(errors="ignore").strip()
+
+                identifiers.append(
+                    _ps("(Get-CimInstance Win32_ComputerSystemProduct).UUID")
+                )
+                identifiers.append(
+                    _ps("(Get-CimInstance Win32_Processor).ProcessorId")
+                )
+                identifiers.append(
+                    _ps("(Get-CimInstance Win32_BaseBoard).SerialNumber")
+                )
+            else:
+                identifiers.append(platform.node())
+                identifiers.append(str(os.getuid()) if hasattr(os, 'getuid') else "0")
+        except Exception:
+            identifiers.append(platform.node())
+            identifiers.append(platform.machine())
+
+        machine_string = "-".join(identifiers)
+        machine_id = hashlib.sha256(machine_string.encode()).hexdigest()
+        _MACHINE_ID_CACHE["stable"] = machine_id
+        return machine_id
+
+    def _get_v264_machine_id(self):
+        cached = _MACHINE_ID_CACHE.get("v264")
+        if cached:
+            return cached
+
+        identifiers = []
+        try:
+            if platform.system() == "Windows":
+                CREATE_NO_WINDOW = 0x08000000
                 command = (
                     "$computer=Get-CimInstance Win32_ComputerSystemProduct;"
                     "$processor=Get-CimInstance Win32_Processor;"
@@ -70,15 +141,21 @@ class HardwareEncryption:
         except Exception:
             identifiers.append(platform.node())
             identifiers.append(platform.machine())
-        
+
         machine_string = "-".join(identifiers)
-        _MACHINE_ID_CACHE = hashlib.sha256(machine_string.encode()).hexdigest()
-        return _MACHINE_ID_CACHE
+        machine_id = hashlib.sha256(machine_string.encode()).hexdigest()
+        _MACHINE_ID_CACHE["v264"] = machine_id
+        return machine_id
 
     def _get_legacy_machine_id(self):
+        cached = _MACHINE_ID_CACHE.get("legacy")
+        if cached:
+            return cached
         identifiers = [platform.node(), platform.machine()]
         machine_string = "-".join(identifiers)
-        return hashlib.sha256(machine_string.encode()).hexdigest()
+        machine_id = hashlib.sha256(machine_string.encode()).hexdigest()
+        _MACHINE_ID_CACHE["legacy"] = machine_id
+        return machine_id
     
     def _derive_key_from_machine_id(self, machine_id):
         """Derive encryption key from machine ID"""
@@ -108,27 +185,44 @@ class HardwareEncryption:
     
     def decrypt_data(self, encrypted_package):
         """Decrypt data using hardware-based key"""
-        nonce = base64.b64decode(encrypted_package['nonce'])
-        tag = base64.b64decode(encrypted_package['tag'])
-        ciphertext = base64.b64decode(encrypted_package['ciphertext'])
+        nonce, tag, ciphertext = _decode_encrypted_package(encrypted_package)
 
-        keys = [self.key]
-        if self.legacy_key and self.legacy_key != self.key:
-            keys.append(self.legacy_key)
-
-        for key in keys:
+        def _decrypt_with_key(key):
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+            data_string = data_bytes.decode('utf-8')
             try:
-                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
-                data_string = data_bytes.decode('utf-8')
-                try:
-                    return json.loads(data_string)
-                except Exception:
-                    return data_string
+                return json.loads(data_string)
+            except Exception:
+                return data_string
+
+        try:
+            result = _decrypt_with_key(self.key)
+            self.decryption_key_source = "stable"
+            return result
+        except Exception:
+            pass
+
+        candidate_ids = {self.machine_id}
+        for source, machine_id_getter in (
+            ("v264", self._get_v264_machine_id),
+            ("legacy", self._get_legacy_machine_id),
+        ):
+            machine_id = machine_id_getter()
+            if machine_id in candidate_ids:
+                continue
+            candidate_ids.add(machine_id)
+            try:
+                key = self._derive_key_from_machine_id(machine_id)
+                result = _decrypt_with_key(key)
+                self.decryption_key_source = source
+                return result
             except Exception:
                 pass
 
-        raise Exception("Decryption failed. This program may have been encrypted on a different machine.")
+        raise HardwareDecryptionError(
+            "The hardware-encrypted data could not be authenticated with a compatible key."
+        )
 
 
 class PasswordEncryption:
@@ -176,24 +270,19 @@ class PasswordEncryption:
     
     def decrypt_data(self, encrypted_package):
         """Decrypt data using password-based key"""
+        nonce, tag, ciphertext = _decode_encrypted_package(encrypted_package)
         try:
-            nonce = base64.b64decode(encrypted_package['nonce'])
-            tag = base64.b64decode(encrypted_package['tag'])
-            ciphertext = base64.b64decode(encrypted_package['ciphertext'])
-            
             cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
-            
             data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
-            
             data_string = data_bytes.decode('utf-8')
-            
             try:
                 return json.loads(data_string)
-            except:
+            except Exception:
                 return data_string
-                
         except Exception as e:
-            raise Exception(f"Decryption failed. Password may be incorrect. Error: {str(e)}")
+            raise PasswordDecryptionError(
+                "The password did not authenticate the encrypted data."
+            ) from e
 
 
 class EncryptionConfig:
