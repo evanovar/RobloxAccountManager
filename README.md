@@ -3,7 +3,7 @@
 [![Discord](https://img.shields.io/discord/1436930121897476140?label=Discord)](https://discord.gg/TYnJXyEhgY)
 ![DownloadCount](https://img.shields.io/github/downloads/evanovar/RobloxAccountManager/total)
 [![Website](https://img.shields.io/badge/website-online-1F58FF
-)](https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram/homepage)<br>
+)](https://www.evanovarram.com/)<br>
 [![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
 
 > [!IMPORTANT]
