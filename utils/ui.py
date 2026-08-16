@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
-    QSizePolicy, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
+    QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
     QToolButton, QVBoxLayout, QWidget,
 )
@@ -2193,6 +2193,36 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "Prevents accidental launches.",
         )
         f.addWidget(self._sett_confirm_chk)
+
+        launch_delay_row = QHBoxLayout()
+        launch_delay_row.setContentsMargins(0, 0, 0, 0)
+        launch_delay_label = QLabel("Launch Delay")
+        launch_delay_label.setToolTip(
+            "Wait this long between accounts during bulk launches.\n"
+            "Set to 0 to disable the additional delay."
+        )
+        launch_delay_row.addWidget(launch_delay_label)
+        launch_delay_row.addStretch(1)
+        self._sett_launch_delay_spin = QDoubleSpinBox()
+        self._sett_launch_delay_spin.setRange(0.0, 300.0)
+        self._sett_launch_delay_spin.setDecimals(1)
+        self._sett_launch_delay_spin.setSingleStep(0.5)
+        self._sett_launch_delay_spin.setValue(
+            actions.get_launch_delay_seconds(S)
+        )
+        self._sett_launch_delay_spin.setSuffix(" s")
+        self._sett_launch_delay_spin.setFixedWidth(80)
+        self._sett_launch_delay_spin.setButtonSymbols(
+            QDoubleSpinBox.ButtonSymbols.NoButtons
+        )
+        self._sett_launch_delay_spin.valueChanged.connect(
+            lambda value: actions.save_ui_setting(
+                "launch_delay_seconds",
+                round(float(value), 1),
+            )
+        )
+        launch_delay_row.addWidget(self._sett_launch_delay_spin)
+        f.addLayout(launch_delay_row)
 
         f.addWidget(_sec("ACCOUNTS LIST"))
         self._sett_multisel_chk = _chk(
@@ -6358,17 +6388,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     # Launch Roblox Home
     def _on_launch_home(self):
-        username = self._get_selected_username()
-        if not username:
+        usernames = self._get_selected_usernames()
+        if not usernames:
             _show_error(self, "No selection", "Please select an account first.")
             return
-        if not self._guard_invalid([username]):
+        if not self._guard_invalid(usernames):
             return
-        if not self._confirm_launch("Launch Roblox Home", [username]):
+        if not self._confirm_launch("Launch Roblox Home", usernames):
             return
-        print(f"[INFO] Launching Roblox Home for {username}")
+        if len(usernames) == 1:
+            print(f"[INFO] Launching Roblox Home for {usernames[0]}")
+            launch_accounts = usernames[0]
+        else:
+            print(
+                f"[INFO] Launching Roblox Home for {len(usernames)} accounts"
+            )
+            launch_accounts = usernames
         actions.launch_home(
-            self.manager, username,
+            self.manager, launch_accounts,
             on_done=self._emit_launch_done,
         )
 
