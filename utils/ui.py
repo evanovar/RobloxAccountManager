@@ -560,6 +560,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         self._last_operation_error = ("", 0.0)
         self._chromium_download_active = False
+        self._chromium_status_result = None
         self._roblox_settings_records: dict[str, dict] = {}
         self._roblox_settings_pending: dict[str, str] = {}
         self._roblox_settings_file_hash = ""
@@ -3003,6 +3004,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         self._sett_chromium_btn.clicked.connect(self._on_sett_dl_chromium)
         f.addLayout(_sub_indent(self._sett_chromium_btn))
+        if self._chromium_status_result is not None:
+            self._on_chromium_status(self._chromium_status_result)
 
         f.addWidget(_sec("ENCRYPTION"))
         _enc_btn = QPushButton("Switch Encryption Method")
@@ -4538,6 +4541,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             return
         if self._chromium_download_active:
+            return
+
+        self._chromium_status_result = operation_result
+        if not hasattr(self, "_sett_chromium_btn"):
             return
 
         data = operation_result.data or {}
