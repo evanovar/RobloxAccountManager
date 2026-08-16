@@ -982,10 +982,25 @@ def _afk_worker():
 
 
 # Multi Roblox
-_mr_handle: dict | None = None # {'mutex': handle|None, 'file': file|None}
+_mr_handle: dict | None = None
 _mr_h64_monitoring = False
 _mr_h64_thread: threading.Thread | None = None
 _mr_h64_path: str | None = None
+_mr_h64_stop_event: threading.Event | None = None
+_mr_h64_session_id = 0
+_mr_h64_worker_threads: set[threading.Thread] = set()
+_mr_h64_worker_lock = threading.Lock()
+_MR_SINGLETON_NAMES = (
+    "ROBLOX_SingletonEvent",
+    "ROBLOX_singletonEvent",
+    "ROBLOX_singletonMutex",
+)
+_MR_H64_PROCESS_GONE = "process_gone"
+_MR_H64_PROCESS_REPLACED = "process_replaced"
+_MR_H64_ALREADY_CLEAR = "already_clear"
+_MR_H64_CLOSED = "closed"
+_MR_H64_RETRY = "retry"
+_MR_H64_CANCELLED = "cancelled"
 
 
 def find_handle64() -> str | None:
@@ -1024,88 +1039,404 @@ def download_handle64() -> bool:
         return False
 
 
-def _mr_h64_monitor_worker():
+def _mr_h64_session_active(
+    stop_event: threading.Event,
+    session_id: int,
+) -> bool:
+    return (
+        _mr_h64_monitoring
+        and not stop_event.is_set()
+        and _mr_h64_session_id == session_id
+    )
+
+
+def _mr_h64_wait(
+    delay: float,
+    stop_event: threading.Event | None = None,
+) -> bool:
+    if stop_event is not None:
+        return not stop_event.wait(delay)
+    time.sleep(delay)
+    return True
+
+
+def _mr_h64_monitor_worker(
+    stop_event: threading.Event,
+    session_id: int,
+    handle_path: str,
+):
+    try:
+        initial_snapshot = presence_mod.get_roblox_processes(force=True)
+    except Exception:
+        initial_snapshot = {}
+    initial_processes = {
+        (pid, process_data[0])
+        for pid, process_data in initial_snapshot.items()
+    }
     completed: set[tuple[int, float]] = set()
     in_flight: set[tuple[int, float]] = set()
+    retry_after: dict[tuple[int, float], float] = {}
+    retry_counts: dict[tuple[int, float], int] = {}
+    known_processes: set[tuple[int, float]] = set()
     state_lock = threading.Lock()
 
-    def close_pending_handles(processes: list[tuple[int, float]]):
-        closed_pids = _mr_h64_close_handles([pid for pid, _ in processes])
-        with state_lock:
-            for identity in processes:
+    def close_pending_handle(identity: tuple[int, float]):
+        worker = threading.current_thread()
+        try:
+            result = _mr_h64_process_worker(
+                identity,
+                handle_path=handle_path,
+                stop_event=stop_event,
+                existing_process=identity in initial_processes,
+            )
+            with state_lock:
                 in_flight.discard(identity)
-                if identity[0] in closed_pids:
+                if result in {
+                    _MR_H64_PROCESS_GONE,
+                    _MR_H64_PROCESS_REPLACED,
+                    _MR_H64_ALREADY_CLEAR,
+                    _MR_H64_CLOSED,
+                    _MR_H64_CANCELLED,
+                }:
                     completed.add(identity)
+                    retry_after.pop(identity, None)
+                    retry_counts.pop(identity, None)
+                else:
+                    retry_count = retry_counts.get(identity, 0) + 1
+                    retry_counts[identity] = retry_count
+                    retry_after[identity] = time.monotonic() + min(
+                        10.0,
+                        float(2 ** min(retry_count - 1, 3)),
+                    )
+        finally:
+            with _mr_h64_worker_lock:
+                _mr_h64_worker_threads.discard(worker)
 
-    while _mr_h64_monitoring and _mr_h64_path:
+    while _mr_h64_session_active(stop_event, session_id):
         try:
             process_snapshot = presence_mod.get_roblox_processes(force=True)
             current = {
                 (pid, process_data[0])
                 for pid, process_data in process_snapshot.items()
             }
+            new_processes = current - known_processes
+            for identity in sorted(new_processes):
+                print(
+                    f"[Multi Roblox] Detected Roblox process PID:{identity[0]}"
+                )
+            known_processes = current
             with state_lock:
                 completed.intersection_update(current)
-                pending = current - completed - in_flight
+                for identity in list(retry_after):
+                    if identity not in current:
+                        retry_after.pop(identity, None)
+                        retry_counts.pop(identity, None)
+                now = time.monotonic()
+                pending = {
+                    identity
+                    for identity in current - completed - in_flight
+                    if retry_after.get(identity, 0.0) <= now
+                }
                 in_flight.update(pending)
-            if pending:
-                threading.Thread(
-                    target=close_pending_handles,
-                    args=(list(pending),),
-                    daemon=True
-                ).start()
-            if not _mr_h64_monitoring:
+            for identity in sorted(pending):
+                worker = threading.Thread(
+                    target=close_pending_handle,
+                    args=(identity,),
+                    daemon=True,
+                )
+                with _mr_h64_worker_lock:
+                    _mr_h64_worker_threads.add(worker)
+                worker.start()
+            interval = 0.15 if pending or in_flight else 0.5
+            if not _mr_h64_wait(interval, stop_event):
                 break
-            time.sleep(0.5)
         except Exception as e:
             print(f"[Multi Roblox] Handle64 monitor error: {e}")
-            time.sleep(1.0)
+            if not _mr_h64_wait(1.0, stop_event):
+                break
 
 
-def _mr_h64_close_handles(pids: list[int]) -> set[int]:
-    HANDLE = _mr_h64_path
-    if not HANDLE:
+def _mr_h64_parse_handles(output: str) -> list[tuple[str, str]]:
+    handles: list[tuple[str, str]] = []
+    seen_handles: set[str] = set()
+    for line in output.splitlines():
+        object_match = re.search(
+            r"(?:^|[\s\\])(ROBLOX_(?:singletonevent|singletonmutex))\s*$",
+            line.strip(),
+            re.IGNORECASE,
+        )
+        if not object_match:
+            continue
+        match = re.search(
+            r"(?:^|\s)(?:0x)?([0-9A-F]+):",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        handle_value = match.group(1)
+        handle_key = handle_value.lower()
+        if handle_key in seen_handles:
+            continue
+        object_name = object_match.group(1)
+        handles.append((handle_value, object_name))
+        seen_handles.add(handle_key)
+    return handles
+
+
+def _mr_h64_parse_handle(output: str) -> str | None:
+    handles = _mr_h64_parse_handles(output)
+    return handles[0][0] if handles else None
+
+
+def _mr_h64_query_handles(
+    handle_path: str,
+    pid: int,
+) -> tuple[list[tuple[str, str]], int, str]:
+    try:
+        result = subprocess.run(
+            [handle_path, "-accepteula", "-p", str(pid), "-a"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=5,
+        )
+        output = "\n".join(
+            value for value in (result.stdout or "", result.stderr or "")
+            if value
+        )
+        return _mr_h64_parse_handles(output), result.returncode, output
+    except Exception as e:
+        return [], -1, str(e)
+
+
+def _mr_h64_query_handle(
+    handle_path: str,
+    pid: int,
+) -> tuple[str | None, int, str]:
+    handles, returncode, output = _mr_h64_query_handles(handle_path, pid)
+    return (handles[0][0] if handles else None), returncode, output
+
+
+def _mr_h64_process_state(identity: tuple[int, float]) -> bool | None:
+    pid, expected_create_time = identity
+    try:
+        process_snapshot = presence_mod.get_roblox_processes(force=True)
+        process_data = process_snapshot.get(pid)
+        if process_data is None:
+            return False
+        return abs(process_data[0] - expected_create_time) <= 0.01
+    except Exception:
+        return None
+
+
+def _mr_h64_close_handle_values(
+    pid: int,
+    handles: list[tuple[str, str]],
+    executable: str,
+    stop_event: threading.Event | None,
+) -> bool:
+    all_closed = True
+    for handle_value, object_name in handles:
+        if stop_event is not None and stop_event.is_set():
+            return False
+        try:
+            close_result = subprocess.run(
+                [
+                    executable,
+                    "-accepteula",
+                    "-p",
+                    str(pid),
+                    "-c",
+                    handle_value,
+                    "-y",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+            )
+        except Exception as e:
+            print(
+                f"[Multi Roblox] Failed to close {object_name} handle "
+                f"for PID:{pid}: {e}"
+            )
+            all_closed = False
+            continue
+        if close_result.returncode == 0:
+            continue
+        output = "\n".join(
+            value for value in (
+                close_result.stdout or "",
+                close_result.stderr or "",
+            ) if value
+        )
+        detail = " ".join(output.split())[-240:]
+        print(
+            f"[Multi Roblox] Failed to close {object_name} handle for PID:{pid} "
+            f"(exit {close_result.returncode})"
+            + (f": {detail}" if detail else "")
+        )
+        all_closed = False
+    return all_closed
+
+
+def _mr_h64_process_worker(
+    identity: tuple[int, float],
+    handle_path: str,
+    stop_event: threading.Event | None,
+    existing_process: bool,
+) -> str:
+    pid = int(identity[0])
+    executable = handle_path
+    required_successful_scans = 2 if existing_process else 15
+    successful_scans = 0
+    total_attempts = 0
+    query_failures = 0
+    target_seen = False
+
+    while successful_scans < required_successful_scans:
+        if stop_event is not None and stop_event.is_set():
+            return _MR_H64_CANCELLED
+        process_state = _mr_h64_process_state(identity)
+        if process_state is False:
+            return _MR_H64_PROCESS_GONE
+        if process_state is None:
+            total_attempts += 1
+            if total_attempts >= required_successful_scans + 8:
+                return _MR_H64_RETRY
+            if not _mr_h64_wait(0.2, stop_event):
+                return _MR_H64_CANCELLED
+            continue
+
+        handles, query_returncode, query_output = _mr_h64_query_handles(
+            executable,
+            pid,
+        )
+        total_attempts += 1
+        if query_returncode != 0:
+            query_failures += 1
+            if query_failures == 1:
+                detail = " ".join(query_output.split())[-240:]
+                print(
+                    f"[Multi Roblox] Handle64 query failed for PID:{pid} "
+                    f"(exit {query_returncode})"
+                    + (f": {detail}" if detail else "")
+                )
+            if total_attempts >= required_successful_scans + 8:
+                return _MR_H64_RETRY
+            delay = min(1.0, 0.2 * (2 ** min(query_failures - 1, 2)))
+            if not _mr_h64_wait(delay, stop_event):
+                return _MR_H64_CANCELLED
+            continue
+
+        query_failures = 0
+        successful_scans += 1
+        if not handles:
+            if successful_scans >= required_successful_scans:
+                print(
+                    f"[Multi Roblox] PID:{pid} has no known singleton handle "
+                    "and is already clear."
+                )
+                return _MR_H64_ALREADY_CLEAR
+            if not _mr_h64_wait(0.2, stop_event):
+                return _MR_H64_CANCELLED
+            continue
+
+        target_seen = True
+        if not _mr_h64_close_handle_values(
+            pid,
+            handles,
+            executable,
+            stop_event,
+        ):
+            if not _mr_h64_wait(0.2, stop_event):
+                return _MR_H64_CANCELLED
+            continue
+
+        verified_handles, verify_returncode, verify_output = (
+            _mr_h64_query_handles(executable, pid)
+        )
+        if verify_returncode == 0 and not verified_handles:
+            print(
+                f"[Multi Roblox] Closed singleton handles for PID:{pid} "
+                "(verified)."
+            )
+            return _MR_H64_CLOSED
+
+        if verify_returncode != 0:
+            detail = " ".join(verify_output.split())[-240:]
+            print(
+                f"[Multi Roblox] Handle64 verification failed for PID:{pid} "
+                f"(exit {verify_returncode})"
+                + (f": {detail}" if detail else "")
+            )
+        else:
+            remaining = ", ".join(
+                f"{object_name}:{handle_value}"
+                for handle_value, object_name in verified_handles
+            )
+            print(
+                f"[Multi Roblox] Singleton handles remain for PID:{pid}"
+                + (f": {remaining}" if remaining else "")
+            )
+        if not _mr_h64_wait(0.2, stop_event):
+            return _MR_H64_CANCELLED
+
+        if total_attempts >= required_successful_scans + 8:
+            break
+
+    if target_seen:
+        print(
+            f"[Multi Roblox] Singleton handle closure was not verified for "
+            f"PID:{pid}; retrying."
+        )
+    return _MR_H64_RETRY
+
+
+def _mr_h64_close_handles(
+    pids: list[int] | list[tuple[int, float]],
+    handle_path: str | None = None,
+    stop_event: threading.Event | None = None,
+) -> set[int]:
+    executable = handle_path or _mr_h64_path
+    if not executable:
         return set()
     closed_pids: set[int] = set()
-    for pid in pids:
-        handle_value = None
-        try:
-            for _ in range(5):
-                cmd = f'"{HANDLE}" -accepteula -p {pid} -a'
-                proc = subprocess.run(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, text=True, shell=True  # nosec B602
-                )
-                for line in proc.stdout.splitlines():
-                    if "ROBLOX_singletonEvent" in line:
-                        m = re.search(r"([0-9A-F]+):.*ROBLOX_singletonEvent", line, re.IGNORECASE)
-                        if m:
-                            handle_value = m.group(1)
-                            break
-                if handle_value:
-                    break
-                time.sleep(0.2)
-            if handle_value:
-                close_result = subprocess.run(
-                    f'"{HANDLE}" -accepteula -p {pid} -c {handle_value} -y',
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, shell=True  # nosec B602
-                )
-                if close_result.returncode == 0:
-                    closed_pids.add(pid)
-                    print(f"[Multi Roblox] Closed singleton handle for PID:{pid}")
-                else:
-                    print(f"[Multi Roblox] Failed to close singleton handle for PID:{pid}")
-            else:
-                print(f"[Multi Roblox] Handle not found for PID:{pid}")
-        except Exception as e:
-            print(f"[Multi Roblox] Error closing handle for PID:{pid}: {e}")
+    for process_identity in pids:
+        if isinstance(process_identity, tuple):
+            pid = int(process_identity[0])
+            expected_create_time = float(process_identity[1])
+        else:
+            pid = int(process_identity)
+            expected_create_time = None
+        if expected_create_time is None:
+            process_snapshot = presence_mod.get_roblox_processes(force=True)
+            process_data = process_snapshot.get(pid)
+            if process_data is None:
+                continue
+            expected_create_time = process_data[0]
+        result = _mr_h64_process_worker(
+            (pid, expected_create_time),
+            executable,
+            stop_event,
+            existing_process=False,
+        )
+        if result == _MR_H64_CLOSED:
+            closed_pids.add(pid)
     return closed_pids
 
 def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
-    # I know what you're here for.
-    global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
-    disable_multi_roblox() # clean up any existing state
+    global _mr_handle
+    global _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+    global _mr_h64_stop_event, _mr_h64_session_id
+    disable_multi_roblox()
 
     use_h64 = (method == "handle64")
 
@@ -1123,13 +1454,26 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         h64 = find_handle64()
         if not h64:
             print("[Multi Roblox] handle64.exe not found. Download it first.")
-            return False, "handle64.exe not found. Click 'Download Handle64' first."
+            return False, "HANDLE64_NOT_FOUND"
 
         _mr_h64_path = h64
+        _mr_h64_session_id += 1
+        session_id = _mr_h64_session_id
+        _mr_h64_stop_event = threading.Event()
         _mr_h64_monitoring = True
-        _mr_h64_thread = threading.Thread(target=_mr_h64_monitor_worker, daemon=True)
+        _mr_h64_thread = threading.Thread(
+            target=_mr_h64_monitor_worker,
+            args=(_mr_h64_stop_event, session_id, h64),
+            daemon=True,
+        )
         _mr_h64_thread.start()
-        _mr_handle = {"mutex": None, "file": None}
+        _mr_handle = {
+            "mode": "handle64",
+            "mutex": None,
+            "file": None,
+            "cookie_lock": None,
+            "session_id": session_id,
+        }
         print("[Multi Roblox] Started (handle64 mode)")
         return True, ""
 
@@ -1140,19 +1484,64 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateMutexW.restype = wintypes.HANDLE
-        kernel32.CreateMutexW.argtypes = [wintypes.LPCVOID, wintypes.BOOL, wintypes.LPCWSTR]
-        mutex = kernel32.CreateMutexW(None, True, "ROBLOX_singletonEvent")
-        if not mutex:
-            print(f"[Multi Roblox] Failed to create mutex: {ctypes.get_last_error()}")
-        elif ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-            print("[Multi Roblox] Mutex already exists. Took ownership.")
-        else:
-            print("[Multi Roblox] Mutex created.")
+        kernel32.CreateMutexW.argtypes = [
+            wintypes.LPCVOID,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        mutexes = []
+        mutex_failures = []
+        for singleton_name in _MR_SINGLETON_NAMES:
+            try:
+                ctypes.set_last_error(0)
+                mutex = kernel32.CreateMutexW(None, True, singleton_name)
+                mutex_error = ctypes.get_last_error()
+                if not mutex:
+                    mutex_failures.append((singleton_name, mutex_error))
+                    print(
+                        f"[Multi Roblox] Failed to create mutex "
+                        f"{singleton_name}: {mutex_error}"
+                    )
+                    continue
+                mutex_owned = mutex_error != 183
+                mutexes.append({
+                    "name": singleton_name,
+                    "handle": mutex,
+                    "owned": mutex_owned,
+                })
+                if mutex_owned:
+                    print(
+                        f"[Multi Roblox] Mutex created and owned: "
+                        f"{singleton_name}"
+                    )
+                else:
+                    print(
+                        f"[Multi Roblox] Mutex already exists: "
+                        f"{singleton_name}"
+                    )
+            except Exception as e:
+                mutex_failures.append((singleton_name, str(e)))
+                print(
+                    f"[Multi Roblox] Mutex setup failed for "
+                    f"{singleton_name}: {e}"
+                )
+
+        if not mutexes:
+            print("[Multi Roblox] No compatible singleton mutex was created.")
+            return False, "MUTEX_CREATE_FAILED"
+        if mutex_failures:
+            failed_names = ", ".join(name for name, _ in mutex_failures)
+            print(
+                f"[Multi Roblox] Continuing with compatible mutexes. "
+                f"Failed names: {failed_names}"
+            )
 
     except Exception as e:
-        return False, f"Failed to create mutex: {e}"
+        print(f"[Multi Roblox] Mutex setup error: {e}")
+        return False, f"MUTEX_CREATE_ERROR: {e}"
 
     cookie_file = None
+    cookie_lock = None
     cookies_path = os.path.join(
         os.getenv("LOCALAPPDATA", ""),
         r"Roblox\LocalStorage\RobloxCookies.dat"
@@ -1160,80 +1549,179 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
     if os.path.exists(cookies_path):
         try:
             cookie_file = open(cookies_path, "r+b")
-            msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, os.path.getsize(cookies_path))
+            lock_offset = 0
+            lock_length = max(1, os.path.getsize(cookies_path))
+            cookie_file.seek(lock_offset)
+            msvcrt.locking(cookie_file.fileno(), msvcrt.LK_NBLCK, lock_length)
+            cookie_lock = {
+                "file": cookie_file,
+                "acquired": True,
+                "offset": lock_offset,
+                "length": lock_length,
+            }
             print("[Multi Roblox] Error 773 fix applied (cookie lock).")
-        except OSError:
-            print("[Multi Roblox] Could not lock RobloxCookies.dat (may already be locked).")
+        except OSError as e:
+            error_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
+            print(
+                "[Multi Roblox] Could not lock RobloxCookies.dat "
+                f"(error {error_code}: {e})."
+            )
+            if cookie_file:
+                try:
+                    cookie_file.close()
+                except Exception:
+                    pass
+                cookie_file = None
     else:
         print("[Multi Roblox] RobloxCookies.dat not found, 773 fix skipped.")
 
-    _mr_handle = {"mutex": mutex, "file": cookie_file}
+    _mr_handle = {
+        "mode": "default",
+        "mutexes": mutexes,
+        "file": cookie_file,
+        "cookie_lock": cookie_lock,
+    }
     print("[Multi Roblox] Started (default mode)")
     return True, ""
 
+def is_multi_roblox_running(method: str | None = None) -> bool:
+    state = _mr_handle
+    if method in (None, "handle64"):
+        if (
+            state
+            and state.get("mode") == "handle64"
+            and _mr_h64_monitoring
+            and _mr_h64_stop_event is not None
+            and not _mr_h64_stop_event.is_set()
+            and bool(_mr_h64_path)
+        ):
+            return True
+    if method in (None, "default"):
+        if state and state.get("mode") == "default" and (
+            state.get("mutexes") or state.get("mutex")
+        ):
+            return True
+    return False
+
+
 def is_roblox_running() -> bool:
     try:
-        output = subprocess.check_output(["tasklist"], text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        if "robloxplayerbeta.exe" in output.lower():
-            return True
+        return bool(presence_mod.get_roblox_processes(force=True))
     except Exception as e:
         print(f"[Multi Roblox] Error checking if Roblox is running: {e}")
     return False
 
+
 def kill_roblox():
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "RobloxPlayerBeta.exe"],
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        processes = presence_mod.get_roblox_processes(force=True)
+        for pid in processes:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as e:
+        print(f"[Multi Roblox] Error closing Roblox processes: {e}")
 
 def disable_multi_roblox():
     global _mr_handle, _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
+    global _mr_h64_stop_event, _mr_h64_session_id
 
-    if _mr_h64_monitoring:
+    h64_event = _mr_h64_stop_event
+    h64_thread = _mr_h64_thread
+    had_h64_state = (
+        _mr_h64_monitoring
+        or h64_event is not None
+        or h64_thread is not None
+        or _mr_h64_path is not None
+    )
+    if had_h64_state:
         _mr_h64_monitoring = False
-        if _mr_h64_thread:
-            _mr_h64_thread.join(timeout=2.0)
+        _mr_h64_session_id += 1
+        if h64_event is not None:
+            h64_event.set()
+        if h64_thread and h64_thread is not threading.current_thread():
+            h64_thread.join(timeout=2.0)
+        with _mr_h64_worker_lock:
+            workers = list(_mr_h64_worker_threads)
+        for worker in workers:
+            if worker is not threading.current_thread():
+                worker.join(timeout=2.0)
+        with _mr_h64_worker_lock:
+            _mr_h64_worker_threads.clear()
         _mr_h64_thread = None
+        _mr_h64_stop_event = None
         _mr_h64_path = None
         print("[Multi Roblox] Handle64 monitor stopped.")
 
     if _mr_handle:
-        f = _mr_handle.get("file")
-        if f:
+        state = _mr_handle
+        cookie_lock = state.get("cookie_lock") or {}
+        f = state.get("file")
+        if f and cookie_lock.get("acquired"):
             try:
-                cookies_path = os.path.join(
-                    os.getenv("LOCALAPPDATA", ""),
-                    r"Roblox\LocalStorage\RobloxCookies.dat"
+                f.seek(cookie_lock.get("offset", 0))
+                msvcrt.locking(
+                    f.fileno(),
+                    msvcrt.LK_UNLCK,
+                    cookie_lock.get("length", 1),
                 )
-                if os.path.exists(cookies_path):
-                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, os.path.getsize(cookies_path))
             except Exception as e:
                 print(f"[Multi Roblox] Failed to unlock cookie file: {e}")
+        if f:
             try:
                 f.close()
             except Exception:
                 pass
 
-        m = _mr_handle.get("mutex")
-        if m:
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.ReleaseMutex.restype = wintypes.BOOL
-            kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
-            kernel32.CloseHandle.restype = wintypes.BOOL
-            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        mutexes = list(state.get("mutexes") or [])
+        if not mutexes and state.get("mutex"):
+            mutexes = [{
+                "name": "ROBLOX_singletonEvent",
+                "handle": state.get("mutex"),
+                "owned": bool(state.get("mutex_owned")),
+            }]
+        if mutexes:
             try:
-                if not kernel32.ReleaseMutex(m):
-                    print(f"ReleaseMutex failed. Error: {ctypes.get_last_error()}")
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.ReleaseMutex.restype = wintypes.BOOL
+                kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                for mutex_state in mutexes:
+                    mutex_name = mutex_state.get("name", "unknown")
+                    mutex_handle = mutex_state.get("handle")
+                    if not mutex_handle:
+                        continue
+                    mutex_owned = bool(mutex_state.get("owned"))
+                    if mutex_owned:
+                        ctypes.set_last_error(0)
+                        if not kernel32.ReleaseMutex(mutex_handle):
+                            print(
+                                f"[Multi Roblox] ReleaseMutex failed for "
+                                f"{mutex_name}. Error: "
+                                f"{ctypes.get_last_error()}"
+                            )
+                        else:
+                            print(
+                                f"[Multi Roblox] Mutex released: {mutex_name}"
+                            )
 
-                if not kernel32.CloseHandle(m):
-                    print(f"CloseHandle failed. Error: {ctypes.get_last_error()}")
-
-                print("[Multi Roblox] Mutex released.")
-
+                    ctypes.set_last_error(0)
+                    if not kernel32.CloseHandle(mutex_handle):
+                        print(
+                            f"[Multi Roblox] CloseHandle failed for "
+                            f"{mutex_name}. Error: {ctypes.get_last_error()}"
+                        )
+                    elif not mutex_owned:
+                        print(
+                            f"[Multi Roblox] Mutex handle closed without "
+                            f"releasing ownership: {mutex_name}"
+                        )
             except Exception as e:
-                print(f"[Multi Roblox] Failed to release mutex: {e}")
+                print(f"[Multi Roblox] Failed to close mutex handles: {e}")
 
         _mr_handle = None
         print("[Multi Roblox] Stopped.")

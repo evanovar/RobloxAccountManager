@@ -1912,7 +1912,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._mr_dl_btn.setText("Download Handle64")
             self._mr_dl_btn.setEnabled(True)
 
-    def _on_mr_method_changed(self):
+    def _on_mr_method_changed(self, checked: bool = False):
+        if not checked:
+            return
         if self._mr_handle64_radio.isChecked():
             if not self._is_admin():
                 self._mr_ask_restart_as_admin()
@@ -1934,6 +1936,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._mr_enabled:
             self._stop_multi_roblox()
             self._start_multi_roblox()
+        else:
+            self._update_mr_status()
 
     def _on_mr_enabled_changed(self, state):
         try:
@@ -1951,6 +1955,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             print(f"Error in _on_mr_enabled_changed: {e}")
 
     def _start_multi_roblox(self):
+        if actions.is_multi_roblox_running(self._mr_method):
+            self._update_mr_status()
+            return
+
         if self._mr_method == "default":
             roblox_running = actions.is_roblox_running()
             if roblox_running:
@@ -1981,11 +1989,30 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             if msg == "NEEDS_ADMIN":
                 self._mr_ask_restart_as_admin()
             elif msg == "ROBLOX_RUNNING":
-                self._mr_status_lbl.setText("Error: Close Roblox first, then enable Multi Roblox.")
-                self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "Roblox is still running. Close Roblox before enabling Default mode.",
+                )
+            elif msg == "HANDLE64_NOT_FOUND":
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "Handle64 was not found. Download Handle64 before enabling this mode.",
+                )
+            elif msg == "MUTEX_CREATE_FAILED":
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "Windows could not create the Roblox singleton mutex. "
+                    "Check the console for the Windows error code.",
+                )
             else:
-                self._mr_status_lbl.setText(f"Error: {msg}")
-                self._mr_status_lbl.setStyleSheet("color: #EF5350; font-size: 11px;")
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    f"Multi Roblox could not be started.\n\n{msg}",
+                )
             self._mr_enabled = False
             self._mr_enabled_chk.blockSignals(True)
             self._mr_enabled_chk.setChecked(False)
@@ -2022,8 +2049,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_mr_status()
 
     def _update_mr_status(self):
-        running = self._mr_enabled_chk.isChecked()
         method_str = "Handle64" if getattr(self, "_mr_method", "default") == "handle64" else "Default"
+        running = actions.is_multi_roblox_running(getattr(self, "_mr_method", "default"))
         if running:
             self._mr_status_lbl.setText(f"Status: Running ({method_str})")
             self._mr_status_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
