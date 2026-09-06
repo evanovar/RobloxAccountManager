@@ -73,6 +73,7 @@ import features.favorites as favorites_mod
 import features.groups as groups
 import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
+import features.private_servers as private_servers_mod
 import features.roblox_downloader as roblox_downloader_mod
 import features.roblox_settings as roblox_settings_mod
 import features.updater as updater_mod
@@ -318,6 +319,30 @@ class _ComboRightClickFilter(QObject):
             self.right_clicked.emit(event.pos())
             return True
         return False
+
+
+class _ActionComboBox(QComboBox):
+    action_requested = Signal()
+
+    def __init__(self, action_text, parent=None):
+        super().__init__(parent)
+        self._action_menu = QMenu(self)
+        self._action_menu.addAction(action_text, self.action_requested.emit)
+        self._action_menu.aboutToHide.connect(self._menu_hidden)
+        self._menu_hidden_at = 0.0
+
+    def _menu_hidden(self):
+        self._menu_hidden_at = time.monotonic()
+
+    def showPopup(self):
+        if self._action_menu.isVisible():
+            self._action_menu.hide()
+            return
+        if time.monotonic() - self._menu_hidden_at < 0.2:
+            return
+        menu_width = self._action_menu.sizeHint().width()
+        menu_x = max(0, self.width() - menu_width)
+        self._action_menu.popup(self.mapToGlobal(QPoint(menu_x, self.height())))
 
 
 # Thread to Qt signal bridge
@@ -883,6 +908,233 @@ class _BackgroundController(QObject):
         self.display_frame = QImage()
 
 
+class _PrivateServerManagerDialog(QDialog):
+    loaded = Signal(int, object)
+    progress = Signal(int, object)
+    link_ready = Signal(int, str, object)
+    apply_server = Signal(str, str)
+
+    def __init__(self, manager, selected, parent):
+        super().__init__(parent)
+        self.manager = manager
+        self._cancel = None
+        self._link_cancel = None
+        self._pending_action = ''
+        self._generation = 0
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setWindowTitle('Private Server Manager')
+        self.setWindowIcon(parent.windowIcon())
+        self.resize(680, 420)
+        self.setMinimumSize(520, 320)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        row = QHBoxLayout()
+        row.addWidget(QLabel('Account'))
+        self.account = QComboBox()
+        self.account.addItems(list(manager.accounts))
+        if selected:
+            self.account.setCurrentText(selected)
+        row.addWidget(self.account, 1)
+        row.addWidget(QLabel('Place ID'))
+        self.place = QLineEdit()
+        self.place.setPlaceholderText('Optional')
+        row.addWidget(self.place, 1)
+        self.refresh = QPushButton('Refresh')
+        self.refresh.clicked.connect(self._load)
+        row.addWidget(self.refresh)
+        layout.addLayout(row)
+        self.list = QTreeWidget()
+        self.list.setHeaderLabels(['Game', 'Server Name', 'Status'])
+        self.list.setRootIsDecorated(False)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.list.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.list.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.itemSelectionChanged.connect(self._selection_changed)
+        layout.addWidget(self.list, 1)
+        self.status = QLabel('')
+        self.status.setStyleSheet(f'color: {MUTED}; background: transparent;')
+        layout.addWidget(self.status)
+        buttons = QHBoxLayout()
+        self.copy = QPushButton('Copy Link')
+        self.copy.clicked.connect(self._copy)
+        self.apply = QPushButton('Apply to Field')
+        self.apply.clicked.connect(self._apply)
+        buttons.addWidget(self.copy)
+        buttons.addWidget(self.apply)
+        buttons.addStretch(1)
+        close = QPushButton('Close')
+        close.clicked.connect(self.close)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        self.loaded.connect(self._on_loaded)
+        self.progress.connect(self._on_progress)
+        self.link_ready.connect(self._on_link_ready)
+        self.account.currentIndexChanged.connect(self._load)
+        self.place.returnPressed.connect(self._load)
+        self.place.textChanged.connect(self._invalidate)
+        self._selection_changed()
+        QTimer.singleShot(0, self._load)
+
+    def _invalidate(self):
+        self._generation += 1
+        if self._cancel:
+            self._cancel.set()
+        if self._link_cancel:
+            self._link_cancel.set()
+            self._link_cancel = None
+        self._pending_action = ''
+        self.list.clear()
+        self._row_ids = set()
+        self.refresh.setEnabled(True)
+        self.status.setText('Press Refresh to load servers.')
+        self._selection_changed()
+
+    def _load(self):
+        self._invalidate()
+        username = self.account.currentText()
+        if not username:
+            self.status.setText('No saved accounts.')
+            return
+        generation = self._generation
+        self.refresh.setEnabled(False)
+        self.status.setText('Loading private servers...')
+        self._cancel = private_servers_mod.start_load(
+            self.manager, username, self.place.text().strip(),
+            lambda result: self.loaded.emit(generation, result),
+            lambda rows: self.progress.emit(generation, rows),
+        )
+
+    def _on_progress(self, generation, rows):
+        if generation != self._generation:
+            return
+        self._append_rows(rows)
+        self.status.setText(f'{self.list.topLevelItemCount()} private server(s). Loading...')
+
+    def _on_loaded(self, generation, result):
+        if generation != self._generation:
+            return
+        self.refresh.setEnabled(True)
+        if not result:
+            self.status.setText('Could not load private servers.')
+            self.parentWidget()._show_operation_error(result)
+            return
+        self._append_rows(result.data)
+        self.status.setText(f'{len(result.data)} private server(s).' if result.data else 'No owned private servers found.')
+
+    def _append_rows(self, rows):
+        for row in rows:
+            row_id = row.get('id') or row['link']
+            if row_id in self._row_ids:
+                continue
+            self._row_ids.add(row_id)
+            item = QTreeWidgetItem([row['game'], row['name'], row['status']])
+            item.setData(0, Qt.ItemDataRole.UserRole, row['link'])
+            item.setData(0, int(Qt.ItemDataRole.UserRole) + 1, dict(row))
+            if not row['link']:
+                item.setToolTip(0, 'Roblox did not provide a join link for this server.')
+            self.list.addTopLevelItem(item)
+        if not self.list.currentItem() and self.list.topLevelItemCount():
+            self.list.setCurrentItem(self.list.topLevelItem(0))
+        self._selection_changed()
+
+    def _selected_link(self):
+        item = self.list.currentItem()
+        return item.data(0, Qt.ItemDataRole.UserRole) if item else ''
+
+    def _selected_row(self):
+        item = self.list.currentItem()
+        return item.data(0, int(Qt.ItemDataRole.UserRole) + 1) if item else None
+
+    def _selection_changed(self):
+        enabled = self.list.currentItem() is not None and not self._pending_action
+        self.copy.setEnabled(enabled)
+        self.apply.setEnabled(enabled)
+        reason = ''
+        if enabled and not self._selected_link():
+            reason = 'This server needs a new join link.'
+        self.copy.setToolTip(reason)
+        self.apply.setToolTip(reason)
+
+    def _copy(self):
+        self._use_link('copy')
+
+    def _apply(self):
+        self._use_link('apply')
+
+    def _use_link(self, action):
+        link = self._selected_link()
+        row = self._selected_row() or {}
+        if link:
+            self._finish_action(action, str(row.get('place_id', '')), link)
+            return
+        if not row or self._pending_action:
+            return
+        reply = QMessageBox.question(
+            self,
+            'Generate Private Server Link',
+            'This server has no join link. Generate a new join code?\n\n'
+            'This replaces the server\'s current join code on Roblox.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._pending_action = action
+        self._selection_changed()
+        self.status.setText('Generating private server link...')
+        generation = self._generation
+        server_id = str(row.get('id', ''))
+        self._link_cancel = private_servers_mod.start_generate_link(
+            self.manager,
+            self.account.currentText(),
+            server_id,
+            str(row.get('place_id', '')),
+            lambda result: self.link_ready.emit(generation, server_id, result),
+        )
+
+    def _on_link_ready(self, generation, server_id, result):
+        if generation != self._generation:
+            return
+        action = self._pending_action
+        self._pending_action = ''
+        self._link_cancel = None
+        if not result:
+            self.status.setText('Could not generate private server link.')
+            self._selection_changed()
+            self.parentWidget()._show_operation_error(result)
+            return
+        link = str(result.data or '')
+        place_id = ''
+        for index in range(self.list.topLevelItemCount()):
+            item = self.list.topLevelItem(index)
+            row = item.data(0, int(Qt.ItemDataRole.UserRole) + 1) or {}
+            if str(row.get('id', '')) == server_id:
+                place_id = str(row.get('place_id', ''))
+                row['link'] = link
+                item.setData(0, Qt.ItemDataRole.UserRole, link)
+                item.setData(0, int(Qt.ItemDataRole.UserRole) + 1, row)
+                break
+        self._selection_changed()
+        self._finish_action(action, place_id, link)
+
+    def _finish_action(self, action, place_id, link):
+        if action == 'copy':
+            QApplication.clipboard().setText(link)
+            self.status.setText('Link copied.')
+        elif action == 'apply':
+            self.apply_server.emit(place_id, link)
+            self.accept()
+
+    def done(self, result):
+        self._generation += 1
+        if self._cancel:
+            self._cancel.set()
+        if self._link_cancel:
+            self._link_cancel.set()
+        super().done(result)
+
+
 class _DetachablePageHost(QWidget):
     def __init__(self, page_index: int, page_name: str, parent=None):
         super().__init__(parent)
@@ -1203,7 +1455,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 lambda: actions.get_ui_setting("discord_webhook", {})
             )
         self._place_id_edit.setCurrentText(S.get("last_place_id", ""))
-        self._private_server_edit.setText(S.get("last_private_server", ""))
+        self._private_server_edit.setCurrentText(S.get("last_private_server", ""))
 
         if S.get("last_place_id"):
             self._schedule_game_name_fetch()
@@ -6156,6 +6408,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             app.quit()
 
     def _perform_shutdown_cleanup(self) -> None:
+        private_manager = getattr(self, '_private_server_manager', None)
+        if private_manager is not None and isValid(private_manager):
+            private_manager.close()
         if hasattr(self, '_background'):
             self._background.stop()
             QApplication.instance().removeEventFilter(self._background)
@@ -6324,9 +6579,18 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         priv_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         lay.addWidget(priv_lbl)
 
-        self._private_server_edit = QLineEdit()
-        self._private_server_edit.setPlaceholderText("VIP Link or Link Code")
-        self._private_server_edit.textChanged.connect(self._on_private_server_changed)
+        self._private_server_edit = _ActionComboBox("Private Server Manager")
+        self._private_server_edit.setEditable(True)
+        self._private_server_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._private_server_edit.lineEdit().setPlaceholderText("VIP Link or Link Code")
+        self._private_server_edit.setStyleSheet(
+            f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; }}"
+            f"QComboBox::drop-down {{ border: 0; width: 20px; }}"
+            f"QComboBox::down-arrow {{ image: url({_arrow_path}); width: 10px; height: 10px; }}"
+        )
+        self._private_server_edit.currentTextChanged.connect(self._on_private_server_changed)
+        self._private_server_edit.action_requested.connect(self._open_private_server_manager)
         lay.addWidget(self._private_server_edit)
 
         # join button
@@ -6479,6 +6743,22 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "You can still try launching this account."
         )
         return badge
+
+    def _open_private_server_manager(self):
+        dialog = getattr(self, '_private_server_manager', None)
+        if dialog is not None and isValid(dialog):
+            dialog.showNormal()
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = _PrivateServerManagerDialog(self.manager, self._get_selected_username(), self)
+        dialog.apply_server.connect(self._apply_private_server_fields)
+        self._private_server_manager = dialog
+        dialog.show()
+
+    def _apply_private_server_fields(self, place_id, private_server):
+        self._place_id_edit.setCurrentText(str(place_id or ''))
+        self._private_server_edit.setCurrentText(str(private_server or ''))
 
     def _get_selected_username(self) -> str | None:
         item = self._account_list.currentItem()
@@ -6846,7 +7126,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         private_server = data.get("private_server", "")
         if pid:
             self._place_id_edit.setCurrentText(pid)
-            self._private_server_edit.setText(private_server)
+            self._private_server_edit.setCurrentText(private_server)
 
     def _update_encryption_badge(self):
         text, color = actions.get_encryption_status(self.manager)
@@ -6880,7 +7160,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _do_fetch_game_name(self):
         place_id = self._place_id_edit.currentText().strip()
-        private = self._private_server_edit.text().strip()
+        private = self._private_server_edit.currentText().strip()
         actions.save_ui_setting("last_place_id", place_id)
         actions.save_ui_setting("last_private_server", private)
         if place_id:
@@ -6926,7 +7206,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         place_id, private_server = data
         self._place_id_edit.setCurrentText(str(place_id))
-        self._private_server_edit.setText(private_server or "")
+        self._private_server_edit.setCurrentText(private_server or "")
 
     def _on_favorite_context_menu(self, pos):
         view = self._place_id_edit.view()
@@ -6948,7 +7228,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_save_current_game(self):
         place_id = self._place_id_edit.currentText().strip()
-        private = self._private_server_edit.text().strip()
+        private = self._private_server_edit.currentText().strip()
 
         if not place_id and not private:
             _show_error(self, "Missing Place ID", "Enter a Place ID or a Private Server Link first.")
@@ -7139,7 +7419,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
 
         place_id = self._place_id_edit.currentText().strip()
-        private = self._private_server_edit.text().strip()
+        private = self._private_server_edit.currentText().strip()
 
         # Place ID is only required when there's no Private Server Link to
         # resolve a Place ID from - the Place ID inputbox is never rewritten.
