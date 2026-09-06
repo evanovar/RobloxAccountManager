@@ -1482,6 +1482,21 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_enabled_chk.stateChanged.connect(self._on_afk_enabled_changed)
         lay.addWidget(self._afk_enabled_chk)
 
+        debug_row = QHBoxLayout()
+        debug_row.setContentsMargins(0, 0, 0, 0)
+        self._afk_debug_btn = QPushButton("Trigger Anti-AFK Now")
+        self._afk_debug_btn.setFixedHeight(26)
+        self._afk_debug_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 12px; border-radius: 0; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+            f"QPushButton:disabled {{ color: {MUTED}; }}"
+        )
+        self._afk_debug_btn.clicked.connect(self._on_afk_debug_trigger)
+        debug_row.addWidget(self._afk_debug_btn)
+        debug_row.addStretch(1)
+        lay.addLayout(debug_row)
+
         # Settings form
         form = QVBoxLayout()
         form.setContentsMargins(0, 8, 0, 0)
@@ -1598,12 +1613,25 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_interval = self._afk_interval_spin.value()
         self._afk_tooltip_enabled = self._afk_tooltip_chk.isChecked()
         self._save_afk_settings()
+        if (
+            getattr(self, "_afk_enabled", False)
+            and self._afk_enabled_chk.isChecked()
+        ):
+            actions.start_anti_afk(
+                self._afk_key,
+                self._afk_press_count,
+                self._afk_interval,
+                self._afk_tooltip_enabled,
+            )
 
     def _on_afk_record_key(self):
         self._afk_key_btn.setText("...")
         self._afk_key_hint.show()
         self._afk_key_btn.setFocus()
         self._key_grab_active = True
+
+    def _on_afk_debug_trigger(self):
+        actions.trigger_anti_afk()
     
     def _on_afk_tooltip_emit(self, message, x, y):
         self._bridge.afk_tooltip.emit(message, x, y)
@@ -1752,6 +1780,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         color = self._AR_ACTIVE_COLOR if self._afk_enabled else self._AR_INACTIVE_COLOR
         self._afk_status_lbl.setText(f"Status: {status}")
         self._afk_status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self._afk_debug_btn.setEnabled(self._afk_enabled)
 
     def _save_afk_settings(self):
         actions.save_ui_setting("anti_afk_key", self._afk_key)

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
-from PyInstaller.utils.hooks import collect_dynamic_libs
 
 
 PROJECT_ROOT = Path(SPECPATH).parent.parent
@@ -18,7 +17,7 @@ datas = [
     (str(ASSETS_ROOT / "icon.ico"), "assets"),
     (str(ASSETS_ROOT / "discordlogo.png"), "assets"),
 ]
-binaries = collect_dynamic_libs("autoit")
+binaries = []
 hiddenimports = [
     "requests",
     "Crypto",

@@ -11,12 +11,12 @@ import threading
 import time
 import ctypes
 import re
-import autoit
 import platform
 import tempfile
 import shutil
 import zipfile
 import subprocess
+import win32con
 import win32gui
 import msvcrt
 import requests
@@ -868,12 +868,338 @@ def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *
 # Anti-AFK
 _afk_thread: threading.Thread | None = None
 _afk_stop_event = threading.Event()
+_afk_trigger_event = threading.Event()
 _afk_key: str = "w"
 _afk_press_count: int = 1
 _afk_interval: int = 10          # minutes
 _afk_tooltip_enabled: bool = True
 
 _afk_tooltip_callback: Callable[[str | None, int, int], None] | None = None
+
+_AFK_INPUT_MOUSE = 0
+_AFK_INPUT_KEYBOARD = 1
+_AFK_KEYEVENTF_EXTENDEDKEY = 0x0001
+_AFK_KEYEVENTF_KEYUP = 0x0002
+_AFK_KEYEVENTF_SCANCODE = 0x0008
+_AFK_MOUSEEVENTF_LEFTDOWN = 0x0002
+_AFK_MOUSEEVENTF_LEFTUP = 0x0004
+_AFK_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_AFK_MOUSEEVENTF_RIGHTUP = 0x0010
+_AFK_MOUSEEVENTF_MIDDLEDOWN = 0x0020
+_AFK_MOUSEEVENTF_MIDDLEUP = 0x0040
+_AFK_MOUSEEVENTF_WHEEL = 0x0800
+_AFK_MOUSEEVENTF_XDOWN = 0x0080
+_AFK_MOUSEEVENTF_XUP = 0x0100
+_AFK_WHEEL_DELTA = 120
+_AFK_XBUTTON1 = 0x0001
+_AFK_XBUTTON2 = 0x0002
+_AFK_RETRY_SECONDS = 15
+
+
+class _AfkKeyboardInput(ctypes.Structure):
+    _fields_ = [
+        ("virtual_key", wintypes.WORD),
+        ("scan_code", wintypes.WORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("extra_info", ctypes.c_size_t),
+    ]
+
+
+class _AfkMouseInput(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouse_data", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("extra_info", ctypes.c_size_t),
+    ]
+
+
+class _AfkInputUnion(ctypes.Union):
+    _fields_ = [
+        ("keyboard", _AfkKeyboardInput),
+        ("mouse", _AfkMouseInput),
+    ]
+
+
+class _AfkInput(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [
+        ("input_type", wintypes.DWORD),
+        ("value", _AfkInputUnion),
+    ]
+
+
+_AFK_VIRTUAL_KEYS = {
+    "backspace": 0x08,
+    "tab": 0x09,
+    "enter": 0x0D,
+    "numpadenter": 0x0D,
+    "shift": 0x10,
+    "ctrl": 0x11,
+    "alt": 0x12,
+    "capslock": 0x14,
+    "space": 0x20,
+    "pgup": 0x21,
+    "pgdown": 0x22,
+    "end": 0x23,
+    "home": 0x24,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "insert": 0x2D,
+    "delete": 0x2E,
+    "win": 0x5B,
+    "numlock": 0x90,
+    "scrolllock": 0x91,
+}
+_AFK_EXTENDED_KEYS = {
+    "numpadenter",
+    "pgup",
+    "pgdown",
+    "end",
+    "home",
+    "left",
+    "up",
+    "right",
+    "down",
+    "insert",
+    "delete",
+    "win",
+}
+
+
+def _afk_keyboard_input(virtual_key: int, key_up: bool, extended: bool) -> _AfkInput:
+    user32 = ctypes.windll.user32
+    user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+    user32.MapVirtualKeyW.restype = wintypes.UINT
+    scan_code = user32.MapVirtualKeyW(virtual_key, 0)
+    flags = _AFK_KEYEVENTF_KEYUP if key_up else 0
+    if extended:
+        flags |= _AFK_KEYEVENTF_EXTENDEDKEY
+    if scan_code:
+        flags |= _AFK_KEYEVENTF_SCANCODE
+    return _AfkInput(
+        input_type=_AFK_INPUT_KEYBOARD,
+        keyboard=_AfkKeyboardInput(
+            virtual_key=0 if scan_code else virtual_key,
+            scan_code=scan_code,
+            flags=flags,
+            time=0,
+            extra_info=0,
+        ),
+    )
+
+
+def _afk_mouse_input(flags: int, mouse_data: int = 0) -> _AfkInput:
+    return _AfkInput(
+        input_type=_AFK_INPUT_MOUSE,
+        mouse=_AfkMouseInput(
+            dx=0,
+            dy=0,
+            mouse_data=mouse_data,
+            flags=flags,
+            time=0,
+            extra_info=0,
+        ),
+    )
+
+
+def _send_afk_input(input_event: _AfkInput) -> bool:
+    user32 = ctypes.windll.user32
+    user32.SendInput.argtypes = [
+        wintypes.UINT,
+        ctypes.POINTER(_AfkInput),
+        ctypes.c_int,
+    ]
+    user32.SendInput.restype = wintypes.UINT
+    sent = user32.SendInput(1, ctypes.byref(input_event), ctypes.sizeof(_AfkInput))
+    return sent == 1
+
+
+def _get_afk_virtual_key(action_key: str) -> tuple[int, bool] | None:
+    normalized = str(action_key or "").lower()
+    if normalized in _AFK_VIRTUAL_KEYS:
+        return _AFK_VIRTUAL_KEYS[normalized], normalized in _AFK_EXTENDED_KEYS
+    if normalized.startswith("f") and normalized[1:].isdigit():
+        function_number = int(normalized[1:])
+        if 1 <= function_number <= 12:
+            return 0x70 + function_number - 1, False
+    if len(normalized) == 1:
+        user32 = ctypes.windll.user32
+        user32.VkKeyScanW.argtypes = [wintypes.WCHAR]
+        user32.VkKeyScanW.restype = ctypes.c_short
+        translated = user32.VkKeyScanW(normalized)
+        if translated != -1:
+            return translated & 0xFF, False
+    return None
+
+
+def _perform_afk_action(action_key: str, press_count: int) -> bool:
+    normalized = str(action_key or "").lower()
+    mouse_buttons = {
+        "lmb": (_AFK_MOUSEEVENTF_LEFTDOWN, _AFK_MOUSEEVENTF_LEFTUP, 0),
+        "rmb": (_AFK_MOUSEEVENTF_RIGHTDOWN, _AFK_MOUSEEVENTF_RIGHTUP, 0),
+        "mmb": (_AFK_MOUSEEVENTF_MIDDLEDOWN, _AFK_MOUSEEVENTF_MIDDLEUP, 0),
+        "mback": (_AFK_MOUSEEVENTF_XDOWN, _AFK_MOUSEEVENTF_XUP, _AFK_XBUTTON1),
+        "mfwd": (_AFK_MOUSEEVENTF_XDOWN, _AFK_MOUSEEVENTF_XUP, _AFK_XBUTTON2),
+    }
+    keyboard = _get_afk_virtual_key(normalized)
+    completed = 0
+
+    for _ in range(max(1, int(press_count))):
+        if _afk_stop_event.is_set():
+            break
+
+        if normalized in mouse_buttons:
+            down_flag, up_flag, mouse_data = mouse_buttons[normalized]
+            down_sent = _send_afk_input(_afk_mouse_input(down_flag, mouse_data))
+            time.sleep(0.15)
+            up_sent = _send_afk_input(_afk_mouse_input(up_flag, mouse_data))
+            action_sent = down_sent and up_sent
+        elif normalized in ("scroll_up", "scroll_down"):
+            direction = _AFK_WHEEL_DELTA if normalized == "scroll_up" else -_AFK_WHEEL_DELTA
+            action_sent = _send_afk_input(
+                _afk_mouse_input(_AFK_MOUSEEVENTF_WHEEL, direction & 0xFFFFFFFF)
+            )
+        elif keyboard:
+            virtual_key, extended = keyboard
+            down_sent = _send_afk_input(
+                _afk_keyboard_input(virtual_key, False, extended)
+            )
+            time.sleep(0.2)
+            up_sent = _send_afk_input(
+                _afk_keyboard_input(virtual_key, True, extended)
+            )
+            action_sent = down_sent and up_sent
+        else:
+            return False
+
+        if not action_sent:
+            return False
+        completed += 1
+        if _afk_stop_event.wait(0.1):
+            break
+
+    return completed == max(1, int(press_count))
+
+
+def _focus_afk_window(hwnd: int) -> bool:
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    user32.AttachThreadInput.restype = wintypes.BOOL
+
+    for _ in range(5):
+        if not win32gui.IsWindow(hwnd):
+            return False
+
+        foreground = win32gui.GetForegroundWindow()
+        if foreground == hwnd:
+            return True
+
+        current_thread = kernel32.GetCurrentThreadId()
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        foreground_thread = (
+            user32.GetWindowThreadProcessId(foreground, None)
+            if foreground
+            else 0
+        )
+        attached_threads = []
+        try:
+            for thread_id in {target_thread, foreground_thread}:
+                if not thread_id or thread_id == current_thread:
+                    continue
+                if user32.AttachThreadInput(current_thread, thread_id, True):
+                    attached_threads.append(thread_id)
+
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.SetActiveWindow(hwnd)
+            user32.SetFocus(hwnd)
+        finally:
+            for thread_id in attached_threads:
+                user32.AttachThreadInput(current_thread, thread_id, False)
+
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.1)
+
+    return False
+
+
+def _get_afk_window_states(pids: set[int]) -> list[dict]:
+    manager = headless_manager_mod.get_active_manager()
+    hidden_pids = manager.get_hidden_pids() if manager else set()
+    windows_by_pid = presence_mod.get_windows_by_pid(pids)
+    states = []
+
+    for pid in sorted(pids):
+        candidates = []
+        for hwnd in windows_by_pid.get(pid, []):
+            try:
+                if not win32gui.IsWindow(hwnd):
+                    continue
+                if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
+                    continue
+                title = (win32gui.GetWindowText(hwnd) or "").strip()
+                if not title:
+                    continue
+                visible = bool(win32gui.IsWindowVisible(hwnd))
+                if not visible and pid not in hidden_pids:
+                    continue
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                area = max(0, right - left) * max(0, bottom - top)
+                if area:
+                    candidates.append((area, hwnd, visible))
+            except Exception:
+                pass
+
+        if not candidates:
+            continue
+        _, hwnd, visible = max(candidates, key=lambda item: (item[0], item[1]))
+        try:
+            placement = win32gui.GetWindowPlacement(hwnd)
+        except Exception:
+            placement = None
+        states.append({
+            "pid": pid,
+            "hwnd": hwnd,
+            "placement": placement,
+            "visible": visible,
+            "headless_hidden": pid in hidden_pids,
+        })
+
+    return states
+
+
+def _restore_afk_window_states(states: list[dict], original_hwnd: int) -> None:
+    manager = headless_manager_mod.get_active_manager()
+    for state in states:
+        hwnd = state["hwnd"]
+        if not win32gui.IsWindow(hwnd):
+            continue
+        placement = state.get("placement")
+        if placement:
+            try:
+                win32gui.SetWindowPlacement(hwnd, placement)
+            except Exception:
+                pass
+        if state.get("headless_hidden") and manager:
+            manager.resume_hidden(state["pid"])
+        elif not state.get("visible"):
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+
+    if original_hwnd and win32gui.IsWindow(original_hwnd):
+        _focus_afk_window(original_hwnd)
 
 def set_afk_tooltip_callback(cb: Callable[[str | None, int, int], None]) -> None:
     global _afk_tooltip_callback
@@ -899,6 +1225,7 @@ def start_anti_afk(key: str = "w", press_count: int = 1, interval: int = 10,
     _afk_tooltip_enabled = tooltip_enabled
     stop_anti_afk()
     _afk_stop_event.clear()
+    _afk_trigger_event.clear()
     _afk_thread = threading.Thread(target=_afk_worker, daemon=True)
     _afk_thread.start()
     print("[Anti-AFK] Started")
@@ -908,197 +1235,127 @@ def stop_anti_afk() -> None:
     global _afk_thread
     if _afk_thread and _afk_thread.is_alive():
         _afk_stop_event.set()
+        _afk_trigger_event.set()
         _afk_thread.join(timeout=2)
         print("[Anti-AFK] Stopped")
     _afk_thread = None
 
 
+def trigger_anti_afk() -> bool:
+    if not _afk_thread or not _afk_thread.is_alive():
+        return False
+    _afk_trigger_event.set()
+    print("[Anti-AFK] Manual maintenance requested")
+    return True
+
+
 def _afk_worker():
     user32 = ctypes.windll.user32
-
-    def _get_roblox_pids():
-        return set(presence_mod.get_roblox_processes())
-
-    def _get_roblox_hwnds(pids):
-        hm = headless_manager_mod.get_active_manager()
-        headless_pids = hm.get_hidden_pids() if hm else set()
-
-        hwnds = []
-        windows_by_pid = presence_mod.get_windows_by_pid(set(pids))
-        for pid, windows in windows_by_pid.items():
-            for hwnd in windows:
-                if user32.IsWindowVisible(hwnd):
-                    hwnds.append(hwnd)
-                    continue
-                if pid not in headless_pids:
-                    continue
-                expected_titles = {"Roblox"}
-                username = hm.get_pid_username(pid) if hm else None
-                if username:
-                    expected_titles.add(username)
-                if win32gui.GetWindowText(hwnd) in expected_titles:
-                    hwnds.append(hwnd)
-        return hwnds
-
-    def _get_placement(hwnd):
-        if win32gui and win32gui.IsWindow(hwnd):
-            try:
-                return win32gui.GetWindowPlacement(hwnd)
-            except Exception:
-                pass
-        return None
-
-    def _restore_placement(hwnd, placement):
-        if placement and win32gui and win32gui.IsWindow(hwnd):
-            try:
-                win32gui.SetWindowPlacement(hwnd, placement)
-            except Exception:
-                pass
-
-    def _activate(hwnd):
-        window_spec = f"[HANDLE:0x{hwnd:08X}]"
-        try:
-            autoit.win_activate(window_spec)
-        except Exception:
-            try:
-                user32.ShowWindow(hwnd, 9)
-                user32.SetForegroundWindow(hwnd)
-            except Exception:
-                pass
-
-    def _perform_action(action_key, press_count):
-        mouse_actions = {"lmb": "left", "rmb": "right", "mmb": "middle"}
-        for _ in range(max(1, press_count)):
-            if _afk_stop_event.is_set():
-                break
-            if action_key in mouse_actions:
-                autoit.mouse_down(mouse_actions[action_key])
-                time.sleep(0.1)
-                autoit.mouse_up(mouse_actions[action_key])
-            elif action_key == "scroll_up":
-                autoit.mouse_wheel("up", 1)
-            elif action_key == "scroll_down":
-                autoit.mouse_wheel("down", 1)
-            else:
-                autoit.send(f"{{{action_key.upper()} down}}")
-                time.sleep(0.1)
-                autoit.send(f"{{{action_key.upper()} up}}")
-            time.sleep(0.1)
+    next_wait_seconds = max(60, _afk_interval * 60)
 
     while not _afk_stop_event.is_set(): # main loop
         try:
-            total_seconds = _afk_interval * 60
+            total_seconds = next_wait_seconds
             countdown_seconds = min(30, total_seconds)
             wait_seconds = max(0, total_seconds - countdown_seconds)
 
-            # Idle wait
-            if wait_seconds > 0 and _afk_stop_event.wait(wait_seconds):
-                break
-
-            # Countdown + tooltip
-            for remaining in range(countdown_seconds, 0, -1):
-                if _afk_stop_event.is_set():
-                    _update_afk_tooltip(None)
-                    return
-                msg = f"Anti-AFK Maintenance in {remaining}s"
-                _update_afk_tooltip(msg)
-                if _afk_stop_event.wait(1):
-                    _update_afk_tooltip(None)
-                    return
-
-            _update_afk_tooltip(None)
-
-            roblox_pids = _get_roblox_pids()
-            if not roblox_pids:
-                print("[Anti-AFK] No Roblox processes found")
-                continue
-
-            hwnds = _get_roblox_hwnds(roblox_pids)
-            if not hwnds:
-                print("[Anti-AFK] No Roblox windows found")
-                continue
-
-            # Save foreground window + its placement
-            try:
-                original_hwnd = user32.GetForegroundWindow()
-            except Exception:
-                original_hwnd = None
-            original_placement = _get_placement(original_hwnd) if original_hwnd else None
-
-            # Visit each Roblox window
-            hm = headless_manager_mod.get_active_manager()
-            for hwnd in hwnds:
+            triggered = False
+            if wait_seconds > 0:
+                triggered = _afk_trigger_event.wait(wait_seconds)
+                if triggered:
+                    _afk_trigger_event.clear()
                 if _afk_stop_event.is_set():
                     break
 
-                window_spec = f"[HANDLE:0x{hwnd:08X}]"
+            if not triggered:
+                for remaining in range(countdown_seconds, 0, -1):
+                    if _afk_stop_event.is_set():
+                        _update_afk_tooltip(None)
+                        return
+                    msg = f"Anti-AFK Maintenance in {remaining}s"
+                    _update_afk_tooltip(msg)
+                    if _afk_trigger_event.wait(1):
+                        _afk_trigger_event.clear()
+                        triggered = True
+                        break
 
-                hwnd_pid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(hwnd_pid))
-                was_headless_hidden = hm.pause_hidden(hwnd_pid.value) if hm else False
+            _update_afk_tooltip(None)
+            if _afk_stop_event.is_set():
+                break
 
-                window_placement = _get_placement(hwnd)
+            roblox_pids = set(presence_mod.get_roblox_processes(force=True))
+            if not roblox_pids:
+                print("[Anti-AFK] No Roblox processes found")
+                next_wait_seconds = _AFK_RETRY_SECONDS
+                continue
 
-                _activate(hwnd)
-                time.sleep(0.12)
+            window_states = _get_afk_window_states(roblox_pids)
+            if not window_states:
+                print("[Anti-AFK] No Roblox windows found")
+                next_wait_seconds = _AFK_RETRY_SECONDS
+                continue
 
-                try:
-                    autoit.win_maximize(window_spec)
-                except Exception:
+            try:
+                original_hwnd = win32gui.GetForegroundWindow()
+            except Exception:
+                original_hwnd = 0
+
+            manager = headless_manager_mod.get_active_manager()
+            successful_actions = 0
+            try:
+                for state in window_states:
+                    if _afk_stop_event.is_set():
+                        break
+
+                    pid = state["pid"]
+                    hwnd = state["hwnd"]
+                    if state["headless_hidden"] and manager:
+                        manager.pause_hidden(pid)
+
                     try:
-                        if win32gui:
-                            win32gui.ShowWindow(hwnd, 3)
-                        else:
-                            user32.ShowWindow(hwnd, 3)
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
                     except Exception:
                         pass
 
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    pass
+                    if _afk_stop_event.wait(0.25):
+                        break
+                    if not _focus_afk_window(hwnd):
+                        print(
+                            f"[Anti-AFK] Could not focus Roblox window "
+                            f"0x{hwnd:08X} for PID {pid}"
+                        )
+                        continue
 
-                time.sleep(0.12)
+                    if not _perform_afk_action(_afk_key, _afk_press_count):
+                        print(
+                            f"[Anti-AFK] Input failed for Roblox window "
+                            f"0x{hwnd:08X} for PID {pid}"
+                        )
+                        continue
 
-                _perform_action(_afk_key, _afk_press_count)
-                time.sleep(0.08)
+                    successful_actions += 1
+                    print(
+                        f"[Anti-AFK] Action sent to Roblox window "
+                        f"0x{hwnd:08X} for PID {pid}"
+                    )
+            finally:
+                _restore_afk_window_states(window_states, original_hwnd)
 
-                _restore_placement(hwnd, window_placement)
-
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    try:
-                        if window_placement and len(window_placement) > 1 and window_placement[1] == 3:
-                            if win32gui:
-                                win32gui.ShowWindow(hwnd, 3)
-                            else:
-                                user32.ShowWindow(hwnd, 3)
-                        else:
-                            user32.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass
-
-                if was_headless_hidden and hm:
-                    hm.resume_hidden(hwnd_pid.value)
-
-                print(f"[Anti-AFK] Sent key to window 0x{hwnd:08X}")
-
-            # Restore original foreground window + its placement
-            if original_hwnd and (win32gui.IsWindow(original_hwnd) if win32gui else True):
-                window_spec = f"[HANDLE:0x{original_hwnd:08X}]"
-                _restore_placement(original_hwnd, original_placement)
-                try:
-                    autoit.win_activate(window_spec)
-                except Exception:
-                    try:
-                        user32.SetForegroundWindow(original_hwnd)
-                    except Exception:
-                        pass
+            if successful_actions == len(window_states):
+                next_wait_seconds = max(60, _afk_interval * 60)
+            else:
+                next_wait_seconds = _AFK_RETRY_SECONDS
+                if not _afk_stop_event.is_set():
+                    print(
+                        f"[Anti-AFK] Completed {successful_actions}/"
+                        f"{len(window_states)} Roblox windows, retrying failed windows"
+                    )
 
         except Exception as exc:
             print(f"[Anti-AFK] Error: {exc}")
-            time.sleep(5)
+            next_wait_seconds = _AFK_RETRY_SECONDS
+            _afk_stop_event.wait(5)
 
 
 # Multi Roblox
