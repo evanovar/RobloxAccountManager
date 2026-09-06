@@ -552,6 +552,146 @@ class _HotkeyCaptureButton(QPushButton):
             self._cancel_recording()
         super().focusOutEvent(event)
 
+
+class _DetachablePageHost(QWidget):
+    def __init__(self, page_index: int, page_name: str, parent=None):
+        super().__init__(parent)
+        self.page_index = page_index
+        self.page_name = page_name
+        self._page: QWidget | None = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._content = QWidget()
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(0)
+        root.addWidget(self._content, 1)
+
+        self._placeholder = QFrame()
+        self._placeholder.setStyleSheet(f"background: {BG}; border: 0;")
+        placeholder_layout = QVBoxLayout(self._placeholder)
+        placeholder_layout.setContentsMargins(24, 24, 24, 24)
+        placeholder_layout.setSpacing(10)
+        placeholder_layout.addStretch(1)
+
+        message = QLabel(f"{page_name} is open in another window.")
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        message.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        placeholder_layout.addWidget(message)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.show_button = QPushButton("Show Window")
+        self.show_button.setFixedHeight(26)
+        self.show_button.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 2px 10px; border-radius: 0; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+        )
+        button_row.addWidget(self.show_button)
+        self.reattach_button = QPushButton("Reattach")
+        self.reattach_button.setFixedHeight(26)
+        self.reattach_button.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 2px 10px; border-radius: 0; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+        )
+        button_row.addWidget(self.reattach_button)
+        button_row.addStretch(1)
+        placeholder_layout.addLayout(button_row)
+        placeholder_layout.addStretch(1)
+        self._content_layout.addWidget(self._placeholder)
+        self._placeholder.hide()
+
+    def set_page(self, page: QWidget) -> None:
+        if self._page is page:
+            return
+        if self._page is not None:
+            self._content_layout.removeWidget(self._page)
+        self._page = page
+        page.setParent(self._content)
+        self._content_layout.addWidget(page)
+        self._placeholder.hide()
+
+    def take_page(self) -> QWidget | None:
+        page = self._page
+        if page is None:
+            return None
+        self._content_layout.removeWidget(page)
+        page.setParent(None)
+        self._page = None
+        self._content_layout.addWidget(self._placeholder)
+        self._placeholder.show()
+        return page
+
+    def restore_page(self, page: QWidget) -> None:
+        self._content_layout.removeWidget(self._placeholder)
+        self.set_page(page)
+
+
+class _DetachedPageWindow(QMainWindow):
+    reattach_requested = Signal(int)
+
+    def __init__(
+        self,
+        page_index: int,
+        page_name: str,
+        page: QWidget,
+        icon: QIcon,
+        stylesheet: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.page_index = page_index
+        self.page_name = page_name
+        self._page = page
+        self._allow_close = False
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        self.setWindowTitle(f"{page_name} - Evanovar RAM")
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+        self.setStyleSheet(stylesheet)
+        self.resize(640, 520)
+        self.setMinimumSize(480, 360)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._page_container = QWidget()
+        self._page_layout = QVBoxLayout(self._page_container)
+        self._page_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_layout.setSpacing(0)
+        page.setParent(self._page_container)
+        self._page_layout.addWidget(page)
+        root.addWidget(self._page_container, 1)
+
+    def release_page(self) -> QWidget | None:
+        page = self._page
+        if page is None:
+            return None
+        self._page_layout.removeWidget(page)
+        page.setParent(None)
+        self._page = None
+        return page
+
+    def allow_close(self) -> None:
+        self._allow_close = True
+
+    def closeEvent(self, event) -> None:
+        if self._allow_close:
+            super().closeEvent(event)
+            return
+        event.ignore()
+        self.hide()
+        self.reattach_requested.emit(self.page_index)
+
 class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
@@ -577,7 +717,19 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._tray_menu: QMenu | None = None
         self._tray_exit_requested = False
         self._tray_restore_maximized = False
+        self._tray_detached_states: dict[int, str] = {}
         self._shutdown_cleanup_done = False
+        self._page_hosts: dict[int, _DetachablePageHost] = {}
+        self._detached_windows: dict[int, _DetachedPageWindow] = {}
+        self._page_names = {
+            0: "Accounts",
+            1: "Auto-Rejoin",
+            2: "Anti AFK",
+            3: "Multi Roblox",
+            4: "Settings",
+            5: "Console",
+            6: "Donations",
+        }
         self._window_grid_hotkey_registered = False
         self._window_grid_hotkey_hwnd = 0
         self._diagnostics_heartbeat = QTimer(self)
@@ -928,6 +1080,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             6: self._build_donations_panel,
         }
 
+        for index, page_name in self._page_names.items():
+            host = _DetachablePageHost(index, page_name)
+            host.show_button.clicked.connect(
+                lambda _=False, idx=index: self._show_detached_page(idx)
+            )
+            host.reattach_button.clicked.connect(
+                lambda _=False, idx=index: self._reattach_page(idx)
+            )
+            self._page_hosts[index] = host
+            self._page_stack.addWidget(host)
+
         _accounts_page = QWidget()
         _acc_lay = QHBoxLayout(_accounts_page)
         _acc_lay.setContentsMargins(0, 0, 0, 0)
@@ -935,13 +1098,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         _acc_lay.addWidget(self._build_center_panel(), 1)
         _acc_lay.addWidget(self._build_right_panel())
 
-        self._page_stack.addWidget(_accounts_page) # idx 0
-        self._page_stack.addWidget(self._build_auto_rejoin_panel()) # idx 1
-        self._page_stack.addWidget(self._build_anti_afk_panel()) # idx 2
-        self._page_stack.addWidget(self._build_multi_roblox_panel()) # idx 3
-        self._page_stack.addWidget(QWidget()) # idx 4, built on first use
-        self._page_stack.addWidget(QWidget()) # idx 5, built on first use
-        self._page_stack.addWidget(QWidget()) # idx 6, built on first use
+        self._page_hosts[0].set_page(_accounts_page)
+        self._page_hosts[1].set_page(self._build_auto_rejoin_panel())
+        self._page_hosts[2].set_page(self._build_anti_afk_panel())
+        self._page_hosts[3].set_page(self._build_multi_roblox_panel())
         self._page_stack.addWidget(self._build_setup_panel()) # idx 7
 
         body = QHBoxLayout()
@@ -952,14 +1112,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         outer.addLayout(body, 1)
 
     def _show_page(self, index: int) -> None:
+        self._ensure_page_built(index)
+        self._page_stack.setCurrentIndex(index)
+        if index in self._detached_windows:
+            self._show_detached_page(index)
+
+    def _ensure_page_built(self, index: int) -> None:
         if index not in self._built_pages:
             builder = self._lazy_page_builders.get(index)
             if builder is not None:
-                placeholder = self._page_stack.widget(index)
                 page = builder()
-                self._page_stack.removeWidget(placeholder)
-                placeholder.deleteLater()
-                self._page_stack.insertWidget(index, page)
+                self._page_hosts[index].set_page(page)
                 self._built_pages.add(index)
                 if index == 4:
                     if hasattr(self, "_headless_list"):
@@ -967,7 +1130,114 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     self._start_chromium_status_check()
                 elif index == 5:
                     self._drain_console_queue()
-        self._page_stack.setCurrentIndex(index)
+
+    def _show_page_context_menu(self, index: int, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        if index in self._detached_windows:
+            show_action = menu.addAction("Show Window")
+            reattach_action = menu.addAction("Reattach to Main Window")
+            selected = menu.exec(global_pos)
+            if selected == show_action:
+                self._show_detached_page(index)
+            elif selected == reattach_action:
+                self._reattach_page(index)
+            return
+
+        open_action = menu.addAction("Open in New Window")
+        if menu.exec(global_pos) == open_action:
+            self._detach_page(index)
+
+    def _detach_page(self, index: int) -> None:
+        if index not in self._page_hosts:
+            return
+        if index in self._detached_windows:
+            self._show_detached_page(index)
+            return
+
+        self._ensure_page_built(index)
+        host = self._page_hosts[index]
+        page = host.take_page()
+        if page is None:
+            return
+
+        detached = _DetachedPageWindow(
+            index,
+            self._page_names[index],
+            page,
+            self.windowIcon(),
+            self.styleSheet(),
+        )
+        detached.reattach_requested.connect(self._reattach_page)
+        if self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint:
+            detached.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        detached.resize(max(640, self.width()), max(520, self.height()))
+        self._detached_windows[index] = detached
+        detached.show()
+        detached.raise_()
+        detached.activateWindow()
+        print(f"[INFO] Opened {self._page_names[index]} in a separate window")
+
+    def _show_detached_page(self, index: int) -> None:
+        detached = self._detached_windows.get(index)
+        if detached is None:
+            return
+        if detached.isMinimized():
+            detached.showNormal()
+        else:
+            detached.show()
+        detached.raise_()
+        detached.activateWindow()
+
+    def _reattach_page(self, index: int) -> None:
+        detached = self._detached_windows.pop(index, None)
+        host = self._page_hosts.get(index)
+        if detached is None or host is None:
+            return
+
+        page = detached.release_page()
+        if page is not None:
+            host.restore_page(page)
+        detached.allow_close()
+        detached.hide()
+        QTimer.singleShot(0, detached.close)
+        self._tray_detached_states.pop(index, None)
+        print(f"[INFO] Reattached {self._page_names[index]} to the main window")
+
+    def _hide_detached_pages_for_tray(self) -> None:
+        self._tray_detached_states = {}
+        for index, detached in self._detached_windows.items():
+            if not detached.isVisible():
+                continue
+            if detached.isMaximized():
+                state = "maximized"
+            elif detached.isMinimized():
+                state = "minimized"
+            else:
+                state = "normal"
+            self._tray_detached_states[index] = state
+            detached.hide()
+
+    def _restore_detached_pages_from_tray(self) -> None:
+        states = dict(self._tray_detached_states)
+        self._tray_detached_states.clear()
+        for index, state in states.items():
+            detached = self._detached_windows.get(index)
+            if detached is None:
+                continue
+            if state == "maximized":
+                detached.showMaximized()
+            elif state == "minimized":
+                detached.showMinimized()
+            else:
+                detached.showNormal()
+
+    def _close_detached_pages(self) -> None:
+        detached_windows = list(self._detached_windows.values())
+        self._detached_windows.clear()
+        self._tray_detached_states.clear()
+        for detached in detached_windows:
+            detached.allow_close()
+            detached.close()
 
     # Title bar
     def _build_title_bar(self) -> QFrame:
@@ -1066,6 +1336,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 page_idx = _NAV_PAGES[label]
                 btn.clicked.connect(
                     lambda _=False, idx=page_idx: self._show_page(idx)
+                )
+                btn.setToolTip("Right-click for window options")
+                btn.setContextMenuPolicy(
+                    Qt.ContextMenuPolicy.CustomContextMenu
+                )
+                btn.customContextMenuRequested.connect(
+                    lambda pos, button=btn, idx=page_idx:
+                    self._show_page_context_menu(
+                        idx,
+                        button.mapToGlobal(pos),
+                    )
                 )
             lay.addWidget(btn)
             self._normal_nav_btns.append(btn)
@@ -2411,7 +2692,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # Roblox (Page 1)
         sa, f = _scrollable()
-        sa.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sa.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content_stack.addWidget(sa)
 
@@ -3279,6 +3560,19 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self.hide()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
         self.show()
+        for detached in self._detached_windows.values():
+            was_visible = detached.isVisible()
+            was_maximized = detached.isMaximized()
+            was_minimized = detached.isMinimized()
+            detached.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
+            if not was_visible:
+                continue
+            if was_maximized:
+                detached.showMaximized()
+            elif was_minimized:
+                detached.showMinimized()
+            else:
+                detached.showNormal()
         if restore_window_grid:
             QTimer.singleShot(
                 0,
@@ -5362,6 +5656,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self.showMaximized()
             else:
                 self.showNormal()
+            self._restore_detached_pages_from_tray()
             self.raise_()
             self.activateWindow()
         except Exception as exc:
@@ -5389,6 +5684,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._shutdown_cleanup_done:
             return
         self._shutdown_cleanup_done = True
+
+        try:
+            self._close_detached_pages()
+        except Exception:
+            pass
 
         try:
             self._unregister_window_grid_hotkey()
@@ -5470,6 +5770,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if hide_to_tray and not self._tray_exit_requested:
             self._tray_restore_maximized = self.isMaximized()
             event.ignore()
+            self._hide_detached_pages_for_tray()
             self.hide()
             return
 
