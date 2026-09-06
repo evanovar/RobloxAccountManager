@@ -10,6 +10,7 @@ import ctypes
 from ctypes import wintypes
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+import weakref
 
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 from utils.version import APP_VERSION
@@ -29,22 +31,25 @@ import psutil
 import requests
 
 from PySide6.QtCore import (
-    QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal,
+    QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import (
     QAction, QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
-    QKeySequence, QPalette, QPixmap, QPolygon, QTextCharFormat,
+    QImage, QImageReader, QKeySequence, QMovie, QPalette, QPixmap, QPolygon, QRegion, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
-    QComboBox, QDialog, QFileDialog, QFrame,
+    QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
     QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
     QToolButton, QVBoxLayout, QWidget,
+    QStyle, QStyleOptionButton,
 )
+from PySide6.QtMultimedia import QMediaPlayer, QVideoSink
+from shiboken6 import isValid
 
 from classes import (
     AccountDataError,
@@ -76,6 +81,7 @@ import features.websocket_server as ws_mod
 import features.window_grid as window_grid_mod
 import features.window_renamer as window_renamer_mod
 import features.windows_startup as windows_startup_mod
+import features.themes as themes_mod
 
 
 class _DragDropFilter(QObject):
@@ -553,6 +559,330 @@ class _HotkeyCaptureButton(QPushButton):
         super().focusOutEvent(event)
 
 
+class _BackgroundCanvas(QWidget):
+    def __init__(self, controller, window):
+        super().__init__(window)
+        self.controller = controller
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setGeometry(window.rect())
+        self.lower()
+
+    def paintEvent(self, event):
+        frame = self.controller.display_frame
+        if frame.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        source = QRectF(frame.rect())
+        ratio = max(self.width() / source.width(), self.height() / source.height())
+        source.setWidth(self.width() / ratio)
+        source.setHeight(self.height() / ratio)
+        source.moveCenter(QRectF(frame.rect()).center())
+        painter.drawImage(QRectF(self.rect()), self.controller.sharp_frame, source)
+        region = QRegion()
+        for widget in self.parentWidget().findChildren(QWidget):
+            if (widget.window() is not self.parentWidget() or not widget.isVisible()
+                    or isinstance(widget, (QLabel, _BackgroundCanvas))):
+                continue
+            if widget.objectName() == 'navTab':
+                continue
+            if not isinstance(widget, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+                                       QPushButton, QToolButton, QAbstractItemView, QTextEdit,
+                                       QCheckBox, QRadioButton)):
+                if widget.objectName() not in ('navPanel', 'rightPanel', 'titleBar', 'settingsNavSurface'):
+                    continue
+            rect = widget.rect()
+            if isinstance(widget, (QCheckBox, QRadioButton)):
+                option = QStyleOptionButton()
+                option.initFrom(widget)
+                element = (QStyle.SubElement.SE_RadioButtonIndicator if isinstance(widget, QRadioButton)
+                           else QStyle.SubElement.SE_CheckBoxIndicator)
+                rect = widget.style().subElementRect(element, option, widget)
+            rect.translate(widget.mapTo(self.parentWidget(), QPoint()))
+            shape = QRegion(rect, QRegion.RegionType.Ellipse) if isinstance(widget, QRadioButton) else QRegion(rect)
+            ancestor = widget.parentWidget()
+            while ancestor is not None and ancestor is not self.parentWidget():
+                rect = rect.intersected(ancestor.rect().translated(
+                    ancestor.mapTo(self.parentWidget(), QPoint())))
+                ancestor = ancestor.parentWidget()
+            region |= shape.intersected(QRegion(rect))
+        painter.setClipRegion(region)
+        painter.drawImage(QRectF(self.rect()), frame, source)
+        tint = QColor(self.controller.colors['tint'])
+        tint.setAlpha(round(self.controller.amount * 1.6))
+        painter.fillRect(self.rect(), tint)
+
+
+class _BackgroundController(QObject):
+    failed = Signal(str)
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self.active = False
+        self.amount = 50
+        self.colors = themes_mod.load_background()
+        self.frame = QImage()
+        self.sharp_frame = QImage()
+        self.display_frame = QImage()
+        self.styles = weakref.WeakKeyDictionary()
+        self.canvases = weakref.WeakKeyDictionary()
+        self.busy = False
+        self.movie = QMovie(self)
+        self.movie.frameChanged.connect(self._movie_frame)
+        self.movie.finished.connect(self._restart_movie)
+        self.movie.error.connect(lambda error: self._fail(self.movie.lastErrorString()))
+        self.player = QMediaPlayer(self)
+        self.sink = QVideoSink(self)
+        self.player.setVideoSink(self.sink)
+        self.player.setLoops(QMediaPlayer.Loops.Infinite)
+        self.player.errorOccurred.connect(lambda error, message: self._fail(message))
+        self.sink.videoFrameChanged.connect(self._video_frame)
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self._refresh)
+        self.frame_timer = QTimer(self)
+        self.frame_timer.setInterval(50)
+        self.frame_timer.setSingleShot(True)
+        self.frame_timer.timeout.connect(self._render_frame)
+        self.scene = QGraphicsScene(self)
+        self.blur_item = QGraphicsPixmapItem()
+        self.blur_effect = QGraphicsBlurEffect()
+        self.blur_item.setGraphicsEffect(self.blur_effect)
+        self.scene.addItem(self.blur_item)
+        QApplication.instance().installEventFilter(self)
+
+    def configure(self, enabled, path, amount):
+        self.stop()
+        self.colors = themes_mod.load_background()
+        self.amount = amount
+        if not enabled:
+            return
+        self.active = True
+        suffix = os.path.splitext(path)[1].lower()
+        if suffix in themes_mod.VIDEO_EXTENSIONS:
+            self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+            self.player.play()
+        elif suffix == '.gif':
+            self.movie.setFileName(path)
+            size = QImageReader(path).size()
+            if size.isValid():
+                self.movie.setScaledSize(size.scaled(1280, 720, Qt.AspectRatioMode.KeepAspectRatio))
+            if not self.movie.isValid():
+                self._fail('The GIF could not be decoded.')
+                return
+            self.movie.start()
+        else:
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            size = reader.size()
+            if size.width() > 1920 or size.height() > 1080:
+                reader.setScaledSize(size.scaled(1920, 1080, Qt.AspectRatioMode.KeepAspectRatio))
+            self.frame = reader.read()
+            if self.frame.isNull():
+                self._fail(reader.errorString())
+                return
+            self._render_frame()
+        self.refresh_timer.start(0)
+
+    def set_amount(self, amount):
+        self.amount = amount
+        if self.active:
+            self._render_frame()
+            self.refresh_timer.start(0)
+
+    def _fail(self, message):
+        if not self.active:
+            return
+        self.stop()
+        self.failed.emit(message)
+
+    def _movie_frame(self, number):
+        if self.active:
+            self.frame = self.movie.currentImage()
+            if not self.frame_timer.isActive():
+                self.frame_timer.start()
+
+    def _restart_movie(self):
+        if self.active:
+            self.movie.start()
+
+    def _video_frame(self, frame):
+        if self.active and frame.isValid() and not self.frame_timer.isActive():
+            self.frame = frame.toImage()
+            self.frame_timer.start()
+
+    def _render_frame(self):
+        if not self.active or self.frame.isNull():
+            return
+        image = self.frame.scaled(1280, 720, Qt.AspectRatioMode.KeepAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
+        self.sharp_frame = image
+        if self.amount:
+            self.blur_item.setPixmap(QPixmap.fromImage(image))
+            self.blur_effect.setBlurRadius(self.amount * 0.3)
+            self.scene.setSceneRect(QRectF(image.rect()))
+            result = QImage(image.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            result.fill(Qt.GlobalColor.black)
+            painter = QPainter(result)
+            self.scene.render(painter, QRectF(result.rect()), QRectF(image.rect()))
+            painter.end()
+            self.display_frame = result
+        else:
+            self.display_frame = image
+        for window, canvas in list(self.canvases.items()):
+            if isValid(canvas):
+                canvas.update()
+            else:
+                self.canvases.pop(window, None)
+
+    def _themed_style(self, style):
+        style = re.sub(
+            r'(background(?:-color)?\s*:\s*)([^;{}]+)(;|(?=\}))',
+            r'\1transparent\3', style,
+            flags=re.IGNORECASE,
+        )
+        for old, key in ((TEXT, 'text'), (MUTED, 'muted'), (LINE, 'outline')):
+            style = re.sub(re.escape(old), self.colors[key], style, flags=re.IGNORECASE)
+        style = re.sub(r'(border(?:-(?:top|bottom|left|right|color))?\s*:[^;{}]*?)#[0-9a-fA-F]{6}',
+                       lambda m: m.group(1) + self.colors['outline'], style)
+        return style
+
+    def _refresh(self):
+        if not self.active or self.busy:
+            return
+        self.busy = True
+        try:
+            widgets = QApplication.instance().allWidgets()
+            for widget in widgets:
+                if isinstance(widget, _BackgroundCanvas):
+                    continue
+                window = widget.window()
+                popup = isinstance(window, QMenu) or window.windowType() == Qt.WindowType.Popup
+                if not isinstance(window, (QMainWindow, QDialog)) and not popup:
+                    continue
+                if not popup and window not in self.canvases:
+                    canvas = _BackgroundCanvas(self, window)
+                    self.canvases[window] = canvas
+                    canvas.show()
+                    canvas.lower()
+                current = widget.styleSheet()
+                saved = self.styles.get(widget)
+                if saved is None or current != saved[1]:
+                    original = current
+                else:
+                    original = saved[0]
+                transformed = self._themed_style(original)
+                if widget is window:
+                    if transformed.strip() and '{' not in transformed:
+                        transformed = f'{widget.metaObject().className()} {{ {transformed} }}'
+                    base = (
+                        f"QWidget {{ background: transparent; color: {self.colors['text']}; }}"
+                        'QLineEdit, QAbstractSpinBox, QComboBox, QPushButton, QToolButton, '
+                        'QAbstractItemView, QTextEdit, QHeaderView::section {'
+                        f" background: transparent; border: 1px solid {self.colors['outline']}; border-radius: 0; }}"
+                    )
+                    transformed = base + transformed
+                    # Top-level backgrounds must not cover the media layer.
+                    transformed += (
+                        'QMainWindow, QDialog { background: transparent; }'
+                        'QCheckBox::indicator:checked, QRadioButton::indicator:checked {'
+                        ' background: #3A7BD5; }'
+                    )
+                    if isinstance(window, QMenu):
+                        # QMenu paints action text itself. A child canvas covers that text.
+                        transformed += (
+                            f"QMenu {{ background: {self.colors['tint']}; color: {self.colors['text']};"
+                            f" border: 1px solid {self.colors['outline']}; }}"
+                            f"QMenu::item {{ background: transparent; color: {self.colors['text']}; }}"
+                            f"QMenu::item:selected {{ background: {self.colors['outline']}; }}"
+                            f"QMenu::item:disabled {{ color: {self.colors['muted']}; }}"
+                        )
+                # Local widget rules must win over styles inherited from parent frames.
+                if not isinstance(widget, QMenu):
+                    if transformed.strip() and '{' not in transformed:
+                        transformed = f'{widget.metaObject().className()} {{ {transformed} }}'
+                    transformed += f'{widget.metaObject().className()} {{ background: transparent; }}'
+                if isinstance(widget, QLabel):
+                    transformed += 'QLabel { border: none; background: transparent; }'
+                if isinstance(widget, QLineEdit) and isinstance(widget.parentWidget(),
+                                                               (QComboBox, QSpinBox, QDoubleSpinBox)):
+                    # Composite controls own the border, padding, and height of their editor.
+                    transformed += ('QLineEdit { border: 0; padding: 0; margin: 0;'
+                                    ' min-height: 0; min-width: 0; background: transparent; }')
+                if widget.objectName() == 'navTab':
+                    transformed += (
+                        'QPushButton#navTab { background: transparent; border: none;'
+                        ' border-left: 2px solid transparent; }'
+                        f"QPushButton#navTab:checked {{ border-left: 2px solid {self.colors['text']};"
+                        f" color: {self.colors['text']}; font-weight: 700; }}"
+                        f"QPushButton#navTab:hover {{ color: {self.colors['text']}; }}"
+                    )
+                if popup:
+                    transformed += (
+                        f"QWidget {{ background: {self.colors['tint']}; color: {self.colors['text']}; }}"
+                        f"QAbstractItemView::item:selected, QMenu::item:selected {{ background: {self.colors['outline']}; }}"
+                    )
+                self.styles[widget] = (original, transformed)
+                if current != transformed:
+                    widget.setStyleSheet(transformed)
+                if widget is window and window in self.canvases:
+                    self.canvases[window].lower()
+            visible = any(isValid(window) and window.isVisible() and not window.isMinimized()
+                          for window in self.canvases)
+            if self.movie.fileName():
+                self.movie.setPaused(not visible)
+            if not self.player.source().isEmpty():
+                if visible:
+                    self.player.play()
+                else:
+                    self.player.pause()
+        finally:
+            self.busy = False
+
+    def eventFilter(self, obj, event):
+        if not self.active or self.busy or isinstance(obj, _BackgroundCanvas):
+            return False
+        if isinstance(obj, QWidget):
+            kind = event.type()
+            if kind == QEvent.Type.Resize and obj in self.canvases:
+                self.canvases[obj].setGeometry(obj.rect())
+            elif kind in (QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.StyleChange,
+                          QEvent.Type.Polish, QEvent.Type.WindowStateChange,
+                          QEvent.Type.Move, QEvent.Type.Wheel):
+                self.refresh_timer.start(0)
+                for canvas in self.canvases.values():
+                    if isValid(canvas):
+                        canvas.update()
+        return False
+
+    def stop(self):
+        self.active = False
+        self.refresh_timer.stop()
+        self.frame_timer.stop()
+        self.movie.stop()
+        self.movie.setFileName('')
+        self.player.stop()
+        self.player.setSource(QUrl())
+        for widget, (original, transformed) in list(self.styles.items()):
+            try:
+                if widget.styleSheet() == transformed:
+                    widget.setStyleSheet(original)
+            except RuntimeError:
+                pass
+        self.styles.clear()
+        for canvas in list(self.canvases.values()):
+            try:
+                canvas.hide()
+                canvas.deleteLater()
+            except RuntimeError:
+                pass
+        self.canvases.clear()
+        self.frame = QImage()
+        self.display_frame = QImage()
+
+
 class _DetachablePageHost(QWidget):
     def __init__(self, page_index: int, page_name: str, parent=None):
         super().__init__(parent)
@@ -881,7 +1211,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if S.get("enable_multi_select", False):
             self._account_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
-        if S.get("always_on_top", False):
+        if S.get("enable_topmost", False):
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             self.show()
 
@@ -919,7 +1249,95 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         QTimer.singleShot(500, self._start_update_check)
         if S.get("browser_type", "chrome") == "chromium":
             QTimer.singleShot(1500, self._start_chromium_status_check)
+        self._background = _BackgroundController(self)
+        self._background.failed.connect(self._on_background_failed)
+        QTimer.singleShot(0, self._restore_background)
         print("[INFO] UI ready")
+
+    def _restore_background(self):
+        config = themes_mod.load_background()
+        if config['enabled']:
+            self._apply_background(config['enabled'], config['path'], config['blur'])
+
+    def _on_background_failed(self, detail):
+        if hasattr(self, '_theme_enabled'):
+            self._theme_enabled.blockSignals(True)
+            self._theme_enabled.setChecked(False)
+            self._theme_enabled.blockSignals(False)
+        config = themes_mod.load_background()
+        themes_mod.save_background(False, config['path'], config['blur'])
+        self._show_operation_error(OperationResult.failure(
+            'BACKGROUND_DECODE_FAILED', 'Background Could Not Open',
+            'The image or video could not be played. Choose another file.',
+            detail=detail,
+        ))
+
+    def _apply_background(self, enabled, path, blur):
+        if enabled:
+            result = themes_mod.validate_background(path)
+            if not result:
+                if hasattr(self, '_theme_enabled'):
+                    self._theme_enabled.blockSignals(True)
+                    self._theme_enabled.setChecked(False)
+                    self._theme_enabled.blockSignals(False)
+                self._background.stop()
+                themes_mod.save_background(False, path, blur)
+                self._show_operation_error(result)
+                return
+        themes_mod.save_background(enabled, path, blur)
+        self._background.configure(enabled, path, blur)
+
+    def _on_background_changed(self):
+        self._apply_background(
+            self._theme_enabled.isChecked(), self._theme_path.text().strip(),
+            self._theme_blur.value(),
+        )
+
+    def _browse_background(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Choose Background', self._theme_path.text(),
+            'Backgrounds (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.mp4 *.webm *.mkv *.mov *.avi)',
+        )
+        if path:
+            self._theme_path.setText(path)
+            self._on_background_changed()
+
+    def _on_background_blur(self, value):
+        self._theme_blur_label.setText(f'{value}%')
+        self._background.set_amount(value)
+        self._theme_save_timer.start(250)
+
+    def _save_background_blur(self):
+        config = themes_mod.load_background()
+        themes_mod.save_background(config['enabled'], config['path'], self._theme_blur.value())
+
+    def _choose_theme_color(self, key):
+        config = themes_mod.load_background()
+        color = QColorDialog.getColor(QColor(config[key]), self, 'Choose Color')
+        if not color.isValid():
+            return
+        themes_mod.save_color(key, color.name())
+        self._theme_color_buttons[key].setText(color.name().upper())
+        self._background.colors = themes_mod.load_background()
+        if self._background.active:
+            self._background._refresh()
+            self._background._render_frame()
+
+    def _reset_theme(self):
+        self._theme_save_timer.stop()
+        config = themes_mod.reset_background()
+        self._background.stop()
+        self._background.colors = config
+        for widget in (self._theme_enabled, self._theme_path, self._theme_blur):
+            widget.blockSignals(True)
+        self._theme_enabled.setChecked(False)
+        self._theme_path.clear()
+        self._theme_blur.setValue(config['blur'])
+        self._theme_blur_label.setText(f"{config['blur']}%")
+        for key, button in self._theme_color_buttons.items():
+            button.setText(config[key].upper())
+        for widget in (self._theme_enabled, self._theme_path, self._theme_blur):
+            widget.blockSignals(False)
 
     def _apply_stylesheet(self):
         self.setStyleSheet(f"""
@@ -1165,7 +1583,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._page_names[index],
             page,
             self.windowIcon(),
-            self.styleSheet(),
+            self._background.styles.get(self, (self.styleSheet(),))[0]
+            if hasattr(self, '_background') else self.styleSheet(),
         )
         detached.reattach_requested.connect(self._reattach_page)
         if self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint:
@@ -2472,6 +2891,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # Left category list
         cat_panel = QFrame()
+        cat_panel.setObjectName('settingsNavSurface')
         cat_panel.setFixedWidth(120)
         cat_panel.setStyleSheet(
             f"QFrame {{ background: {BG}; border-right: 1px solid {LINE}; }}"
@@ -2491,7 +2911,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         content_stack = QStackedWidget()
         content_stack.setStyleSheet("background: transparent;")
 
-        CATEGORIES = ["General", "Roblox", "Discord", "Misc", "Developer"]
+        CATEGORIES = ["General", "Roblox", "Discord", "Themes", "Misc", "Developer"]
         cat_buttons: list[QPushButton] = []
 
         def _switch_cat(idx: int):
@@ -3390,7 +3810,57 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addStretch(1)
 
-        # Misc (Page 3)
+        # Themes (Page 3)
+        sa, f = _scrollable()
+        content_stack.addWidget(sa)
+        config = themes_mod.load_background()
+        self._theme_enabled = QCheckBox('Enable Custom Background')
+        self._theme_enabled.setChecked(config['enabled'])
+        self._theme_enabled.toggled.connect(self._on_background_changed)
+        f.addWidget(self._theme_enabled)
+
+        background_row = QHBoxLayout()
+        self._theme_path = QLineEdit(config['path'])
+        self._theme_path.setPlaceholderText('Image, GIF, or video path')
+        self._theme_path.editingFinished.connect(self._on_background_changed)
+        background_row.addWidget(self._theme_path, 1)
+        browse = QPushButton('Browse')
+        browse.clicked.connect(self._browse_background)
+        background_row.addWidget(browse)
+        f.addLayout(background_row)
+
+        f.addWidget(QLabel('Opacity Blur'))
+        blur_row = QHBoxLayout()
+        self._theme_blur = QSlider(Qt.Orientation.Horizontal)
+        self._theme_blur.setRange(0, 100)
+        self._theme_blur.setValue(config['blur'])
+        self._theme_blur.setAccessibleName('Opacity Blur')
+        self._theme_blur.valueChanged.connect(self._on_background_blur)
+        blur_row.addWidget(self._theme_blur, 1)
+        self._theme_blur_label = QLabel(f"{config['blur']}%")
+        self._theme_blur_label.setFixedWidth(38)
+        blur_row.addWidget(self._theme_blur_label)
+        f.addLayout(blur_row)
+        self._theme_save_timer = QTimer(self)
+        self._theme_save_timer.setSingleShot(True)
+        self._theme_save_timer.timeout.connect(self._save_background_blur)
+        self._theme_color_buttons = {}
+        for key, title in (('text', 'TEXT'), ('muted', 'MUTED'),
+                           ('outline', 'Outline Color'), ('tint', 'Surface Tint')):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(title))
+            row.addStretch(1)
+            button = QPushButton(config[key].upper())
+            button.clicked.connect(lambda checked=False, name=key: self._choose_theme_color(name))
+            self._theme_color_buttons[key] = button
+            row.addWidget(button)
+            f.addLayout(row)
+        reset_theme_button = QPushButton('Reset Theme')
+        reset_theme_button.clicked.connect(self._reset_theme)
+        f.addWidget(reset_theme_button)
+        f.addStretch(1)
+
+        # Misc (Page 4)
         sa, f = _scrollable()
         content_stack.addWidget(sa)
 
@@ -3462,7 +3932,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addStretch(1)
 
-        # Developer (Page 4)
+        # Developer (Page 5)
         sa, f = _scrollable()
         content_stack.addWidget(sa)
 
@@ -5686,6 +6156,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             app.quit()
 
     def _perform_shutdown_cleanup(self) -> None:
+        if hasattr(self, '_background'):
+            self._background.stop()
+            QApplication.instance().removeEventFilter(self._background)
+        if hasattr(self, '_theme_save_timer') and self._theme_save_timer.isActive():
+            self._theme_save_timer.stop()
+            self._save_background_blur()
         if self._shutdown_cleanup_done:
             return
         self._shutdown_cleanup_done = True
