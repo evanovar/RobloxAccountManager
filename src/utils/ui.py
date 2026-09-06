@@ -391,17 +391,8 @@ class _FloatingTooltip(QWidget):
 
         self._label = QLabel("", self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setStyleSheet(f"""
-            QLabel {{
-                color: {TEXT};
-                background-color: {PANEL};
-                border: 1px solid {LINE};
-                border-radius: 4px;
-                padding: 5px 12px;
-                font-size: 11px;
-                font-weight: bold;
-            }}
-        """)
+        self._size_percent = 100
+        self.set_size_percent(self._size_percent)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -413,14 +404,29 @@ class _FloatingTooltip(QWidget):
 
         self.hide()
 
-    def show_message(self, message: str, x: int, y: int):
+    def set_size_percent(self, size_percent: int):
+        self._size_percent = max(50, min(200, int(size_percent)))
+        scale = self._size_percent / 100
+        font_size = max(8, round(11 * scale))
+        vertical_padding = max(3, round(5 * scale))
+        horizontal_padding = max(6, round(12 * scale))
+        self._label.setStyleSheet(
+            f"QLabel {{ color: {TEXT}; background-color: {PANEL};"
+            f" border: 1px solid {LINE}; border-radius: 4px;"
+            f" padding: {vertical_padding}px {horizontal_padding}px;"
+            f" font-size: {font_size}px; font-weight: bold; }}"
+        )
+        self.adjustSize()
+
+    def show_message(self, message: str, _x: int, _y: int):
         if not message:
             self._update_timer.stop()
             super().hide()
             return
         self._label.setText(message)
         self.adjustSize()
-        self._place_at(x, y)
+        cursor = QCursor.pos()
+        self._place_at(cursor.x(), cursor.y())
         super().show()
         self._update_timer.start()
 
@@ -429,10 +435,10 @@ class _FloatingTooltip(QWidget):
         super().hide()
 
     def _place_at(self, x: int, y: int):
-        sx, sy = x + 20, y + 20
-        screen = QApplication.primaryScreen()
+        sx, sy = x + 5, y + 5
+        screen = QApplication.screenAt(QPoint(x, y)) or QApplication.primaryScreen()
         if screen:
-            geo = screen.geometry()
+            geo = screen.availableGeometry()
             sx = min(sx, geo.right()  - self.width()  - 8)
             sy = min(sy, geo.bottom() - self.height() - 8)
             sx = max(sx, geo.left() + 8)
@@ -443,13 +449,8 @@ class _FloatingTooltip(QWidget):
         if not self.isVisible():
             self._update_timer.stop()
             return
-        try:
-
-            pt = wintypes.POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-            self._place_at(pt.x, pt.y)
-        except Exception:
-            pass
+        cursor = QCursor.pos()
+        self._place_at(cursor.x(), cursor.y())
 
 class _HotkeyCaptureButton(QPushButton):
     recording_started = Signal()
@@ -1576,6 +1577,48 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_tooltip_chk.stateChanged.connect(self._on_afk_setting_changed)
         form.addWidget(self._afk_tooltip_chk)
 
+        tooltip_preview_row = QHBoxLayout()
+        tooltip_preview_row.setContentsMargins(0, 0, 0, 0)
+        self._afk_tooltip_preview_btn = QPushButton("Show Tooltip")
+        self._afk_tooltip_preview_btn.setFixedHeight(26)
+        self._afk_tooltip_preview_btn.setStyleSheet(
+            f"QPushButton {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 12px; border-radius: 0; }}"
+            f"QPushButton:hover {{ background: {SELECT}; }}"
+        )
+        self._afk_tooltip_preview_btn.clicked.connect(
+            self._on_afk_tooltip_preview
+        )
+        tooltip_preview_row.addWidget(self._afk_tooltip_preview_btn)
+        tooltip_preview_row.addStretch(1)
+        form.addLayout(tooltip_preview_row)
+
+        tooltip_size_row = QHBoxLayout()
+        tooltip_size_row.setSpacing(8)
+        tooltip_size_label = QLabel("Tooltip Size (%):")
+        tooltip_size_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 11px; min-width: 80px;"
+        )
+        tooltip_size_row.addWidget(tooltip_size_label)
+        self._afk_tooltip_size_spin = QSpinBox()
+        self._afk_tooltip_size_spin.setRange(50, 200)
+        self._afk_tooltip_size_spin.setSingleStep(10)
+        self._afk_tooltip_size_spin.setValue(100)
+        self._afk_tooltip_size_spin.setFixedWidth(60)
+        self._afk_tooltip_size_spin.setButtonSymbols(
+            QSpinBox.ButtonSymbols.NoButtons
+        )
+        self._afk_tooltip_size_spin.setStyleSheet(
+            f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px; border-radius: 0; }}"
+        )
+        self._afk_tooltip_size_spin.valueChanged.connect(
+            self._on_afk_tooltip_size_changed
+        )
+        tooltip_size_row.addWidget(self._afk_tooltip_size_spin)
+        tooltip_size_row.addStretch(1)
+        form.addLayout(tooltip_size_row)
+
         lay.addLayout(form)
         lay.addStretch(1)
 
@@ -1586,7 +1629,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_key_btn.installEventFilter(self)
         
         self._afk_tooltip = _FloatingTooltip()
+        self._afk_tooltip.set_size_percent(self._afk_tooltip_size)
         self._afk_tooltip.hide()
+        self._afk_tooltip_preview_visible = False
         
         actions.set_afk_tooltip_callback(self._on_afk_tooltip_emit)
         
@@ -1598,12 +1643,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_press_count = saved.get("anti_afk_press_count", 1)
         self._afk_interval = saved.get("anti_afk_interval", 10)
         self._afk_tooltip_enabled = saved.get("anti_afk_tooltip_enabled", True)
+        self._afk_tooltip_size = saved.get("anti_afk_tooltip_size", 100)
         self._afk_enabled = saved.get("anti_afk_enabled", False)
 
         self._afk_key_btn.setText(self._afk_key.upper())
         self._afk_press_spin.setValue(int(self._afk_press_count))
         self._afk_interval_spin.setValue(int(self._afk_interval))
         self._afk_tooltip_chk.setChecked(bool(self._afk_tooltip_enabled))
+        self._afk_tooltip_size_spin.setValue(
+            max(50, min(200, int(self._afk_tooltip_size)))
+        )
         self._afk_enabled_chk.setChecked(bool(self._afk_enabled))
         self._update_afk_status()
 
@@ -1632,13 +1681,41 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_afk_debug_trigger(self):
         actions.trigger_anti_afk()
+
+    def _show_afk_tooltip_preview(self):
+        cursor = QCursor.pos()
+        self._afk_tooltip.show_message(
+            "Anti-AFK Maintenance in 30s",
+            cursor.x(),
+            cursor.y(),
+        )
+
+    def _on_afk_tooltip_preview(self):
+        self._afk_tooltip_preview_visible = not self._afk_tooltip_preview_visible
+        if self._afk_tooltip_preview_visible:
+            self._afk_tooltip_preview_btn.setText("Hide Tooltip")
+            self._show_afk_tooltip_preview()
+        else:
+            self._afk_tooltip_preview_btn.setText("Show Tooltip")
+            self._afk_tooltip.hide()
+
+    def _on_afk_tooltip_size_changed(self, value):
+        self._afk_tooltip_size = int(value)
+        actions.save_ui_setting("anti_afk_tooltip_size", self._afk_tooltip_size)
+        if hasattr(self, "_afk_tooltip"):
+            self._afk_tooltip.set_size_percent(self._afk_tooltip_size)
+            if getattr(self, "_afk_tooltip_preview_visible", False):
+                self._show_afk_tooltip_preview()
     
     def _on_afk_tooltip_emit(self, message, x, y):
         self._bridge.afk_tooltip.emit(message, x, y)
     
     def _on_afk_tooltip_signal(self, message, x, y):
         if message is None:
-            self._afk_tooltip.hide()
+            if self._afk_tooltip_preview_visible:
+                self._show_afk_tooltip_preview()
+            else:
+                self._afk_tooltip.hide()
         else:
             self._afk_tooltip.show_message(message, x, y)
 
@@ -1787,6 +1864,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         actions.save_ui_setting("anti_afk_press_count", self._afk_press_count)
         actions.save_ui_setting("anti_afk_interval", self._afk_interval)
         actions.save_ui_setting("anti_afk_tooltip_enabled", self._afk_tooltip_enabled)
+        actions.save_ui_setting("anti_afk_tooltip_size", self._afk_tooltip_size)
         actions.save_ui_setting("anti_afk_enabled", self._afk_enabled)
 
     def _build_multi_roblox_panel(self) -> QFrame: # Multi Roblox
