@@ -1365,6 +1365,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         lay.addStretch(1)
 
+        kill_roblox_button = QPushButton("Kill All Roblox")
+        kill_roblox_button.setToolTip("Close every running Roblox process")
+        kill_roblox_button.clicked.connect(self._on_kill_all_roblox)
+        lay.addWidget(kill_roblox_button)
+
         ver_lbl = QLabel(f"Version : {APP_VERSION}")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
         ver_lbl.setStyleSheet(
