@@ -394,7 +394,15 @@ class AutoRejoinWorker:
             )
             return False
 
-    def _is_in_game(self, user_id, cookie: str, place_id: str) -> tuple[str, str]:
+    def _is_in_game(
+        self,
+        user_id,
+        cookie: str,
+        place_id: str,
+        check_place_id: bool = True,
+    ) -> tuple[str, str]:
+        if not self._process_identity or not _identity_matches(self._process_identity):
+            return "disconnected", ""
         if not _wait_presence_slot(self._stop):
             return "unavailable", ""
         try:
@@ -404,6 +412,12 @@ class AutoRejoinWorker:
             in_game = presence.get("in_game", False)
             cur_pid = presence.get("place_id")
             game_id = presence.get("game_id", "")
+            status = presence.get("status")
+            online = bool(status) if status is not None else bool(in_game)
+            if not online:
+                return "disconnected", game_id
+            if not check_place_id:
+                return "in_game", game_id
             if in_game:
                 try:
                     if int(cur_pid) == int(place_id):
@@ -423,6 +437,7 @@ class AutoRejoinWorker:
         check_interval = int(cfg.get("check_interval", 10))
         max_retries = int(cfg.get("max_retries", 5))
         check_presence = bool(cfg.get("check_presence", True))
+        check_place_id = bool(cfg.get("check_place_id", True))
 
         if not place_id:
             self._emit("ERROR: no place_id")
@@ -510,6 +525,7 @@ class AutoRejoinWorker:
                         user_id,
                         cookie,
                         place_id,
+                        check_place_id,
                     )
                     game_id = gid or ""
                     if presence_state == "in_game":

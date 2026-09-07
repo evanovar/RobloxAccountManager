@@ -8643,7 +8643,14 @@ class _AutoRejoinAddWindow(QDialog):
         self._presence_chk = QCheckBox("Check player presence")
         self._presence_chk.setChecked(True)
         self._presence_chk.setStyleSheet(_CHK)
+        self._presence_chk.toggled.connect(self._update_presence_place_controls)
         right.addWidget(self._presence_chk)
+
+        self._presence_place_chk = QCheckBox("Check if player is in PlaceID")
+        self._presence_place_chk.setChecked(True)
+        self._presence_place_chk.setStyleSheet(_CHK)
+        right.addWidget(self._presence_place_chk)
+        self._update_presence_place_controls()
 
         self._internet_chk = QCheckBox("Check internet before launch")
         self._internet_chk.setChecked(True)
@@ -8689,7 +8696,12 @@ class _AutoRejoinAddWindow(QDialog):
         self._interval.setValue(int(cfg.get("check_interval", 10)))
         self._retries.setValue(int(cfg.get("max_retries", 5)))
         self._presence_chk.setChecked(bool(cfg.get("check_presence", True)))
+        self._presence_place_chk.setChecked(bool(cfg.get("check_place_id", True)))
+        self._update_presence_place_controls()
         self._internet_chk.setChecked(bool(cfg.get("check_internet", True)))
+
+    def _update_presence_place_controls(self):
+        self._presence_place_chk.setEnabled(self._presence_chk.isChecked())
 
     def _rebuild_group_bar(self):
         while self._gbar_lay.count():
@@ -8787,6 +8799,7 @@ class _AutoRejoinAddWindow(QDialog):
             "check_interval": self._interval.value(),
             "max_retries": self._retries.value(),
             "check_presence": self._presence_chk.isChecked(),
+            "check_place_id": self._presence_place_chk.isChecked(),
             "check_internet": self._internet_chk.isChecked(),
         }
 
