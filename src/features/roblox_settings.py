@@ -160,19 +160,12 @@ def has_startup_customizations() -> bool:
     if profile is not None:
         if bool(profile.get("advanced_auto_apply", False)):
             return True
-        basic = profile.get("basic", {})
-        if isinstance(basic, dict):
-            return any(
-                isinstance(entry, dict) and bool(entry.get("enabled", False))
-                for entry in basic.values()
-            )
+        return bool(profile.get("lock_owned", False))
 
     settings = _load_ui_settings()
     return any(bool(settings.get(key, False)) for key in (
         "roblox_settings_auto_apply",
-        "framerate_cap_enabled",
-        "master_volume_enabled",
-        "start_quality_enabled",
+        "roblox_settings_lock_owned",
     ))
 
 
@@ -386,60 +379,6 @@ def _load_profile_for_edit() -> tuple[dict | None, OperationResult | None]:
     return profile, None
 
 
-def save_basic_setting(
-    key: str,
-    value: str | None = None,
-    enabled: bool | None = None,
-) -> OperationResult:
-    with _WRITE_LOCK:
-        return _save_basic_setting(key, value=value, enabled=enabled)
-
-
-def _save_basic_setting(
-    key: str,
-    value: str | None = None,
-    enabled: bool | None = None,
-) -> OperationResult:
-    if key not in _BASIC_KEYS:
-        return OperationResult.failure(
-            "ROBLOX_BASIC_SETTING_INVALID",
-            "Invalid Basic Setting",
-            f"The setting '{key}' is not a supported Basic setting.",
-        )
-    profile, error = _load_profile_for_edit()
-    if error:
-        return error
-    if profile is None:
-        return OperationResult.failure(
-            "ROBLOX_LOCAL_SETTINGS_INVALID",
-            "Roblox Settings Profile Invalid",
-            "The local Roblox settings profile could not be loaded.",
-        )
-    entry = profile.get("settings", {}).get(key)
-    if not isinstance(entry, dict):
-        return OperationResult.failure(
-            "ROBLOX_SETTING_NOT_FOUND",
-            "Roblox Setting Not Found",
-            f"The setting '{key}' could not be found.",
-            detail=f"Profile: {get_local_profile_path()}",
-        )
-    basic = profile.setdefault("basic", {})
-    current = basic.get(key, {})
-    if not isinstance(current, dict):
-        current = {}
-    if value is not None:
-        validation = _validate_managed_value(key, value)
-        if not validation:
-            return validation
-        current["value"] = str(validation.data)
-    else:
-        current["value"] = str(current.get("value", entry.get("value", "")))
-    if enabled is not None:
-        current["enabled"] = bool(enabled)
-    else:
-        current["enabled"] = bool(current.get("enabled", False))
-    basic[key] = current
-    return _save_local_profile(profile)
 
 
 def save_advanced_setting(key: str, value: str) -> OperationResult:
@@ -507,39 +446,12 @@ def get_customization_config(
     profile = _load_local_profile_file()
     current = dict(settings) if isinstance(settings, dict) else _load_ui_settings()
     if profile is None:
-        managed = _legacy_profile_values()["managed"]
         return {
-            "auto_apply": bool(_legacy_profile_values()["auto_apply"]),
-            "framerate_enabled": bool(managed["FramerateCap"][0]),
-            "framerate_value": str(managed["FramerateCap"][1]),
-            "master_volume_enabled": bool(managed["MasterVolume"][0]),
-            "master_volume_value": str(managed["MasterVolume"][1]),
-            "start_quality_enabled": bool(managed["SavedQualityLevel"][0]),
-            "start_quality_value": str(managed["SavedQualityLevel"][1]),
+            "auto_apply": bool(current.get("roblox_settings_auto_apply", False)),
             "lock_owned": bool(current.get("roblox_settings_lock_owned", False)),
         }
-
-    basic = profile.get("basic", {})
-    if not isinstance(basic, dict):
-        basic = {}
-    profile_settings = profile.get("settings", {})
-    def _entry(key: str, fallback: str) -> dict:
-        value = basic.get(key, {})
-        if not isinstance(value, dict):
-            value = profile_settings.get(key, {})
-        return value if isinstance(value, dict) else {"value": fallback, "apply": False}
-
-    framerate = _entry("FramerateCap", "60")
-    volume = _entry("MasterVolume", "1.0")
-    quality = _entry("SavedQualityLevel", "0")
     return {
         "auto_apply": bool(profile.get("advanced_auto_apply", False)),
-        "framerate_enabled": bool(framerate.get("enabled", False)),
-        "framerate_value": str(framerate.get("value", "60")),
-        "master_volume_enabled": bool(volume.get("enabled", False)),
-        "master_volume_value": str(volume.get("value", "1.0")),
-        "start_quality_enabled": bool(quality.get("enabled", False)),
-        "start_quality_value": str(quality.get("value", "0")),
         "lock_owned": bool(profile.get("lock_owned", False)),
     }
 
@@ -1067,15 +979,6 @@ def _update_profile_sources(profile: dict, data: dict) -> None:
     }
 
 
-def _enabled_basic_entries(profile: dict) -> dict[str, dict]:
-    basic = profile.get("basic", {})
-    if not isinstance(basic, dict):
-        return {}
-    return {
-        key: entry
-        for key, entry in basic.items()
-        if isinstance(entry, dict) and bool(entry.get("enabled", False))
-    }
 
 
 def _apply_profile(
@@ -1102,25 +1005,6 @@ def _apply_profile(
             return advanced_result
         changes.update(dict(advanced_result.data or {}))
 
-    enabled_basic = _enabled_basic_entries(profile)
-    for key in enabled_basic:
-        if key not in xml_records:
-            return OperationResult.failure(
-                "ROBLOX_MANAGED_SETTING_MISSING",
-                "Roblox Setting Not Found",
-                f"The enabled setting '{key}' was not found in the Roblox XML file.",
-                detail=f"Setting: {key}",
-            )
-    for key, entry in enabled_basic.items():
-        validation = _validate_managed_value(
-            key,
-            str(entry.get("value", "")),
-        )
-        if not validation:
-            return validation
-        normalized = str(validation.data)
-        if include_advanced or str(xml_records[key].get("value", "")) != normalized:
-            changes[key] = normalized
 
     current_hash = str(data.get("file_hash", ""))
     current_read_only = bool(data.get("read_only", False))
@@ -1142,10 +1026,6 @@ def _apply_profile(
             key: str(entry.get("value", ""))
             for key, entry in profile.get("settings", {}).items()
             if include_advanced and isinstance(entry, dict)
-        },
-        "basic": {
-            key: str(entry.get("value", ""))
-            for key, entry in enabled_basic.items()
         },
     }
     signature = json.dumps(signature_data, sort_keys=True, separators=(",", ":"))

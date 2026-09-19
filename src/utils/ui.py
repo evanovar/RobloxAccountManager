@@ -3723,139 +3723,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         _roblox_settings_desc.setWordWrap(True)
         f.addWidget(_roblox_settings_desc)
 
-        f.addWidget(_sec("BASIC SETTINGS"))
-
-        self._sett_framerate_chk = QCheckBox("Enable Framerate Cap")
-        self._sett_framerate_chk.setChecked(
-            bool(self._roblox_settings_config.get("framerate_enabled", False))
-        )
-        self._sett_framerate_chk.setToolTip(
-            "Apply FramerateCap before Roblox starts."
-        )
-        self._sett_fps_spin = QSpinBox()
-        self._sett_fps_spin.setRange(-1, 999)
-        self._sett_fps_spin.setSpecialValueText("Unlimited")
-        self._sett_fps_spin.setSuffix(" FPS")
-        try:
-            self._sett_fps_spin.setValue(
-                max(
-                    -1,
-                    min(
-                        999,
-                        int(self._roblox_settings_config.get(
-                            "framerate_value", 60
-                        )),
-                    ),
-                )
-            )
-        except (TypeError, ValueError):
-            self._sett_fps_spin.setValue(60)
-        self._sett_fps_spin.setFixedWidth(90)
-        self._sett_fps_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._sett_framerate_chk.stateChanged.connect(
-            lambda state: self._on_roblox_managed_toggle(
-                "framerate",
-                state == Qt.CheckState.Checked.value,
-            )
-        )
-        self._sett_fps_spin.valueChanged.connect(
-            self._on_sett_framerate_value
-        )
-        framerate_row = QHBoxLayout()
-        framerate_row.setContentsMargins(20, 0, 0, 0)
-        framerate_row.addWidget(self._sett_framerate_chk)
-        framerate_row.addStretch(1)
-        framerate_row.addWidget(self._sett_fps_spin)
-        f.addLayout(framerate_row)
-
-        self._sett_master_volume_chk = QCheckBox("Enable Master Volume")
-        self._sett_master_volume_chk.setChecked(
-            bool(self._roblox_settings_config.get("master_volume_enabled", False))
-        )
-        self._sett_master_volume_chk.setToolTip(
-            "Apply MasterVolume without changing other Roblox volume settings."
-        )
-        self._roblox_master_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._roblox_master_volume_slider.setRange(0, 10)
-        self._roblox_master_volume_slider.setSingleStep(1)
-        self._roblox_master_volume_slider.setFixedWidth(180)
-        try:
-            master_volume = max(
-                0.0,
-                min(
-                    1.0,
-                    float(self._roblox_settings_config.get(
-                        "master_volume_value", 1.0
-                    )),
-                ),
-            )
-            self._roblox_master_volume_slider.setValue(round(master_volume * 10))
-        except (TypeError, ValueError):
-            self._roblox_master_volume_slider.setValue(10)
-        self._roblox_master_volume_label = QLabel("1.0")
-        self._roblox_master_volume_label.setFixedWidth(36)
-        self._sett_master_volume_chk.stateChanged.connect(
-            lambda state: self._on_roblox_managed_toggle(
-                "master_volume",
-                state == Qt.CheckState.Checked.value,
-            )
-        )
-        self._roblox_master_volume_slider.valueChanged.connect(
-            self._on_master_volume_changed
-        )
-        master_volume_row = QHBoxLayout()
-        master_volume_row.setContentsMargins(20, 0, 0, 0)
-        master_volume_row.addWidget(self._sett_master_volume_chk)
-        master_volume_row.addStretch(1)
-        master_volume_row.addWidget(self._roblox_master_volume_slider)
-        master_volume_row.addWidget(self._roblox_master_volume_label)
-        f.addLayout(master_volume_row)
-
-        self._sett_start_quality_chk = QCheckBox("Enable Start Quality")
-        self._sett_start_quality_chk.setChecked(
-            bool(self._roblox_settings_config.get("start_quality_enabled", False))
-        )
-        self._sett_start_quality_chk.setToolTip(
-            "Apply SavedQualityLevel when Roblox starts."
-        )
-        self._roblox_start_quality_slider = QSlider(Qt.Orientation.Horizontal)
-        self._roblox_start_quality_slider.setRange(0, 10)
-        self._roblox_start_quality_slider.setSingleStep(1)
-        self._roblox_start_quality_slider.setFixedWidth(180)
-        try:
-            self._roblox_start_quality_slider.setValue(
-                max(
-                    0,
-                    min(
-                        10,
-                        int(self._roblox_settings_config.get(
-                            "start_quality_value", 0
-                        )),
-                    ),
-                )
-            )
-        except (TypeError, ValueError):
-            self._roblox_start_quality_slider.setValue(0)
-        self._roblox_start_quality_label = QLabel("0")
-        self._roblox_start_quality_label.setFixedWidth(36)
-        self._sett_start_quality_chk.stateChanged.connect(
-            lambda state: self._on_roblox_managed_toggle(
-                "start_quality",
-                state == Qt.CheckState.Checked.value,
-            )
-        )
-        self._roblox_start_quality_slider.valueChanged.connect(
-            self._on_start_quality_changed
-        )
-        start_quality_row = QHBoxLayout()
-        start_quality_row.setContentsMargins(20, 0, 0, 0)
-        start_quality_row.addWidget(self._sett_start_quality_chk)
-        start_quality_row.addStretch(1)
-        start_quality_row.addWidget(self._roblox_start_quality_slider)
-        start_quality_row.addWidget(self._roblox_start_quality_label)
-        f.addLayout(start_quality_row)
-
-        f.addWidget(_sec("ADVANCED SETTINGS"))
         self._roblox_settings_search = QLineEdit()
         self._roblox_settings_search.setPlaceholderText("Search Roblox settings...")
         self._roblox_settings_search.textChanged.connect(
@@ -3952,7 +3819,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addLayout(_roblox_settings_btn_row)
 
         self._roblox_settings_auto_apply_chk = QCheckBox(
-            "Auto Apply Advanced Settings"
+            "Auto Apply Settings"
         )
         self._roblox_settings_auto_apply_chk.setChecked(
             bool(self._roblox_settings_config.get("auto_apply", False))
@@ -4454,7 +4321,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._roblox_settings_selected_label.setText("None")
             self._roblox_settings_type_label.setText("None")
             self._roblox_settings_value_stack.setEnabled(False)
-            self._set_roblox_managed_controls_enabled(False)
             self._roblox_settings_auto_apply_chk.setEnabled(False)
             self._roblox_settings_startup_reload = False
             self._update_roblox_settings_apply_state()
@@ -4475,8 +4341,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         self._roblox_settings_pending_config = dict(self._roblox_settings_config)
         self._populate_roblox_settings_tree()
-        self._sync_quick_controls_from_pending()
-        self._set_roblox_managed_controls_enabled(True)
         self._roblox_settings_auto_apply_chk.blockSignals(True)
         self._roblox_settings_auto_apply_chk.setEnabled(True)
         self._roblox_settings_auto_apply_chk.setChecked(
@@ -4489,14 +4353,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             if (
                 bool(self._roblox_settings_config.get("auto_apply", False))
                 or bool(self._roblox_settings_config.get("lock_owned", False))
-                or any(
-                bool(self._roblox_settings_config.get(key, False))
-                for key in (
-                    "framerate_enabled",
-                    "master_volume_enabled",
-                    "start_quality_enabled",
-                )
-                )
             ):
                 QTimer.singleShot(0, self._start_roblox_auto_apply)
 
@@ -4626,7 +4482,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             records=self._roblox_settings_records
         )
         self._roblox_settings_pending_config = dict(self._roblox_settings_config)
-        self._sync_quick_controls_from_pending()
         self._refresh_roblox_setting_row(key)
         self._update_roblox_settings_apply_state()
         self._on_roblox_setting_selected()
@@ -4661,151 +4516,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             and not self._roblox_settings_applying
         )
 
-    def _sync_quick_controls_from_pending(self):
-        config = self._roblox_settings_pending_config
-        framerate_record = self._roblox_settings_records.get("FramerateCap")
-        if framerate_record is not None:
-            try:
-                framerate = int(config.get(
-                    "framerate_value",
-                    framerate_record.get("value", 60),
-                ))
-                self._sett_fps_spin.blockSignals(True)
-                self._sett_fps_spin.setValue(max(-1, min(999, framerate)))
-                self._sett_fps_spin.blockSignals(False)
-            except (TypeError, ValueError):
-                pass
-
-        volume_record = self._roblox_settings_records.get("MasterVolume")
-        if volume_record is not None:
-            try:
-                volume = float(config.get(
-                    "master_volume_value",
-                    volume_record.get("value", 1),
-                ))
-                volume = max(0.0, min(1.0, volume))
-                self._roblox_master_volume_slider.blockSignals(True)
-                self._roblox_master_volume_slider.setValue(round(volume * 10))
-                self._roblox_master_volume_slider.blockSignals(False)
-                self._roblox_master_volume_label.setText(f"{volume:.1f}")
-            except (TypeError, ValueError):
-                pass
-
-        quality_record = self._roblox_settings_records.get("SavedQualityLevel")
-        if quality_record is not None:
-            try:
-                quality = int(config.get(
-                    "start_quality_value",
-                    quality_record.get("value", 0),
-                ))
-                quality = max(0, min(10, quality))
-                self._roblox_start_quality_slider.blockSignals(True)
-                self._roblox_start_quality_slider.setValue(quality)
-                self._roblox_start_quality_slider.blockSignals(False)
-                self._roblox_start_quality_label.setText(str(quality))
-            except (TypeError, ValueError):
-                pass
-
-    def _set_roblox_managed_controls_enabled(self, file_available: bool):
-        records = self._roblox_settings_records
-        managed_controls = (
-            ("FramerateCap", "framerate_enabled", self._sett_framerate_chk, self._sett_fps_spin),
-            ("MasterVolume", "master_volume_enabled", self._sett_master_volume_chk, self._roblox_master_volume_slider),
-            ("SavedQualityLevel", "start_quality_enabled", self._sett_start_quality_chk, self._roblox_start_quality_slider),
-        )
-        for xml_key, enabled_key, checkbox, value_control in managed_controls:
-            exists = file_available and xml_key in records
-            checkbox.blockSignals(True)
-            checkbox.setEnabled(exists)
-            checkbox.setChecked(
-                exists
-                and bool(self._roblox_settings_pending_config.get(enabled_key, False))
-            )
-            checkbox.blockSignals(False)
-            value_control.setEnabled(
-                exists and bool(self._roblox_settings_pending_config.get(enabled_key, False))
-            )
-
-    def _on_roblox_managed_toggle(self, name: str, enabled: bool):
-        enabled_fields = {
-            "framerate": ("framerate_enabled", "FramerateCap"),
-            "master_volume": ("master_volume_enabled", "MasterVolume"),
-            "start_quality": ("start_quality_enabled", "SavedQualityLevel"),
-        }
-        field_data = enabled_fields.get(name)
-        if field_data is None or self._roblox_settings_loading:
-            return
-        _enabled_key, xml_key = field_data
-        record = self._roblox_settings_records.get(xml_key)
-        if record is None:
-            return
-        save_result = roblox_settings_mod.save_basic_setting(
-            xml_key,
-            enabled=enabled,
-        )
-        if not save_result:
-            checkbox = {
-                "framerate": self._sett_framerate_chk,
-                "master_volume": self._sett_master_volume_chk,
-                "start_quality": self._sett_start_quality_chk,
-            }[name]
-            checkbox.blockSignals(True)
-            checkbox.setChecked(not enabled)
-            checkbox.blockSignals(False)
-            self._show_operation_error(save_result)
-            return
-        record["basic_enabled"] = bool(enabled)
-        self._roblox_settings_config = roblox_settings_mod.get_customization_config(
-            records=self._roblox_settings_records
-        )
-        self._roblox_settings_pending_config = dict(self._roblox_settings_config)
-        self._set_roblox_managed_controls_enabled(True)
-        self._on_roblox_setting_selected()
-        self._refresh_roblox_setting_row(xml_key)
-        self._update_roblox_settings_apply_state()
-
-    def _on_sett_framerate_value(self, value: int):
-        if self._roblox_settings_loading:
-            return
-        record = self._roblox_settings_records.get("FramerateCap")
-        if record is None:
-            return
-        self._save_roblox_local_value("FramerateCap", str(value))
-
-    def _on_master_volume_changed(self, value: int):
-        volume = max(0, min(10, int(value))) / 10
-        self._roblox_master_volume_label.setText(f"{volume:.1f}")
-        if not self._roblox_settings_loading:
-            self._save_roblox_local_value("MasterVolume", f"{volume:.1f}")
-
-    def _on_start_quality_changed(self, value: int):
-        self._roblox_start_quality_label.setText(str(value))
-        if self._roblox_settings_loading:
-            return
-        self._save_roblox_local_value("SavedQualityLevel", str(value))
-
-    def _save_roblox_local_value(self, key: str, value: str):
-        result = roblox_settings_mod.save_basic_setting(
-            key,
-            value=value,
-        )
-        if not result:
-            self._sync_quick_controls_from_pending()
-            self._show_operation_error(result)
-            return
-        record = self._roblox_settings_records.get(key)
-        self._roblox_settings_config = roblox_settings_mod.get_customization_config(
-            records=self._roblox_settings_records
-        )
-        self._roblox_settings_pending_config = dict(self._roblox_settings_config)
-        if record is not None:
-            record["basic_enabled"] = bool(self._roblox_settings_config.get({
-                "FramerateCap": "framerate_enabled",
-                "MasterVolume": "master_volume_enabled",
-                "SavedQualityLevel": "start_quality_enabled",
-            }[key], False))
-        self._set_roblox_managed_controls_enabled(True)
-        self._update_roblox_settings_apply_state()
 
     def _reload_roblox_settings(self):
         self._load_roblox_settings(
@@ -4847,8 +4557,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         self._roblox_settings_pending_config = dict(self._roblox_settings_config)
         self._populate_roblox_settings_tree()
-        self._sync_quick_controls_from_pending()
-        self._set_roblox_managed_controls_enabled(True)
         self._roblox_settings_auto_apply_chk.blockSignals(True)
         self._roblox_settings_auto_apply_chk.setChecked(
             bool(self._roblox_settings_config.get("auto_apply", False))
@@ -4905,8 +4613,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._roblox_settings_config
         )
         self._populate_roblox_settings_tree()
-        self._sync_quick_controls_from_pending()
-        self._set_roblox_managed_controls_enabled(True)
         self._roblox_settings_auto_apply_chk.blockSignals(True)
         self._roblox_settings_auto_apply_chk.setChecked(
             bool(self._roblox_settings_config.get("auto_apply", False))
