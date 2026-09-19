@@ -238,10 +238,20 @@ class PasswordEncryption:
                 self.salt = salt
         
         self.key = self._derive_key_from_password(password)
+        self._legacy_key = self.key
+        if isinstance(password, str):
+            try:
+                legacy_bytes = password.encode('latin-1')
+            except UnicodeEncodeError:
+                self._legacy_key = None
+            else:
+                if legacy_bytes != password.encode('utf-8'):
+                    self._legacy_key = PBKDF2(legacy_bytes, self.salt, dkLen=32, count=100000)
     
     def _derive_key_from_password(self, password):
-        """Derive encryption key from password"""
-        key = PBKDF2(password, self.salt, dkLen=32, count=100000)
+        # Pass explicit bytes so Unicode passwords do not use the library's Latin-1 default.
+        password_bytes = password.encode('utf-8') if isinstance(password, str) else password
+        key = PBKDF2(password_bytes, self.salt, dkLen=32, count=100000)
         return key
     
     def get_salt_b64(self):
@@ -261,6 +271,7 @@ class PasswordEncryption:
         ciphertext, tag = cipher.encrypt_and_digest(data_bytes)
         
         encrypted_package = {
+            'password_encoding': 'utf-8',
             'nonce': base64.b64encode(nonce).decode('utf-8'),
             'tag': base64.b64encode(tag).decode('utf-8'),
             'ciphertext': base64.b64encode(ciphertext).decode('utf-8')
@@ -272,7 +283,13 @@ class PasswordEncryption:
         """Decrypt data using password-based key"""
         nonce, tag, ciphertext = _decode_encrypted_package(encrypted_package)
         try:
-            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+            encoding = encrypted_package.get('password_encoding')
+            if encoding not in (None, 'utf-8'):
+                raise ValueError('Unsupported password encoding')
+            key = self.key if encoding == 'utf-8' else self._legacy_key
+            if key is None:
+                raise ValueError('Password cannot unlock legacy data')
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
             data_bytes = cipher.decrypt_and_verify(ciphertext, tag)
             data_string = data_bytes.decode('utf-8')
             try:
