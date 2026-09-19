@@ -16,6 +16,7 @@ import win32process
 
 from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
+from features.window_operations import set_window_title
 
 
 _LOG_EARLY_TOLERANCE_SEC = 2.0
@@ -554,7 +555,8 @@ class RobloxWindowRenamer:
             _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
             if window_pid != pid:
                 return
-            win32gui.SetWindowText(hwnd, target_title)
+            if not set_window_title(hwnd, target_title):
+                return
             if win32gui.GetWindowText(hwnd) != target_title:
                 return
             self._managed_titles.add(target_title)

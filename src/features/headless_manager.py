@@ -14,6 +14,7 @@ import win32gui
 
 import features.presence as presence_mod
 from classes.roblox_api import RobloxAPI
+from features.window_operations import show_window_async
 
 _ENFORCE_INTERVAL = 1.0
 
@@ -40,7 +41,7 @@ def hide_roblox_window(pid: int, username: str | None = None) -> bool:
     hwnds = _get_roblox_hwnds_for_pid(pid, titles)
     for hwnd in hwnds:
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            show_window_async(hwnd, win32con.SW_HIDE)
             win32gui.PostMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_MINIMIZE, 0)
         except Exception:
             pass
@@ -55,7 +56,7 @@ def show_roblox_window(pid: int, username: str | None = None) -> bool:
     for hwnd in hwnds:
         try:
             win32gui.PostMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
-            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            show_window_async(hwnd, win32con.SW_SHOW)
         except Exception:
             pass
     return bool(hwnds)
@@ -168,7 +169,7 @@ class HeadlessManager:
                         if win32gui.GetWindowText(hwnd) not in titles:
                             continue
                         if win32gui.IsWindowVisible(hwnd):
-                            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                            show_window_async(hwnd, win32con.SW_HIDE)
                             win32gui.PostMessage(
                                 hwnd,
                                 win32con.WM_SYSCOMMAND,

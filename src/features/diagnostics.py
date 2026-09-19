@@ -185,6 +185,7 @@ def _health_monitor() -> None:
             continue
         stalled_for = time.monotonic() - _LAST_UI_HEARTBEAT
         if stalled_for >= 30 and not warned:
+            report_ui_stall(stalled_for)
             record_message(
                 f"The UI event loop has not responded for {stalled_for:.1f} seconds.",
                 "WARNING",
@@ -192,6 +193,36 @@ def _health_monitor() -> None:
             warned = True
         elif stalled_for < 15:
             warned = False
+
+
+def report_ui_stall(stalled_for: float) -> str:
+    # Capture stacks without local values or source lines that may hold secrets.
+    try:
+        folder = os.path.join(_get_diagnostics_root(), "logs")
+        os.makedirs(folder, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        path = os.path.join(folder, f"hang-{stamp}.log")
+        names = {thread.ident: thread.name for thread in threading.enumerate()}
+        lines = [f"UI heartbeat stalled for {stalled_for:.1f} seconds."]
+        frames = sys._current_frames()
+        try:
+            for ident, frame in frames.items():
+                lines.append(f"\nThread: {names.get(ident, 'unknown')} ({ident})")
+                stack = []
+                while frame is not None:
+                    stack.append(
+                        f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
+                    )
+                    frame = frame.f_back
+                lines.extend(reversed(stack))
+        finally:
+            frames.clear()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(redact("\n".join(lines)))
+        record_message(f"UI hang report saved: {path}", "WARNING")
+        return path
+    except Exception:
+        return ""
 
 
 def record_message(message: str, level: str = "INFO") -> None:
