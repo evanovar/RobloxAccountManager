@@ -16,6 +16,7 @@ import requests
 from typing import Callable, Optional
 from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
+import features.settings_store as settings_store
 from utils.app_paths import get_data_dir
 
 _CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
@@ -321,8 +322,12 @@ class AutoRejoinWorker:
                 for pid, process_data in processes_before.items()
             }
 
+            settings = settings_store.load()
             ok = self.manager.launch_roblox(
-                self.account, place_id, private_server, "default", job_id, None
+                self.account, place_id, private_server,
+                launcher_preference=settings.get("roblox_launcher", "default"),
+                job_id=job_id,
+                custom_launcher_path=settings.get("custom_roblox_launcher_path", ""),
             )
             if not ok:
                 return False

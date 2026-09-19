@@ -814,6 +814,9 @@ class _BackgroundController(QObject):
                         'QMainWindow, QDialog { background: transparent; }'
                         'QCheckBox::indicator:checked, QRadioButton::indicator:checked {'
                         ' background: #3A7BD5; }'
+                        f"QToolTip {{ background: {self.colors['tint']};"
+                        f" color: {self.colors['text']};"
+                        f" border: 1px solid {self.colors['outline']}; padding: 4px 6px; }}"
                     )
                     if isinstance(window, QMenu):
                         # QMenu paints action text itself. A child canvas covers that text.
@@ -1411,6 +1414,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             ar_workers=self._ar_workers,
             ar_configs=self._ar_configs,
             get_settings=actions.load_ui_settings,
+            rejoin_status_callback=self._bridge.rejoin_status.emit,
             refresh_ui_callback=lambda: self._bridge.account_added.emit(
                 OperationResult.success()
             ),
@@ -1675,6 +1679,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             }}
             QMenu::item:selected {{ background: {SELECT}; border-radius: 0px; }}
             QMenu::separator {{ height: 1px; background: {LINE}; margin: 2px 0px; }}
+
+            QToolTip {{
+                background: {PANEL}; border: 1px solid {LINE};
+                color: {TEXT}; padding: 4px 6px;
+            }}
 
             QScrollArea#groupScroll {{
                 background: transparent; border: 0;
@@ -7025,11 +7034,25 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         elif chosen == act_delete:
             self._on_delete_group(group_name)
 
+    def _save_group_change(self, operation, *args):
+        try:
+            return operation(*args) is not False
+        except OSError as exc:
+            self._show_operation_error(OperationResult.failure(
+                "GROUP_SAVE_FAILED", "Group Changes Could Not Be Saved",
+                "Check that the application data folder is writable and try again.",
+                detail=str(exc),
+            ))
+            return None
+
     def _on_add_group(self):
         name, ok = QInputDialog.getText(self, "New Group", "Group name:")
         if not ok or not name.strip():
             return
-        if not groups.create_group(name.strip()):
+        saved = self._save_group_change(groups.create_group, name.strip())
+        if saved is None:
+            return
+        if not saved:
             _show_error(self, "Error", f"Group '{name.strip()}' already exists.")
             return
         self._rebuild_group_bar()
@@ -7040,7 +7063,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         if not ok or not new_name.strip():
             return
-        if not groups.rename_group(old_name, new_name.strip()):
+        saved = self._save_group_change(groups.rename_group, old_name, new_name.strip())
+        if saved is None:
+            return
+        if not saved:
             _show_error(self, "Error", "Could not rename, name may already exist.")
             return
         if self._current_group == old_name:
@@ -7056,7 +7082,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        groups.delete_group(name)
+        if not self._save_group_change(groups.delete_group, name):
+            return
         if self._current_group == name:
             self._current_group = None
         self._rebuild_group_bar()
@@ -7066,14 +7093,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if isinstance(usernames, str):
             usernames = [usernames]
         for username in usernames:
-            groups.set_account_group(username, group_name)
+            if not self._save_group_change(groups.set_account_group, username, group_name):
+                break
         self._refresh_account_list()
 
     def _on_remove_from_group(self, usernames):
         if isinstance(usernames, str):
             usernames = [usernames]
         for username in usernames:
-            groups.set_account_group(username, None)
+            if not self._save_group_change(groups.set_account_group, username, None):
+                break
         self._refresh_account_list()
 
     def _load_avatars_async(self):
@@ -8850,6 +8879,8 @@ def apply_palette(app: QApplication) -> None:
     p.setColor(QPalette.ColorRole.Text, QColor(TEXT))
     p.setColor(QPalette.ColorRole.Button, QColor(INPUT))
     p.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT))
+    p.setColor(QPalette.ColorRole.ToolTipBase, QColor(PANEL))
+    p.setColor(QPalette.ColorRole.ToolTipText, QColor(TEXT))
     p.setColor(QPalette.ColorRole.Highlight, QColor(SELECT))
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(TEXT))
     app.setPalette(p)

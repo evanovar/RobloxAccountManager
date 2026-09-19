@@ -74,6 +74,7 @@ def _save(data: dict) -> None:
                 os.remove(temp_path)
             except OSError:
                 pass
+            raise
 
 def get_group_names() -> list[str]:
     return list(_load().get("groups", []))

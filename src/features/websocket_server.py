@@ -42,12 +42,14 @@ class WebSocketServer:
         ar_configs: dict,
         get_settings: Callable[[], dict],
         refresh_ui_callback: Callable[[], None] | None = None,
+        rejoin_status_callback: Callable[[str, str], None] | None = None,
     ):
         self.manager = manager
         self._ar_workers = ar_workers
         self._ar_configs = ar_configs
         self._settings_fn = get_settings
         self._refresh_ui = refresh_ui_callback
+        self._rejoin_status = rejoin_status_callback or (lambda *_: None)
 
         self._thread: threading.Thread | None = None
         self._loop:   asyncio.AbstractEventLoop | None = None
@@ -292,7 +294,7 @@ class WebSocketServer:
 
         s = self._get_settings()
         launcher = s.get("roblox_launcher", "default")
-        custom = s.get("custom_launcher_path", "")
+        custom = s.get("custom_roblox_launcher_path", "")
         launched = self.manager.launch_roblox(account, place_id, private_srv, launcher, job_id, custom)
 
         if launched:
@@ -350,7 +352,7 @@ class WebSocketServer:
 
         s = self._get_settings()
         launcher = s.get("roblox_launcher", "default")
-        custom = s.get("custom_launcher_path", "")
+        custom = s.get("custom_roblox_launcher_path", "")
         launched = self.manager.launch_roblox(account, place_id, "", launcher, game_id, custom)
 
         if launched:
@@ -386,7 +388,10 @@ class WebSocketServer:
             if account not in self._ar_configs:
                 return {"ok": False, "error": f"No auto-rejoin config for: {account}"}
             if account not in self._ar_workers or not self._ar_workers[account].is_alive():
-                worker = _ar.AutoRejoinWorker(account, self._ar_configs[account], self.manager)
+                worker = _ar.AutoRejoinWorker(
+                    account, self._ar_configs[account], self.manager,
+                    on_status=self._rejoin_status,
+                )
                 worker.start()
                 self._ar_workers[account] = worker
             return {"ok": True, "result": {"action": "AutoRejoin", "mode": "start", "account": account}}
