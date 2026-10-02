@@ -9,13 +9,12 @@ import ctypes
 import os
 
 from features import diagnostics
+import features.settings_store as settings_store
 from utils.app_paths import get_data_dir, get_resource_path
 from utils.version import APP_VERSION
 
 diagnostics.install(APP_VERSION)
 
-from features import account_actions as actions
-from features import webhook
 from utils.ui import main as _ui_main
 
 DATA_FOLDER = get_data_dir()
@@ -45,10 +44,11 @@ def _set_app_user_model_id():
 
 def main():
     diagnostics.set_startup_stage("main startup")
+    try:
+        settings_store.remove("discord_webhook")
+    except Exception as exc:
+        print(f"[WARNING] Could not clear old webhook settings: {exc}")
     _set_app_user_model_id()
-    webhook.install_console_capture(
-        lambda: actions.get_ui_setting("discord_webhook", {})
-    )
     diagnostics.set_startup_stage("console capture installed")
     _ensure_data_folder()
     diagnostics.set_startup_stage("data folder ready")

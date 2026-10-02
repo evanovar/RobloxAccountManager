@@ -123,6 +123,17 @@ def save(key: str, value) -> bool:
         return True
 
 
+def remove(key: str) -> bool:
+    with _LOCK:
+        _refresh_locked()
+        if key not in _CACHE:
+            return False
+        updated = copy.deepcopy(_CACHE)
+        updated.pop(key, None)
+        _write_locked(updated)
+        return True
+
+
 def replace(settings: dict) -> bool:
     if not isinstance(settings, dict):
         raise TypeError("UI settings must be a dictionary")

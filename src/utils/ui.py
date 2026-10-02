@@ -5,7 +5,6 @@ The v2.5.0 rewrite is finally complete.
 
 from __future__ import annotations
 
-import collections
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -28,7 +27,6 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 import psutil
-import requests
 
 from PySide6.QtCore import (
     QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal,
@@ -77,7 +75,6 @@ import features.private_servers as private_servers_mod
 import features.roblox_downloader as roblox_downloader_mod
 import features.roblox_settings as roblox_settings_mod
 import features.updater as updater_mod
-import features.webhook as webhook
 import features.websocket_server as ws_mod
 import features.window_grid as window_grid_mod
 import features.window_renamer as window_renamer_mod
@@ -1338,11 +1335,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._game_name_timer.setSingleShot(True)
         self._game_name_timer.timeout.connect(self._do_fetch_game_name)
 
-        self._console_queue = (
-            sys.stdout._console_queue
-            if isinstance(sys.stdout, webhook.WebhookStdoutInterceptor)
-            else collections.deque(maxlen=2000)
-        )
+        self._console_queue = diagnostics.console_queue()
 
         # Thread to Qt signal bridge
         self._bridge = _Bridge()
@@ -1361,8 +1354,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.presence_update.connect(self._on_presence_update)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
         self._bridge.console_wakeup.connect(self._drain_console_queue)
-        if isinstance(sys.stdout, webhook.WebhookStdoutInterceptor):
-            sys.stdout.set_console_wakeup(self._bridge.console_wakeup.emit)
+        diagnostics.set_console_wakeup(self._bridge.console_wakeup.emit)
         self._bridge.update_available.connect(self._on_update_available)
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
@@ -1450,14 +1442,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_encryption_badge()
         # Apply persisted settings that affect widgets built in _build_ui
         S = actions.load_ui_settings()
-        discord_settings = S.get("discord_webhook", {})
-        if (
-            discord_settings.get("enabled", False)
-            and discord_settings.get("screenshot_enabled", False)
-        ):
-            webhook.start_screenshot_loop(
-                lambda: actions.get_ui_setting("discord_webhook", {})
-            )
         self._place_id_edit.setCurrentText(S.get("last_place_id", ""))
         self._private_server_edit.setCurrentText(S.get("last_private_server", ""))
 
@@ -3172,7 +3156,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         content_stack = QStackedWidget()
         content_stack.setStyleSheet("background: transparent;")
 
-        CATEGORIES = ["General", "Roblox", "Discord", "Themes", "Misc", "Developer"]
+        CATEGORIES = ["General", "Roblox", "Themes", "Misc", "Developer"]
         cat_buttons: list[QPushButton] = []
 
         def _switch_cat(idx: int):
@@ -3831,112 +3815,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         f.addStretch(1)
 
-        # Discord (Page 2)
-        sa, f = _scrollable()
-        content_stack.addWidget(sa)
-
-        dc = S.get("discord_webhook", {})
-
-        f.addWidget(_sec("WEBHOOK"))
-        self._sett_dc_enabled_chk = QCheckBox("Enable Discord Webhook")
-        self._sett_dc_enabled_chk.setChecked(dc.get("enabled", False))
-        self._sett_dc_enabled_chk.setToolTip(
-            "Forward log events to a Discord channel via webhook.\n"
-            "All events that pass your filters will be posted automatically."
-        )
-        self._sett_dc_enabled_chk.stateChanged.connect(self._on_dc_save)
-        f.addWidget(self._sett_dc_enabled_chk)
-
-        url_row = QHBoxLayout()
-        url_row.setContentsMargins(0, 0, 0, 0)
-        url_lbl = QLabel("Webhook URL")
-        url_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
-        url_row.addWidget(url_lbl)
-        f.addLayout(url_row)
-        self._sett_dc_url_edit = QLineEdit()
-        self._sett_dc_url_edit.setPlaceholderText("https://discord.com/api/webhooks/...")
-        self._sett_dc_url_edit.setText(dc.get("url", ""))
-        self._sett_dc_url_edit.editingFinished.connect(self._on_dc_save)
-        f.addWidget(self._sett_dc_url_edit)
-
-        f.addWidget(_sec("PINGS"))
-        ping_row = QHBoxLayout()
-        ping_row.setContentsMargins(0, 0, 0, 0)
-        self._sett_dc_ping_chk = QCheckBox("Ping user on alerts")
-        self._sett_dc_ping_chk.setChecked(dc.get("enable_ping", False))
-        self._sett_dc_ping_chk.setToolTip("Mention a Discord user ID in alert messages.")
-        self._sett_dc_ping_chk.stateChanged.connect(self._on_dc_save)
-        ping_row.addWidget(self._sett_dc_ping_chk)
-        self._sett_dc_pingid_edit = QLineEdit()
-        self._sett_dc_pingid_edit.setPlaceholderText("User ID (e.g. 123456789)")
-        self._sett_dc_pingid_edit.setText(dc.get("ping_user_id", ""))
-        self._sett_dc_pingid_edit.setFixedWidth(160)
-        self._sett_dc_pingid_edit.editingFinished.connect(self._on_dc_save)
-        ping_row.addWidget(self._sett_dc_pingid_edit)
-        f.addLayout(ping_row)
-
-        self._sett_dc_pingerr_chk = QCheckBox("Ping only on [ERROR]")
-        self._sett_dc_pingerr_chk.setChecked(dc.get("ping_on_error", True))
-        self._sett_dc_pingerr_chk.setToolTip(
-            "Only mention the user for [ERROR] messages, not every event."
-        )
-        self._sett_dc_pingerr_chk.stateChanged.connect(self._on_dc_save)
-        f.addLayout(_sub_indent(self._sett_dc_pingerr_chk))
-
-        f.addWidget(_sec("SCREENSHOTS"))
-        ss_row = QHBoxLayout()
-        ss_row.setContentsMargins(0, 0, 0, 0)
-        self._sett_dc_ss_chk = QCheckBox("Screenshot every")
-        self._sett_dc_ss_chk.setChecked(dc.get("screenshot_enabled", False))
-        self._sett_dc_ss_chk.setToolTip(
-            "Periodically capture a screenshot and upload it to Discord via the webhook."
-        )
-        self._sett_dc_ss_chk.stateChanged.connect(self._on_dc_save)
-        ss_row.addWidget(self._sett_dc_ss_chk)
-        self._sett_dc_ss_spin = QSpinBox()
-        self._sett_dc_ss_spin.setRange(1, 1440)
-        self._sett_dc_ss_spin.setValue(int(dc.get("screenshot_interval_minutes", 60)))
-        self._sett_dc_ss_spin.setSuffix(" min")
-        self._sett_dc_ss_spin.setFixedWidth(80)
-        self._sett_dc_ss_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._sett_dc_ss_spin.valueChanged.connect(self._on_dc_save)
-        ss_row.addWidget(self._sett_dc_ss_spin)
-        ss_row.addStretch(1)
-        f.addLayout(ss_row)
-
-        f.addWidget(_sec("LOG FILTERS"))
-        _filter_lbl = QLabel(
-            "Choose which event types are forwarded to Discord."
-        )
-        _filter_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
-        _filter_lbl.setWordWrap(True)
-        f.addWidget(_filter_lbl)
-
-        _log_fields = [
-            ("log_errors", "Log [ERROR]", True),
-            ("log_success", "Log [SUCCESS]", True),
-            ("log_warnings", "Log [WARNING]", True),
-            ("log_info", "Log [INFO]", False),
-            ("log_auto_rejoin", "Log Auto-Rejoin events", True),
-            ("log_auto_rejoin_console", "Log Auto-Rejoin console", False),
-        ]
-        self._sett_dc_log_chks: dict[str, QCheckBox] = {}
-        for key, label, default in _log_fields:
-            cb = QCheckBox(label)
-            cb.setChecked(dc.get(key, default))
-            cb.stateChanged.connect(self._on_dc_save)
-            f.addWidget(cb)
-            self._sett_dc_log_chks[key] = cb
-
-        f.addWidget(_sec("ACTIONS"))
-        _test_btn = QPushButton("Test Webhook")
-        _test_btn.setToolTip(
-            "Send a test embed to the configured webhook URL to verify it is working."
-        )
-        _test_btn.clicked.connect(self._on_dc_test)
-        f.addWidget(_test_btn)
-
-        f.addStretch(1)
 
         # Themes (Page 3)
         sa, f = _scrollable()
@@ -5701,55 +5579,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._ws_server:
             self._ws_server.stop()
 
-    def _on_dc_save(self, *_):
-        try:
-            dc = actions.load_ui_settings().get("discord_webhook", {})
-            dc["enabled"] = self._sett_dc_enabled_chk.isChecked()
-            dc["url"] = self._sett_dc_url_edit.text().strip()
-            dc["enable_ping"] = self._sett_dc_ping_chk.isChecked()
-            dc["ping_user_id"] = self._sett_dc_pingid_edit.text().strip()
-            dc["ping_on_error"] = self._sett_dc_pingerr_chk.isChecked()
-            dc["screenshot_enabled"] = self._sett_dc_ss_chk.isChecked()
-            dc["screenshot_interval_minutes"] = self._sett_dc_ss_spin.value()
-            for key, cb in self._sett_dc_log_chks.items():
-                dc[key] = cb.isChecked()
-            actions.save_ui_setting("discord_webhook", dc)
-            if dc.get("enabled") and dc.get("screenshot_enabled"):
-                webhook.start_screenshot_loop(
-                    lambda: actions.get_ui_setting("discord_webhook", {})
-                )
-            else:
-                webhook.stop_screenshot_loop()
-        except Exception as e:
-            print(f"[Discord] Failed to save settings: {e}")
-
-    def _on_dc_test(self):
-        url = self._sett_dc_url_edit.text().strip()
-        if not url:
-            QMessageBox.warning(self, "Missing URL", "Enter a Webhook URL first.")
-            return
-        def _do():
-            try:
-                payload = {
-                    "embeds": [{
-                        "title": "Roblox Account Manager Test",
-                        "description": "Discord webhook integration is working correctly!",
-                        "color": 0x2ECC71,
-                        "footer": {"text": "Evanovar's Roblox Account Manager"},
-                    }]
-                }
-                resp = requests.post(
-                    url, json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=10,
-                )
-                if resp.status_code in (200, 204):
-                    print("[SUCCESS] Discord test webhook sent.")
-                else:
-                    print(f"[ERROR] Discord test failed: HTTP {resp.status_code} | {resp.text[:120]}")
-            except Exception as e:
-                print(f"[ERROR] Discord test exception: {e}")
-        threading.Thread(target=_do, daemon=True).start()
 
     _AR_ACTIVE_COLOR = "#4CAF50"
     _AR_INACTIVE_COLOR = "#EF5350"
@@ -6123,6 +5952,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             app.quit()
 
     def _perform_shutdown_cleanup(self) -> None:
+        diagnostics.set_console_wakeup(None)
         private_manager = getattr(self, '_private_server_manager', None)
         if private_manager is not None and isValid(private_manager):
             private_manager.close()
@@ -6162,11 +5992,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         try:
             if self._ws_server:
                 self._ws_server.stop()
-        except Exception:
-            pass
-        # Stop screenshot loop
-        try:
-            webhook.stop_screenshot_loop()
         except Exception:
             pass
         # Stop presence scanner
