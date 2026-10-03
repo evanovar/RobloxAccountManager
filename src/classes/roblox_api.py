@@ -15,6 +15,10 @@ from pathlib import Path
 
 from .operation_result import OperationResult, unexpected_result
 
+_PLACE_ID_RE = re.compile(r"[0-9]{1,20}")
+_JOB_ID_RE = re.compile(r"[0-9A-Za-z-]{1,64}")
+_LINK_CODE_RE = re.compile(r"[0-9A-Za-z]{1,64}")
+
 class RobloxAPI:
     """Handles all Roblox API interactions"""
     
@@ -524,6 +528,21 @@ class RobloxAPI:
                 "Select an account before launching Roblox.",
             )
 
+        game_id = str(game_id or "").strip()
+        job_id = str(job_id or "").strip()
+        if game_id and not _PLACE_ID_RE.fullmatch(game_id):
+            return OperationResult.failure(
+                "PLACE_ID_INVALID",
+                "Invalid Place ID",
+                "The Place ID can only contain digits.",
+            )
+        if job_id and not _JOB_ID_RE.fullmatch(job_id):
+            return OperationResult.failure(
+                "JOB_ID_INVALID",
+                "Invalid Job ID",
+                "The Job ID can only contain letters, digits and dashes.",
+            )
+
         print(f"[INFO] Getting authentication ticket for {username}...")
         ticket_result = RobloxAPI.get_auth_ticket(cookie)
         if not ticket_result:
@@ -575,6 +594,15 @@ class RobloxAPI:
                         "- VIP URL with privateServerLinkCode\n"
                         "- Roblox share URL"
                     )
+
+        if (link_code and not _LINK_CODE_RE.fullmatch(link_code)) or (
+            game_id and not _PLACE_ID_RE.fullmatch(game_id)
+        ):
+            return OperationResult.failure(
+                "PRIVATE_SERVER_INVALID",
+                "Invalid Private Server",
+                "The private server link contains unexpected characters.",
+            )
 
         if not game_id:
             print("[ERROR] No Place ID provided.")
