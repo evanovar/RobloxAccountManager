@@ -8450,6 +8450,18 @@ class _PasswordDialog(QDialog):
         self.accept()
 
 
+def _show_account_recovery_warning(manager):
+    source = manager.accounts_recovery_source
+    if source:
+        QMessageBox.warning(
+            None,
+            "Accounts Recovered",
+            "The latest saved accounts could not be opened. Your previous "
+            "saved copy was loaded instead. Recent changes may be missing.\n\n"
+            f"Backup:\n{source}",
+        )
+
+
 def main(icon_path: str | None = None) -> int:
     # QApplication MUST exist before any QWidget / QDialog is created.
     # Create it first, before setup_encryption() and before _PasswordDialog.
@@ -8553,6 +8565,8 @@ def main(icon_path: str | None = None) -> int:
             f"Details were saved to:\n{crash_path}",
         )
         return 1
+
+    _show_account_recovery_warning(manager)
 
     if not icon_path or not os.path.exists(icon_path):
         icon_path = os.path.join(get_data_dir(), "icon.ico")

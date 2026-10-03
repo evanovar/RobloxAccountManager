@@ -1,5 +1,3 @@
-"""Account persistence and recovery from encryption or replacement failures."""
-
 import json
 import os
 import tempfile
@@ -50,14 +48,16 @@ class SaveAccountsTests(unittest.TestCase):
         again = am.RobloxAccountManager()
         self.assertEqual(sorted(again.accounts), ["alice"])
 
-    def test_replace_failure_falls_back_to_direct_write(self):
+    def test_replace_failure_preserves_the_original_file(self):
         manager = self.make_manager(encrypted=True)
         manager.accounts["bob"] = {"username": "bob", "cookie": "c2"}
         with mock.patch.object(am.os, "replace", side_effect=PermissionError("locked")):
-            manager.save_accounts()
+            with self.assertRaises(PermissionError):
+                manager.save_accounts()
         again = am.RobloxAccountManager()
-        self.assertEqual(sorted(again.accounts), ["alice", "bob"])
+        self.assertEqual(sorted(again.accounts), ["alice"])
         self.assertFalse(os.path.exists(manager.accounts_file + ".tmp"))
+        self.assertFalse(os.path.exists(manager.accounts_backup_file + ".tmp"))
 
 
 if __name__ == "__main__":

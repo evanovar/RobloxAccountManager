@@ -48,6 +48,10 @@ class RobloxAccountManager:
             os.makedirs(self.data_folder)
         
         self.accounts_file = os.path.join(self.data_folder, "saved_accounts.json")
+        self.accounts_backup_file = self.accounts_file + ".bak"
+        self.accounts_recovery_source = None
+        self._using_accounts_backup = False
+        self._refresh_accounts_backup = False
         self.encryption_config = EncryptionConfig(os.path.join(self.data_folder, "encryption_config.json"))
         self.encryptor = None
         self.secure_settings = {}
@@ -87,53 +91,63 @@ class RobloxAccountManager:
         
     def load_accounts(self):
         """Load saved accounts from JSON file"""
-        if os.path.exists(self.accounts_file):
+        if not os.path.exists(self.accounts_file) and not os.path.exists(self.accounts_backup_file):
+            self.secure_settings = {}
+            return {}
+        try:
+            data, _, _ = self._read_accounts_payload(self.accounts_file)
+            self._using_accounts_backup = False
+            self.accounts_recovery_source = None
+        except (AccountDataError, AccountPasswordError, HardwareAccountDecryptionError) as main_error:
             try:
-                with open(self.accounts_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            except json.JSONDecodeError as exc:
-                raise AccountDataError(
-                    "saved_accounts.json does not contain valid JSON."
-                ) from exc
-            except OSError as exc:
-                raise AccountDataError(
-                    "saved_accounts.json could not be read."
-                ) from exc
+                data, _, _ = self._read_accounts_payload(self.accounts_backup_file, backup=True)
+            except (AccountDataError, AccountPasswordError, HardwareAccountDecryptionError) as backup_error:
+                raise main_error from backup_error
+            self._using_accounts_backup = True
+            self.accounts_recovery_source = self.accounts_backup_file
+            print("[WARNING] Accounts recovered from saved_accounts.json.bak. Recent changes may be missing.")
+        accounts = self._extract_accounts_payload(data)
+        self._migrate_accounts(accounts)
+        return accounts
 
-            if not isinstance(data, dict):
+    def _read_accounts_payload(self, path, backup=False):
+        name = os.path.basename(path)
+        try:
+            with open(path, 'rb') as handle:
+                contents = handle.read()
+            document = json.loads(contents.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise AccountDataError(f"{name} does not contain valid JSON.") from exc
+        except OSError as exc:
+            raise AccountDataError(f"{name} could not be read.") from exc
+        if not isinstance(document, dict):
+            raise AccountDataError(f"{name} does not contain an account object.")
+        encrypted = bool(document.get('encrypted'))
+        if backup and encrypted != bool(self.encryptor):
+            raise AccountDataError("The account backup does not match the active encryption method.")
+        if encrypted:
+            if not self.encryptor:
                 raise AccountDataError(
-                    "saved_accounts.json does not contain an account object."
+                    "The account file is encrypted, but encryption is disabled in its configuration."
                 )
-
-            if data.get('encrypted'):
-                if not self.encryptor:
-                    raise AccountDataError(
-                        "The account file is encrypted, but encryption is disabled in its configuration."
-                    )
-                try:
-                    decrypted_data = self.encryptor.decrypt_data(data.get('data'))
-                except PasswordDecryptionError as exc:
-                    raise AccountPasswordError(
-                        "The password did not authenticate saved_accounts.json."
-                    ) from exc
-                except HardwareDecryptionError as exc:
-                    raise HardwareAccountDecryptionError(
-                        "The hardware-encrypted account file could not be opened with a compatible key."
-                    ) from exc
-                except EncryptedDataError as exc:
-                    raise AccountDataError(
-                        "saved_accounts.json contains a malformed encrypted payload."
-                    ) from exc
-
-                accounts = self._extract_accounts_payload(decrypted_data)
-                self._migrate_accounts(accounts)
-                return accounts
-
-            accounts = self._extract_accounts_payload(data)
-            self._migrate_accounts(accounts)
-            return accounts
-        self.secure_settings = {}
-        return {}
+            try:
+                data = self.encryptor.decrypt_data(document.get('data'))
+            except PasswordDecryptionError as exc:
+                raise AccountPasswordError(f"The password did not authenticate {name}.") from exc
+            except HardwareDecryptionError as exc:
+                raise HardwareAccountDecryptionError(
+                    "The hardware-encrypted account file could not be opened with a compatible key."
+                ) from exc
+            except EncryptedDataError as exc:
+                raise AccountDataError(f"{name} contains a malformed encrypted payload.") from exc
+        else:
+            data = document
+        if not isinstance(data, dict):
+            raise AccountDataError("The decrypted account payload is not an object.")
+        accounts = data.get('accounts', data)
+        if not isinstance(accounts, dict) or any(not isinstance(record, dict) for record in accounts.values()):
+            raise AccountDataError(f"{name} contains invalid account records.")
+        return data, contents, encrypted
 
     def _extract_accounts_payload(self, data):
         """Support legacy account-only files and wrapped account+secure-settings files."""
@@ -227,22 +241,47 @@ class RobloxAccountManager:
         else:
             document = payload
         serialized = json.dumps(document, indent=2, ensure_ascii=False)
-
-        temp_file = self.accounts_file + ".tmp"
-        try:
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(serialized)
-            os.replace(temp_file, self.accounts_file)
-        except Exception as e:
-            print(f"[WARNING] Safe atomic save failed: {e}. Falling back to original direct write.")
-            if os.path.exists(temp_file):
+        contents = serialized.encode('utf-8')
+        backup_contents = contents
+        if not self._refresh_accounts_backup:
+            if self._using_accounts_backup:
+                backup_contents = None
+            elif os.path.exists(self.accounts_file):
                 try:
-                    os.remove(temp_file)
-                except:
-                    pass
-            # Original direct write fallback
-            with open(self.accounts_file, 'w', encoding='utf-8') as f:
-                f.write(serialized)
+                    _, previous_contents, encrypted = self._read_accounts_payload(self.accounts_file)
+                    if encrypted == bool(self.encryptor):
+                        backup_contents = previous_contents
+                except (AccountDataError, AccountPasswordError, HardwareAccountDecryptionError):
+                    # Keep a valid backup when the main file has been damaged externally.
+                    try:
+                        self._read_accounts_payload(self.accounts_backup_file, backup=True)
+                    except (AccountDataError, AccountPasswordError, HardwareAccountDecryptionError):
+                        pass
+                    else:
+                        backup_contents = None
+        if backup_contents is not None:
+            self._write_accounts_file(self.accounts_backup_file, backup_contents)
+        self._write_accounts_file(self.accounts_file, contents)
+        self._using_accounts_backup = False
+        self._refresh_accounts_backup = False
+
+    @staticmethod
+    def _write_accounts_file(path, contents):
+        """Publish a complete file atomically; never truncate the original on failure."""
+        temp_file = path + ".tmp"
+        try:
+            with open(temp_file, 'wb') as handle:
+                handle.write(contents)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_file, path)
+        finally:
+            try:
+                os.remove(temp_file)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"[WARNING] Could not remove the temporary account file: {exc}")
 
     def get_secure_setting(self, key, default=""):
         """Read a sensitive setting stored alongside encrypted account data."""
@@ -1157,6 +1196,11 @@ class RobloxAccountManager:
         return self.encryption_config.get_encryption_method()
     
     def switch_encryption_method(self, new_method, password=None, salt=None):
+        """Switch encryption while keeping the account file and backup compatible."""
+        with self._accounts_lock:
+            return self._switch_encryption_method_unlocked(new_method, password, salt)
+
+    def _switch_encryption_method_unlocked(self, new_method, password=None, salt=None):
         """Switch to a different encryption method, re-encrypting (or decrypting) saved_accounts.json in place"""
         if new_method not in ('hardware', 'password', 'none'):
             raise ValueError("Invalid encryption method. Must be 'hardware', 'password', or 'none'")
@@ -1171,6 +1215,12 @@ class RobloxAccountManager:
         current_data = self.accounts.copy()
         previous_config = copy.deepcopy(self.encryption_config.config)
         previous_encryptor = self.encryptor
+        previous_using_backup = self._using_accounts_backup
+        previous_refresh_backup = self._refresh_accounts_backup
+        previous_backup = None
+        if os.path.exists(self.accounts_backup_file):
+            with open(self.accounts_backup_file, 'rb') as handle:
+                previous_backup = handle.read()
 
         try:
             self.encryption_config.reset_encryption()
@@ -1188,11 +1238,22 @@ class RobloxAccountManager:
                 self.encryptor = None
 
             self.accounts = current_data
+            # A backup under the old method may be plaintext or need an obsolete salt.
+            self._refresh_accounts_backup = True
             self.save_accounts()
         except Exception:
             self.encryption_config.config = previous_config
             self.encryptor = previous_encryptor
             self.accounts = current_data
+            self._using_accounts_backup = previous_using_backup
+            self._refresh_accounts_backup = previous_refresh_backup
+            try:
+                if previous_backup is not None:
+                    self._write_accounts_file(self.accounts_backup_file, previous_backup)
+                elif os.path.exists(self.accounts_backup_file):
+                    os.remove(self.accounts_backup_file)
+            except OSError as exc:
+                print(f"[ERROR] Could not restore the previous account backup: {exc}")
             try:
                 self.encryption_config.save_config()
             except Exception as exc:

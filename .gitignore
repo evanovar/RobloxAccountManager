@@ -20,6 +20,7 @@ dist/
 
 # Account data (SENSITIVE - DO NOT COMMIT!)
 saved_accounts.json
+saved_accounts.json.bak
 AccountManagerData/
 
 # IDE and editor files
