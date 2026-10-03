@@ -10,7 +10,6 @@ from ctypes import wintypes
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -3307,20 +3306,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addWidget(self._sett_update_chk)
 
         # Start Menu shortcut
-        _sm_path = os.path.join(
-            os.environ.get("APPDATA", ""),
-            "Microsoft", "Windows", "Start Menu", "Programs",
-            "Roblox Account Manager.lnk"
-        )
         self._sett_startmenu_chk = QCheckBox("Add to Start Menu")
-        self._sett_startmenu_chk.setChecked(os.path.exists(_sm_path))
+        self._sett_startmenu_chk.setChecked(windows_startup_mod.is_start_menu_enabled())
         self._sett_startmenu_chk.setToolTip(
             "Create (or remove) a Start Menu shortcut for this application.\n"
             "Works with both the .exe build and the Python script."
         )
-        self._sett_startmenu_chk.stateChanged.connect(
-            lambda state: self._on_sett_start_menu(state, _sm_path)
-        )
+        self._sett_startmenu_chk.stateChanged.connect(self._on_sett_start_menu)
         f.addWidget(self._sett_startmenu_chk)
 
         _startup_enabled = windows_startup_mod.is_startup_enabled()
@@ -4064,34 +4056,21 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     QAbstractItemView.SelectionMode.SingleSelection)
             self._account_list.setSelectionMode(mode)
 
-    def _on_sett_start_menu(self, state: int, path: str):
-        enabled = (state == Qt.CheckState.Checked.value)
-        if enabled:
-            try:
-                if getattr(sys, "frozen", False):
-                    exe = sys.executable
-                else:
-                    exe = os.path.abspath(sys.argv[0])
-                ps = (
-                    f'$s=New-Object -comObject WScript.Shell;'
-                    f'$l=$s.CreateShortcut("{path}");'
-                    f'$l.TargetPath="{exe}";'
-                    f'$l.WorkingDirectory="{os.path.dirname(exe)}";'
-                    f'$l.Description="Roblox Account Manager";$l.Save()'
-                )
-                subprocess.run(["powershell", "-Command", ps],
-                               capture_output=True, creationflags=0x08000000)
-                print("[INFO] Start Menu shortcut created")
-            except Exception as e:
-                print(f"[ERROR] Failed to create shortcut: {e}")
-                self._sett_startmenu_chk.setChecked(False)
-        else:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    print("[INFO] Start Menu shortcut removed")
-            except Exception as e:
-                print(f"[ERROR] Failed to remove shortcut: {e}")
+    def _on_sett_start_menu(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        result = (
+            windows_startup_mod.enable_start_menu()
+            if enabled
+            else windows_startup_mod.disable_start_menu()
+        )
+        if result:
+            print(f"[INFO] Start Menu shortcut {'created' if enabled else 'removed'}")
+            return
+
+        self._sett_startmenu_chk.blockSignals(True)
+        self._sett_startmenu_chk.setChecked(not enabled)
+        self._sett_startmenu_chk.blockSignals(False)
+        self._show_operation_error(result)
 
     def _set_startup_checkbox(self, enabled: bool) -> None:
         if not hasattr(self, "_sett_startup_chk"):
