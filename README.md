@@ -144,7 +144,7 @@ uv run python src/main.py
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
 | Update manager | Check GitHub releases on startup or manually, then download updates from the application. |
 | Discord webhooks | Send selected log levels, Auto-Rejoin events, optional mentions, and periodic screenshots to a configured webhook. |
-| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. |
+| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. |
 | Console | Review timestamped, color-coded application output and copy or clear the current console view. |
 | Structured errors | Show specific error codes and technical details instead of generic failure messages. |
 | Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. |
@@ -168,7 +168,6 @@ The application does not include hidden telemetry, advertising SDKs, or analytic
 
 - Roblox API requests for account, game, presence, authentication, and download features.
 - GitHub requests for release and update checks.
-- Discord webhook requests when Discord integration is configured.
 - Connectivity checks used by Auto-Rejoin.
 
 Account cookies and stored WebSocket passwords remain local unless the user explicitly enables a feature that sends related data elsewhere.
@@ -211,12 +210,9 @@ This project is provided for educational and account management purposes. Users 
 
 Issues and pull requests are welcome. Keep changes focused, describe how they were tested, and avoid committing files from `AccountManagerData`.
 
-Run the tests before opening a pull request:
-
-```powershell
-uv sync --locked
-uv run --no-sync python -m unittest discover -s tests
-```
+Before opening a pull request, Run the tests with `uv run --no-sync python scripts/run_tests.py --all`.
+Use `--list` to see available tests, `--test <module-or-test-id>` for an individual
+selection, or `--suite unit`, `--suite ui`, or `--suite integration` to choose a suite.
 
 ## Support
 

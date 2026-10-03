@@ -4,6 +4,7 @@ Handles account storage, browser automation, and account management
 """
 
 import os
+import copy
 import json
 import time
 import tempfile
@@ -219,6 +220,13 @@ class RobloxAccountManager:
                 if 'cookie_valid' not in account_data:
                     account_data['cookie_valid'] = None
     
+    def _merge_existing_account(self, username, record):
+        existing = self.accounts.get(username)
+        if isinstance(existing, dict):
+            if not record.get('note'):
+                record['note'] = existing.get('note', '')
+        return record
+
     def save_accounts(self):
         """Save accounts to JSON file"""
         with self._accounts_lock:
@@ -229,18 +237,19 @@ class RobloxAccountManager:
             'accounts': self.accounts,
             'secure_settings': self._serialize_secure_settings(),
         }
+        if self.encryptor:
+            document = {
+                'encrypted': True,
+                'data': self.encryptor.encrypt_data(payload),
+            }
+        else:
+            document = payload
+        serialized = json.dumps(document, indent=2, ensure_ascii=False)
+
         temp_file = self.accounts_file + ".tmp"
         try:
             with open(temp_file, 'w', encoding='utf-8') as f:
-                if self.encryptor:
-                    encrypted_package = self.encryptor.encrypt_data(payload)
-                    encrypted_data = {
-                        'encrypted': True,
-                        'data': encrypted_package
-                    }
-                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
-                else:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write(serialized)
             os.replace(temp_file, self.accounts_file)
         except Exception as e:
             print(f"[WARNING] Safe atomic save failed: {e}. Falling back to original direct write.")
@@ -251,15 +260,7 @@ class RobloxAccountManager:
                     pass
             # Original direct write fallback
             with open(self.accounts_file, 'w', encoding='utf-8') as f:
-                if self.encryptor:
-                    encrypted_package = self.encryptor.encrypt_data(payload)
-                    encrypted_data = {
-                        'encrypted': True,
-                        'data': encrypted_package
-                    }
-                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
-                else:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write(serialized)
 
     def get_secure_setting(self, key, default=""):
         """Read a sensitive setting stored alongside encrypted account data."""
@@ -901,7 +902,7 @@ class RobloxAccountManager:
                         if username and cookie:
                             saved_password = password or instance_passwords[driver_index]
                             with self._accounts_lock:
-                                self.accounts[username] = {
+                                self.accounts[username] = self._merge_existing_account(username, {
                                     'username':   username,
                                     'cookie':     cookie,
                                     'user_id':    user_id or 0,
@@ -910,7 +911,7 @@ class RobloxAccountManager:
                                     'note':       '',
                                     'avatar_url': avatar_url or '',
                                     'cookie_valid': True,
-                                }
+                                })
 
                             print(f"[SUCCESS] Successfully added account: {username}")
                             nonlocal success_count
@@ -1058,7 +1059,7 @@ class RobloxAccountManager:
                 pass
 
             with self._accounts_lock:
-                self.accounts[username] = {
+                self.accounts[username] = self._merge_existing_account(username, {
                     'username':   username,
                     'cookie':     cookie,
                     'user_id':    user_id,
@@ -1066,7 +1067,7 @@ class RobloxAccountManager:
                     'note':       '',
                     'avatar_url': avatar_url,
                     'cookie_valid': True,
-                }
+                })
                 if save:
                     self.save_accounts()
 
@@ -1177,6 +1178,8 @@ class RobloxAccountManager:
         """Switch to a different encryption method, re-encrypting (or decrypting) saved_accounts.json in place"""
         if new_method not in ('hardware', 'password', 'none'):
             raise ValueError("Invalid encryption method. Must be 'hardware', 'password', or 'none'")
+        if new_method == 'password' and password is None:
+            raise ValueError("Password must be provided for password encryption")
 
         current_method = self.get_encryption_method() or 'none'
         if current_method == new_method:
@@ -1184,27 +1187,39 @@ class RobloxAccountManager:
             return
 
         current_data = self.accounts.copy()
+        previous_config = copy.deepcopy(self.encryption_config.config)
+        previous_encryptor = self.encryptor
+        previous_password_hash = self._entered_password_hash
 
-        self.encryption_config.reset_encryption()
+        try:
+            self.encryption_config.reset_encryption()
 
-        if new_method == 'hardware':
-            self.encryption_config.set_encryption_method('hardware')
-            self.encryptor = HardwareEncryption()
-            self._entered_password_hash = None
-        elif new_method == 'password':
-            if password is None:
-                raise ValueError("Password must be provided for password encryption")
-            if salt is None:
-                salt = os.urandom(32).hex()
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-            self.encryption_config.enable_password_encryption(salt, password_hash)
-            self._entered_password_hash = password_hash
-            self.encryptor = PasswordEncryption(password, salt)
-        else:  # 'none'
-            self.encryption_config.disable_encryption()
-            self.encryptor = None
-            self._entered_password_hash = None
+            if new_method == 'hardware':
+                self.encryption_config.set_encryption_method('hardware')
+                self.encryptor = HardwareEncryption()
+                self._entered_password_hash = None
+            elif new_method == 'password':
+                if salt is None:
+                    salt = os.urandom(32).hex()
+                password_hash = hashlib.sha256(password.encode()).hexdigest()
+                self.encryption_config.enable_password_encryption(salt, password_hash)
+                self._entered_password_hash = password_hash
+                self.encryptor = PasswordEncryption(password, salt)
+            else:  # 'none'
+                self.encryption_config.disable_encryption()
+                self.encryptor = None
+                self._entered_password_hash = None
 
-        self.accounts = current_data
-        self.save_accounts()
+            self.accounts = current_data
+            self.save_accounts()
+        except Exception:
+            self.encryption_config.config = previous_config
+            self.encryptor = previous_encryptor
+            self._entered_password_hash = previous_password_hash
+            self.accounts = current_data
+            try:
+                self.encryption_config.save_config()
+            except Exception as exc:
+                print(f"[ERROR] Could not restore the previous encryption config: {exc}")
+            raise
         print(f"[SUCCESS] Switched to {new_method} encryption")

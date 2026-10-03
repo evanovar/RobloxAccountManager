@@ -20,6 +20,8 @@ from utils.app_paths import get_data_dir
 
 _LOCK = threading.RLock()
 _RECENT_LINES: collections.deque[str] = collections.deque(maxlen=500)
+_CONSOLE_QUEUE: collections.deque[tuple[str, str | None]] = collections.deque(maxlen=2000)
+_CONSOLE_WAKEUP = None
 _SESSION_LOG_PATH = ""
 _STARTUP_STAGE = "process import"
 _APP_VERSION = "unknown"
@@ -97,6 +99,37 @@ def _record_line(line: str, stream_name: str = "stdout") -> None:
                 pass
         else:
             _safe_write(_SESSION_LOG_PATH, entry + "\n")
+
+    color = None
+    for marker, value in (
+        ("[ERROR]", "#EF5350"),
+        ("[SUCCESS]", "#66BB6A"),
+        ("[WARNING]", "#FFA726"),
+        ("[INFO]", "#5BB8FF"),
+        ("[Auto-Rejoin]", "#AB47BC"),
+    ):
+        if marker in cleaned:
+            color = value
+            break
+    with _LOCK:
+        was_empty = not _CONSOLE_QUEUE
+        _CONSOLE_QUEUE.append((cleaned, color))
+        wakeup = _CONSOLE_WAKEUP
+    if was_empty and wakeup is not None:
+        try:
+            wakeup()
+        except Exception:
+            pass
+
+
+def set_console_wakeup(callback) -> None:
+    global _CONSOLE_WAKEUP
+    with _LOCK:
+        _CONSOLE_WAKEUP = callback
+
+
+def console_queue() -> collections.deque:
+    return _CONSOLE_QUEUE
 
 
 def flush_session_log() -> None:
