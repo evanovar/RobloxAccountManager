@@ -314,13 +314,17 @@ class EncryptionConfig:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                if isinstance(config, dict):
+                    config.pop('password_hash', None)
+                return config
             except:
                 return {}
         return {}
     
     def save_config(self):
         """Save encryption configuration to file"""
+        self.config.pop('password_hash', None)
         config_dir = os.path.dirname(self.config_file)
         if config_dir and not os.path.exists(config_dir):
             os.makedirs(config_dir)
@@ -361,10 +365,6 @@ class EncryptionConfig:
         """Get stored salt for password encryption"""
         return self.config.get('salt', None)
     
-    def get_password_hash(self):
-        """Get stored password hash"""
-        return self.config.get('password_hash', None)
-    
     def enable_hardware_encryption(self):
         """Enable hardware-based encryption"""
         self.config['encryption_enabled'] = True
@@ -372,12 +372,11 @@ class EncryptionConfig:
         self.config['setup_completed'] = True
         self.save_config()
     
-    def enable_password_encryption(self, salt, password_hash):
+    def enable_password_encryption(self, salt):
         """Enable password-based encryption"""
         self.config['encryption_enabled'] = True
         self.config['encryption_method'] = 'password'
         self.config['salt'] = salt
-        self.config['password_hash'] = password_hash
         self.config['setup_completed'] = True
         self.save_config()
     

@@ -8,7 +8,6 @@ import copy
 import json
 import time
 import tempfile
-import hashlib
 import shutil
 import traceback
 import threading
@@ -54,7 +53,6 @@ class RobloxAccountManager:
         self.secure_settings = {}
         self._secure_settings_encryptor = None
         self._unavailable_secure_settings = None
-        self._entered_password_hash = None
         self._accounts_lock = threading.RLock()
         self._browser_setup_lock = threading.Lock()
         self._pre_launch_hook = None
@@ -68,7 +66,6 @@ class RobloxAccountManager:
                     raise PasswordRequiredError(
                         "Password is required for password-based encryption."
                     )
-                self._entered_password_hash = hashlib.sha256(password.encode()).hexdigest()
                 salt = self.encryption_config.get_salt()
                 if not salt:
                     raise AccountDataError(
@@ -130,7 +127,6 @@ class RobloxAccountManager:
 
                 accounts = self._extract_accounts_payload(decrypted_data)
                 self._migrate_accounts(accounts)
-                self._repair_password_hash_if_needed()
                 return accounts
 
             accounts = self._extract_accounts_payload(data)
@@ -138,20 +134,6 @@ class RobloxAccountManager:
             return accounts
         self.secure_settings = {}
         return {}
-
-    def _repair_password_hash_if_needed(self):
-        if not self._entered_password_hash:
-            return
-        stored_hash = self.encryption_config.get_password_hash()
-        if stored_hash == self._entered_password_hash:
-            return
-        if self.encryption_config.get_encryption_method() != 'password':
-            return
-        self.encryption_config.config['password_hash'] = self._entered_password_hash
-        try:
-            self.encryption_config.save_config()
-        except Exception:
-            pass
 
     def _extract_accounts_payload(self, data):
         """Support legacy account-only files and wrapped account+secure-settings files."""
@@ -1189,7 +1171,6 @@ class RobloxAccountManager:
         current_data = self.accounts.copy()
         previous_config = copy.deepcopy(self.encryption_config.config)
         previous_encryptor = self.encryptor
-        previous_password_hash = self._entered_password_hash
 
         try:
             self.encryption_config.reset_encryption()
@@ -1197,25 +1178,20 @@ class RobloxAccountManager:
             if new_method == 'hardware':
                 self.encryption_config.set_encryption_method('hardware')
                 self.encryptor = HardwareEncryption()
-                self._entered_password_hash = None
             elif new_method == 'password':
                 if salt is None:
                     salt = os.urandom(32).hex()
-                password_hash = hashlib.sha256(password.encode()).hexdigest()
-                self.encryption_config.enable_password_encryption(salt, password_hash)
-                self._entered_password_hash = password_hash
+                self.encryption_config.enable_password_encryption(salt)
                 self.encryptor = PasswordEncryption(password, salt)
             else:  # 'none'
                 self.encryption_config.disable_encryption()
                 self.encryptor = None
-                self._entered_password_hash = None
 
             self.accounts = current_data
             self.save_accounts()
         except Exception:
             self.encryption_config.config = previous_config
             self.encryptor = previous_encryptor
-            self._entered_password_hash = previous_password_hash
             self.accounts = current_data
             try:
                 self.encryption_config.save_config()

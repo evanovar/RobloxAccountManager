@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-import hashlib
 import os
 import re
 import shutil
@@ -2222,10 +2221,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             data_folder = get_data_dir()
             enc = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
             temp = PasswordEncryption(pw1)
-            enc.enable_password_encryption(
-                temp.get_salt_b64(),
-                hashlib.sha256(pw1.encode()).hexdigest(),
-            )
+            enc.enable_password_encryption(temp.get_salt_b64())
             _show_info(self, "Password Encryption Enabled",
                        "Password encryption is now active.\n"
                        "Keep your password safe, there is no recovery method.")
