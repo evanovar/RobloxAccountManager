@@ -13,6 +13,9 @@ Supported commands (case-insensitive, shlex-parsed):
 
 Authentication (when websocket_require_password is true):
   AUTH <password> | <command>
+
+Connections that send an Origin header (every browser page) are refused unless
+the origin is listed in the websocket_allowed_origins setting.
 """
 
 from __future__ import annotations
@@ -111,7 +114,8 @@ class WebSocketServer:
         port = self._get_port()
         host = "localhost"
         try:
-            async with websockets.serve(self._client_handler, host, port):
+            origins = [None, *self._get_allowed_origins()]
+            async with websockets.serve(self._client_handler, host, port, origins=origins):
                 self.running = True
                 self._async_stop = asyncio.Event()
                 print(f"[INFO] WebSocket server started at ws://{host}:{port}")
@@ -431,6 +435,12 @@ class WebSocketServer:
             return int(self._get_settings().get("websocket_port", 7963))
         except Exception:
             return 7963
+
+    def _get_allowed_origins(self) -> list[str]:
+        origins = self._get_settings().get("websocket_allowed_origins", [])
+        if not isinstance(origins, list):
+            return []
+        return [o.strip() for o in origins if isinstance(o, str) and o.strip()]
 
     def _get_max_message_len(self) -> int:
         try:
