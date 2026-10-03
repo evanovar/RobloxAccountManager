@@ -83,7 +83,7 @@ uv run python src/main.py
 | JavaScript login | Open multiple browser sessions and run custom JavaScript for advanced login workflows. |
 | Groups and notes | Organize accounts into groups and assign notes to one or multiple selected accounts. |
 | Account list controls | Use avatars, drag-and-drop ordering, multi-select actions, refresh, deletion, and controlled password or cookie copying. |
-| Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. |
+| Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. The startup check and the delay between accounts can be changed under Settings > General. |
 | Activity data | Display online status, Roblox memory usage, and CPU usage beside saved accounts. |
 
 ### Game launching
