@@ -209,6 +209,11 @@ This project is provided for educational and account management purposes. Users 
 
 Issues and pull requests are welcome. Keep changes focused, describe how they were tested, and avoid committing files from `AccountManagerData`.
 
+Run the regression tests with `uv run --no-sync python scripts/run_tests.py --all`.
+Use `--list` to see available tests, `--test <module-or-test-id>` for an individual
+selection, or `--suite unit`, `--suite ui`, or `--suite integration` to choose a suite.
+See [tests/README.md](tests/README.md) for setup, organization, and test isolation.
+
 ## Support
 
 - [Discord community](https://discord.gg/SZaZU8zwZA)
