@@ -168,7 +168,7 @@ The application does not include hidden telemetry, advertising SDKs, or analytic
 
 - Roblox API requests for account, game, presence, authentication, and download features.
 - GitHub requests for release and update checks.
-- Connectivity checks used by Auto-Rejoin.
+- Connectivity checks used by Auto-Rejoin. They use Google and Cloudflare by default, and `connectivity_check_urls` in `AccountManagerData/ui_settings.json` can replace them with your own list of addresses.
 
 Account cookies and stored WebSocket passwords remain local unless the user explicitly enables a feature that sends related data elsewhere.
 
