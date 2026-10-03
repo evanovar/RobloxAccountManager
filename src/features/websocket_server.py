@@ -203,7 +203,7 @@ class WebSocketServer:
             return False, "", "Auth format: AUTH <password> | <command>"
 
         provided = " ".join(auth_parts[1:])
-        if not secrets.compare_digest(provided, stored):
+        if not secrets.compare_digest(provided.encode("utf-8"), stored.encode("utf-8")):
             return False, "", "Authentication failed"
 
         return True, cmd_seg, None
