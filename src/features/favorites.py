@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import threading
 
 from utils.app_paths import get_data_dir
+from utils.atomic_io import quarantine_corrupt, write_json_atomic
 
 _DATA_DIR = get_data_dir()
 _FAVORITES_FILE = os.path.join(_DATA_DIR, "favorites.json")
+_LOCK = threading.RLock()
 
 
 def load_favorites() -> list[dict]:
@@ -22,54 +24,40 @@ def load_favorites() -> list[dict]:
                 data = json.load(f)
             if isinstance(data, list):
                 return data
+            quarantine_corrupt(_FAVORITES_FILE)
+    except ValueError:
+        quarantine_corrupt(_FAVORITES_FILE)
     except Exception:
         pass
     return []
 
 
 def save_favorites(favorites: list[dict]) -> None:
-    os.makedirs(_DATA_DIR, exist_ok=True)
-    descriptor, temp_path = tempfile.mkstemp(
-        prefix=".favorites.", suffix=".tmp", dir=_DATA_DIR
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as f:
-            json.dump(favorites, f, indent=2)
-        os.replace(temp_path, _FAVORITES_FILE)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-        raise
+    write_json_atomic(_FAVORITES_FILE, favorites, prefix=".favorites.")
 
 
 def add_favorite(place_id: str, name: str, private_server: str = "") -> None:
     if not place_id:
         return
-    favorites = load_favorites()
-    favorites = [
-        f for f in favorites
-        if not (str(f.get("place_id")) == str(place_id)
-                and str(f.get("private_server", "")) == str(private_server))
-    ]
-    favorites.insert(0, {
-        "place_id": str(place_id),
-        "name": name or str(place_id),
-        "private_server": private_server or "",
-    })
-    save_favorites(favorites)
+    with _LOCK:
+        favorites = [
+            f for f in load_favorites()
+            if not (str(f.get("place_id")) == str(place_id)
+                    and str(f.get("private_server", "")) == str(private_server))
+        ]
+        favorites.insert(0, {
+            "place_id": str(place_id),
+            "name": name or str(place_id),
+            "private_server": private_server or "",
+        })
+        save_favorites(favorites)
 
 
 def remove_favorite(place_id: str, private_server: str = "") -> None:
-    favorites = load_favorites()
-    favorites = [
-        f for f in favorites
-        if not (str(f.get("place_id")) == str(place_id)
-                and str(f.get("private_server", "")) == str(private_server))
-    ]
-    save_favorites(favorites)
+    with _LOCK:
+        favorites = [
+            f for f in load_favorites()
+            if not (str(f.get("place_id")) == str(place_id)
+                    and str(f.get("private_server", "")) == str(private_server))
+        ]
+        save_favorites(favorites)
