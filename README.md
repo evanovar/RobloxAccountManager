@@ -144,7 +144,7 @@ uv run python src/main.py
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
 | Update manager | Check GitHub releases on startup or manually, then download updates from the application. |
 | Discord webhooks | Send selected log levels, Auto-Rejoin events, optional mentions, and periodic screenshots to a configured webhook. |
-| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. |
+| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. After 10 wrong passwords within a minute, further attempts are refused for a while, and `websocket_max_auth_failures` in the same file changes that limit (0 turns it off). |
 | Console | Review timestamped, color-coded application output and copy or clear the current console view. |
 | Structured errors | Show specific error codes and technical details instead of generic failure messages. |
 | Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. |
