@@ -1109,14 +1109,14 @@ class RobloxAccountManager:
 
     def delete_account(self, username):
         """Delete a saved account"""
-        if username in self.accounts:
-            del self.accounts[username]
-            self.save_accounts()
-            print(f"[SUCCESS] Deleted account: {username}")
-            return True
-        else:
-            print(f"[ERROR] Account '{username}' not found")
-            return False
+        with self._accounts_lock:
+            if username in self.accounts:
+                del self.accounts[username]
+                self.save_accounts()
+                print(f"[SUCCESS] Deleted account: {username}")
+                return True
+        print(f"[ERROR] Account '{username}' not found")
+        return False
     
     def launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         """Launch Roblox game with specified account"""
@@ -1174,12 +1174,12 @@ class RobloxAccountManager:
 
     def set_account_note(self, username, note):
         """Set or update note for an account"""
-        if username not in self.accounts:
-            print(f"[ERROR] Account '{username}' not found")
-            return False
-        
-        self.accounts[username]['note'] = note
-        self.save_accounts()
+        with self._accounts_lock:
+            if username not in self.accounts:
+                print(f"[ERROR] Account '{username}' not found")
+                return False
+            self.accounts[username]['note'] = note
+            self.save_accounts()
         print(f"[SUCCESS] Note updated for account: {username}")
         return True
     
