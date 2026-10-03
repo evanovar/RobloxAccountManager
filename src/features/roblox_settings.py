@@ -75,11 +75,94 @@ class RobloxSetting:
         }
 
 
-def get_settings_path() -> Path | None:
+def get_default_settings_path() -> Path | None:
     local_appdata = os.getenv("LOCALAPPDATA")
     if not local_appdata:
         return None
     return Path(local_appdata) / "Roblox" / _SETTINGS_FILENAME
+
+
+def get_settings_path() -> Path | None:
+    custom_path = settings_store_mod.get("roblox_settings_path", "")
+    if isinstance(custom_path, str) and custom_path.strip():
+        return Path(custom_path)
+    return get_default_settings_path()
+
+
+def _same_settings_path(first, second) -> bool:
+    if first is None or second is None:
+        return first is second
+    return os.path.normcase(os.path.abspath(first)) == os.path.normcase(os.path.abspath(second))
+
+
+def set_settings_path(custom_path: str) -> OperationResult:
+    with _WRITE_LOCK:
+        value = custom_path.strip().strip('"')
+        try:
+            path = (
+                Path(os.path.abspath(os.path.expanduser(os.path.expandvars(value))))
+                if value else get_default_settings_path()
+            )
+            if value:
+                if path.suffix.lower() != ".xml":
+                    return OperationResult.failure(
+                        "ROBLOX_SETTINGS_PATH_INVALID",
+                        "Invalid Roblox Settings Path",
+                        "Select a Roblox settings XML file.",
+                    )
+                loaded = load_settings(path)
+                if not loaded:
+                    return loaded
+        except (OSError, ValueError) as exc:
+            return OperationResult.failure(
+                "ROBLOX_SETTINGS_PATH_INVALID",
+                "Invalid Roblox Settings Path",
+                "The selected Roblox settings path is invalid.",
+                detail=str(exc),
+            )
+
+        previous_path = get_settings_path()
+        changed = not _same_settings_path(previous_path, path)
+        profile = _load_local_profile_file() or {}
+        source_path = profile.get("source", {}).get("path") or get_default_settings_path()
+        released_lock = False
+        try:
+            if (
+                changed and profile.get("lock_owned", False)
+                and _same_settings_path(source_path, previous_path)
+                and previous_path is not None and previous_path.is_file()
+            ):
+                released_lock = not bool(previous_path.stat().st_mode & stat.S_IWRITE)
+                _set_writable(previous_path)
+            if value:
+                settings_store_mod.save("roblox_settings_path", str(path))
+            else:
+                settings_store_mod.remove("roblox_settings_path")
+        except OSError as exc:
+            if released_lock:
+                try:
+                    _set_read_only(previous_path, True)
+                except OSError as restore_exc:
+                    print(f"[ERROR] Could not restore the previous settings lock: {restore_exc}")
+            return OperationResult.failure(
+                "ROBLOX_SETTINGS_CONFIG_WRITE_FAILED",
+                "Roblox Settings Location Could Not Be Saved",
+                "The settings location could not be changed. Check file permissions and try again.",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        _clear_auto_apply_cache()
+        return OperationResult.success(data={
+            "path": str(path) if path else "",
+            "changed": changed,
+        })
+
+
+def set_settings_path_async(custom_path: str, on_done) -> None:
+    threading.Thread(
+        target=lambda: on_done(set_settings_path(custom_path)),
+        daemon=True,
+        name="roblox-settings-path",
+    ).start()
 
 
 def _get_ui_settings_path() -> Path:
@@ -197,6 +280,16 @@ def _profile_from_settings(
     replace_values: bool = False,
 ) -> dict:
     existing = existing if isinstance(existing, dict) else {}
+    source_path = str(data.get("path", ""))
+    old_source_path = existing.get("source", {}).get("path") or get_default_settings_path()
+    if source_path and existing and not _same_settings_path(old_source_path, source_path):
+        existing = {
+            "advanced_auto_apply": bool(existing.get(
+                "advanced_auto_apply", existing.get("auto_apply", False),
+            )),
+            "lock_owned": False,
+        }
+        replace_values = True
     old_values = _legacy_profile_values()
     old_managed = old_values["managed"]
     existing_settings = existing.get("settings", {})
@@ -272,6 +365,7 @@ def _profile_from_settings(
         )),
         "lock_owned": bool(existing.get("lock_owned", old_values["lock_owned"])),
         "source": {
+            "path": source_path,
             "xml_hash": str(data.get("file_hash", "")),
             "captured_at": captured_at,
         },
@@ -371,7 +465,8 @@ def save_local_profile(profile: dict) -> OperationResult:
 
 def _load_profile_for_edit() -> tuple[dict | None, OperationResult | None]:
     profile = _load_local_profile_file()
-    if profile is None:
+    source_path = (profile or {}).get("source", {}).get("path") or get_default_settings_path()
+    if profile is None or not _same_settings_path(source_path, get_settings_path()):
         loaded = load_local_profile()
         if not loaded:
             return None, loaded
@@ -617,8 +712,8 @@ def _parse_settings(path: Path) -> tuple[ET.ElementTree, list[RobloxSetting]]:
     return tree, settings
 
 
-def load_settings() -> OperationResult:
-    path = get_settings_path()
+def load_settings(path: Path | None = None) -> OperationResult:
+    path = path if path is not None else get_settings_path()
     if path is None:
         return OperationResult.failure(
             "ROBLOX_SETTINGS_PATH_UNAVAILABLE",
@@ -629,7 +724,7 @@ def load_settings() -> OperationResult:
         return OperationResult.failure(
             "ROBLOX_SETTINGS_NOT_FOUND",
             "Roblox Settings Not Found",
-            "Launch Roblox once to create the settings file.",
+            "The settings XML file was not found. Launch Roblox once or choose a different location.",
             detail=f"Expected path: {path}",
         )
 
@@ -734,6 +829,15 @@ def _restore_backup(path: Path, backup_path: Path, original_read_only: bool) -> 
 
 
 def apply_settings(
+    changes: dict[str, str],
+    expected_hash: str = "",
+    framerate_locked: bool | None = None,
+) -> OperationResult:
+    with _WRITE_LOCK:
+        return _apply_settings(changes, expected_hash, framerate_locked)
+
+
+def _apply_settings(
     changes: dict[str, str],
     expected_hash: str = "",
     framerate_locked: bool | None = None,
@@ -974,6 +1078,7 @@ def _update_profile_sources(profile: dict, data: dict) -> None:
         if isinstance(entry, dict) and record is not None:
             entry["source_value"] = str(record.get("value", ""))
     profile["source"] = {
+        "path": str(data.get("path", "")),
         "xml_hash": str(data.get("file_hash", "")),
         "captured_at": profile.get("source", {}).get("captured_at", ""),
     }
@@ -1034,6 +1139,7 @@ def _apply_profile(
         with _CACHE_LOCK:
             if (
                 _AUTO_APPLY_CACHE.get("signature") == signature
+                and _AUTO_APPLY_CACHE.get("path") == data.get("path")
                 and _AUTO_APPLY_CACHE.get("file_hash") == current_hash
                 and _AUTO_APPLY_CACHE.get("read_only") == current_read_only
             ):
@@ -1070,6 +1176,7 @@ def _apply_profile(
     if use_cache:
         with _CACHE_LOCK:
             _AUTO_APPLY_CACHE.update({
+                "path": result_data.get("path"),
                 "signature": signature,
                 "file_hash": str(result_data.get("file_hash", current_hash)),
                 "read_only": bool(result_data.get("read_only", current_read_only)),

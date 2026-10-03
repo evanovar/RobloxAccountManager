@@ -369,6 +369,7 @@ class _Bridge(QObject):
     roblox_settings_loaded = Signal(object) # OperationResult from Roblox settings load
     roblox_settings_applied = Signal(object) # OperationResult from Roblox settings apply
     roblox_settings_auto_applied = Signal(object) # OperationResult from Roblox settings Auto Apply
+    roblox_settings_path_changed = Signal(object)
     console_wakeup = Signal()
 
 
@@ -1293,6 +1294,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._roblox_settings_config: dict[str, object] = {}
         self._roblox_settings_pending_config: dict[str, object] = {}
         self._roblox_settings_auto_applying = False
+        self._roblox_settings_path_changing = False
         self._roblox_settings_startup_reload = True
         self._tray_icon: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
@@ -1364,6 +1366,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.roblox_settings_applied.connect(self._on_roblox_settings_applied)
         self._bridge.roblox_settings_auto_applied.connect(
             self._on_roblox_settings_auto_applied
+        )
+        self._bridge.roblox_settings_path_changed.connect(
+            self._on_roblox_settings_path_changed
         )
 
         # Account Activity Monitor
@@ -1790,6 +1795,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     if hasattr(self, "_headless_list"):
                         self._refresh_headless_list(self._headless_latest_rows)
                     self._start_chromium_status_check()
+                    self._load_roblox_settings(show_error=False)
                 elif index == 5:
                     self._drain_console_queue()
 
@@ -3703,6 +3709,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         _roblox_settings_desc.setWordWrap(True)
         f.addWidget(_roblox_settings_desc)
 
+        f.addLayout(self._build_roblox_settings_path_row())
+
         self._roblox_settings_search = QLineEdit()
         self._roblox_settings_search.setPlaceholderText("Search Roblox settings...")
         self._roblox_settings_search.textChanged.connect(
@@ -4163,6 +4171,85 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         except Exception as e:
             print(f"[ERROR] Roblox Installer Fix toggle failed: {e}")
 
+    def _build_roblox_settings_path_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(20, 0, 0, 0)
+        label = QLabel("Path")
+        label.setFixedWidth(78)
+        label.setToolTip(
+            "Defaults to Roblox's GlobalBasicSettings_13.xml in Local AppData.\n"
+            "Browse for a custom Roblox settings XML file."
+        )
+        row.addWidget(label)
+        self._roblox_settings_path_edit = QLineEdit()
+        self._roblox_settings_path_edit.setReadOnly(True)
+        self._roblox_settings_path_edit.setMinimumWidth(0)
+        self._roblox_settings_path_edit.setAccessibleName("Roblox settings XML location")
+        self._roblox_settings_path_edit.setPlaceholderText("Default Roblox settings location")
+        label.setBuddy(self._roblox_settings_path_edit)
+        row.addWidget(self._roblox_settings_path_edit, 1)
+        self._roblox_settings_browse_btn = QPushButton("Browse File")
+        self._roblox_settings_browse_btn.clicked.connect(self._browse_roblox_settings_path)
+        row.addWidget(self._roblox_settings_browse_btn)
+        self._refresh_roblox_settings_path()
+        return row
+
+    def _refresh_roblox_settings_path(self):
+        path = roblox_settings_mod.get_settings_path()
+        text = str(path) if path is not None else ""
+        self._roblox_settings_path_edit.setText(text)
+        self._roblox_settings_path_edit.setToolTip(text)
+        self._update_roblox_settings_path_controls()
+
+    def _update_roblox_settings_path_controls(self):
+        if not hasattr(self, "_roblox_settings_browse_btn"):
+            return
+        busy = any((
+            self._roblox_settings_loading,
+            self._roblox_settings_applying,
+            self._roblox_settings_auto_applying,
+            self._roblox_settings_path_changing,
+        ))
+        self._roblox_settings_browse_btn.setEnabled(not busy)
+
+    def _browse_roblox_settings_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Roblox Settings XML", self._roblox_settings_path_edit.text(),
+            "XML files (*.xml);;All files (*)",
+        )
+        if path:
+            self._set_roblox_settings_path(path)
+
+    def _set_roblox_settings_path(self, path: str):
+        if any((
+            self._roblox_settings_loading, self._roblox_settings_applying,
+            self._roblox_settings_auto_applying, self._roblox_settings_path_changing,
+        )):
+            return
+        self._roblox_settings_path_changing = True
+        self._roblox_settings_reload_btn.setEnabled(False)
+        self._roblox_settings_apply_btn.setEnabled(False)
+        self._roblox_settings_auto_apply_chk.setEnabled(False)
+        self._roblox_settings_value_stack.setEnabled(False)
+        self._roblox_settings_state_label.setText("Loading location...")
+        self._update_roblox_settings_path_controls()
+        roblox_settings_mod.set_settings_path_async(
+            path, self._bridge.roblox_settings_path_changed.emit,
+        )
+
+    def _on_roblox_settings_path_changed(self, result: OperationResult):
+        self._roblox_settings_path_changing = False
+        self._refresh_roblox_settings_path()
+        if result and bool((result.data or {}).get("changed", False)):
+            self._load_roblox_settings(show_error=True)
+            return
+        self._roblox_settings_reload_btn.setEnabled(True)
+        self._roblox_settings_auto_apply_chk.setEnabled(bool(self._roblox_settings_records))
+        self._update_roblox_settings_apply_state()
+        self._on_roblox_setting_selected()
+        if not result:
+            self._show_operation_error(result)
+
     def _load_roblox_settings(
         self,
         show_error: bool = True,
@@ -4171,6 +4258,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._roblox_settings_loading or self._roblox_settings_applying:
             return
         self._roblox_settings_loading = True
+        self._update_roblox_settings_path_controls()
         self._roblox_settings_show_load_error = show_error
         self._roblox_settings_reload_btn.setEnabled(False)
         self._roblox_settings_apply_btn.setEnabled(False)
@@ -4186,6 +4274,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_roblox_settings_loaded(self, result: OperationResult):
         self._roblox_settings_loading = False
+        self._update_roblox_settings_path_controls()
         self._roblox_settings_reload_btn.setEnabled(True)
         if not result:
             self._roblox_settings_records.clear()
@@ -4329,6 +4418,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._stage_roblox_setting_value("true" if checked else "false")
 
     def _stage_roblox_setting_value(self, value: str):
+        if self._roblox_settings_path_changing or self._roblox_settings_loading:
+            return
         key = self._current_roblox_setting_key()
         record = self._roblox_settings_records.get(key)
         if record is None or not bool(record.get("editable", True)):
@@ -4388,6 +4479,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             and bool(self._roblox_settings_records)
             and not self._roblox_settings_loading
             and not self._roblox_settings_applying
+            and not self._roblox_settings_path_changing
+            and not self._roblox_settings_auto_applying
         )
 
 
@@ -4406,6 +4499,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         ):
             return
         self._roblox_settings_applying = True
+        self._update_roblox_settings_path_controls()
         self._roblox_settings_apply_btn.setEnabled(False)
         self._roblox_settings_reload_btn.setEnabled(False)
         roblox_settings_mod.apply_local_profile_async(
@@ -4414,6 +4508,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_roblox_settings_applied(self, result: OperationResult):
         self._roblox_settings_applying = False
+        self._update_roblox_settings_path_controls()
         self._roblox_settings_reload_btn.setEnabled(True)
         if not result:
             self._update_roblox_settings_apply_state()
@@ -4458,6 +4553,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._roblox_settings_auto_applying:
             return
         self._roblox_settings_auto_applying = True
+        self._update_roblox_settings_path_controls()
         roblox_settings_mod.apply_saved_customizations_async(
             None,
             self._bridge.roblox_settings_auto_applied.emit,
@@ -4465,6 +4561,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_roblox_settings_auto_applied(self, result: OperationResult):
         self._roblox_settings_auto_applying = False
+        self._update_roblox_settings_path_controls()
         if not result:
             print(
                 f"[ERROR] Roblox settings Auto Apply failed: "
