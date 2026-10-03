@@ -1,10 +1,8 @@
-import os
-import sys
+"""Cookie re-import preserves notes without carrying forward old passwords."""
+
 import tempfile
 import unittest
 from unittest import mock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from classes import account_manager as am
 from classes.operation_result import OperationResult

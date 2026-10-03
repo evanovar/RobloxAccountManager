@@ -1,8 +1,6 @@
-import os
-import sys
-import unittest
+"""WebSocket command authentication, including Unicode passwords."""
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import unittest
 
 from features.websocket_server import WebSocketServer
 

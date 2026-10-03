@@ -1,11 +1,9 @@
+"""Encryption switching, argument validation, and rollback on save failure."""
+
 import json
-import os
-import sys
 import tempfile
 import unittest
 from unittest import mock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from classes import account_manager as am
 from classes.encryption import HardwareEncryption

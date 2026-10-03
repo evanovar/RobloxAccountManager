@@ -1,10 +1,8 @@
-import os
+"""Origin restrictions exercised through a real loopback WebSocket server."""
+
 import socket
-import sys
 import time
 import unittest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
