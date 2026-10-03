@@ -229,18 +229,19 @@ class RobloxAccountManager:
             'accounts': self.accounts,
             'secure_settings': self._serialize_secure_settings(),
         }
+        if self.encryptor:
+            document = {
+                'encrypted': True,
+                'data': self.encryptor.encrypt_data(payload),
+            }
+        else:
+            document = payload
+        serialized = json.dumps(document, indent=2, ensure_ascii=False)
+
         temp_file = self.accounts_file + ".tmp"
         try:
             with open(temp_file, 'w', encoding='utf-8') as f:
-                if self.encryptor:
-                    encrypted_package = self.encryptor.encrypt_data(payload)
-                    encrypted_data = {
-                        'encrypted': True,
-                        'data': encrypted_package
-                    }
-                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
-                else:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write(serialized)
             os.replace(temp_file, self.accounts_file)
         except Exception as e:
             print(f"[WARNING] Safe atomic save failed: {e}. Falling back to original direct write.")
@@ -251,15 +252,7 @@ class RobloxAccountManager:
                     pass
             # Original direct write fallback
             with open(self.accounts_file, 'w', encoding='utf-8') as f:
-                if self.encryptor:
-                    encrypted_package = self.encryptor.encrypt_data(payload)
-                    encrypted_data = {
-                        'encrypted': True,
-                        'data': encrypted_package
-                    }
-                    json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
-                else:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write(serialized)
 
     def get_secure_setting(self, key, default=""):
         """Read a sensitive setting stored alongside encrypted account data."""
