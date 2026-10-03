@@ -371,7 +371,7 @@ class RobloxAccountManager:
         if target_dir and os.path.exists(target_dir):
             try:
                 shutil.rmtree(target_dir)
-            except:
+            except Exception:
                 pass
     
     @staticmethod
@@ -673,17 +673,17 @@ class RobloxAccountManager:
                         if not alive:
                             try:
                                 driver.execute_script(detector_script)
-                            except:
+                            except Exception:
                                 pass
 
                     if any(p in current_url for p in ['/home', '/games', '/catalog', '/avatar', '/discover', '/friends', '/profile', '/groups', '/develop', '/create']) and '/login' not in current_url and '/createaccount' not in current_url:
                         print(f"[SUCCESS] LOGIN DETECTED via URL check! (check #{check_count})")
                         try:
                             driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
-                        except:
+                        except Exception:
                             pass
                         return True
-                except:
+                except Exception:
                     pass
                 
                 result = driver.execute_script("return window.browserDetect ? window.browserDetect.detected : false;")
@@ -692,7 +692,7 @@ class RobloxAccountManager:
                     print(f"[SUCCESS] LOGIN DETECTED via JS! (check #{check_count}) - Closing browser...")
                     try:
                         driver.execute_script("window.browserDetect.cleanup();")
-                    except:
+                    except Exception:
                         pass
                     return True
                 
@@ -701,7 +701,7 @@ class RobloxAccountManager:
                     last_debug_time = current_time
                     try:
                         print(f"[INFO] Still checking... URL: {driver.current_url} (checks: {check_count})")
-                    except:
+                    except Exception:
                         pass
                 
                 time.sleep(0.02)
@@ -709,14 +709,14 @@ class RobloxAccountManager:
             except WebDriverException:
                 try:
                     driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
-                except:
+                except Exception:
                     pass
                 return False
         
         print("[ERROR] Login timeout. Please try again.")
         try:
             driver.execute_script("if(window.browserDetect) window.browserDetect.cleanup();")
-        except:
+        except Exception:
             pass
         return False
 
@@ -968,7 +968,7 @@ class RobloxAccountManager:
                     profile_dir = getattr(driver, "_ram_profile_dir", None)
                     try:
                         driver.quit()
-                    except:
+                    except Exception:
                         pass
                     self.cleanup_temp_profile(profile_dir)
             
@@ -1008,7 +1008,7 @@ class RobloxAccountManager:
                 profile_dir = getattr(driver, "_ram_profile_dir", None)
                 try:
                     driver.quit()
-                except:
+                except Exception:
                     pass
                 self.cleanup_temp_profile(profile_dir)
             return OperationResult.failure(

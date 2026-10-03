@@ -30,12 +30,12 @@ class SaveAccountsTests(unittest.TestCase):
         return manager
 
     def test_plain_round_trip(self):
-        manager = self.make_manager(encrypted=False)
+        self.make_manager(encrypted=False)
         again = am.RobloxAccountManager()
         self.assertEqual(again.accounts["alice"]["note"], "keep me")
 
     def test_encrypted_round_trip(self):
-        manager = self.make_manager(encrypted=True)
+        self.make_manager(encrypted=True)
         again = am.RobloxAccountManager()
         self.assertEqual(again.accounts["alice"]["note"], "keep me")
 

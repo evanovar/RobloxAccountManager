@@ -6,7 +6,6 @@ The v2.5.0 rewrite is finally complete.
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
 import os
 import re
 import shutil

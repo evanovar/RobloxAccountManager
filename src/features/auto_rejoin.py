@@ -65,7 +65,7 @@ def save_configs(configs: dict) -> None:
         if os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
-            except:
+            except Exception:
                 pass
         # Original direct write fallback
         try:

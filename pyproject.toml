@@ -32,3 +32,6 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = { attr = "utils.version.APP_VERSION" }
+
+[tool.ruff.lint]
+select = ["E9", "F", "E722"]
