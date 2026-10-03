@@ -5,6 +5,7 @@ Core logic of update checker.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import time
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -29,6 +31,7 @@ LEGACY_ASSET_NAMES = (
     "EvanovarRAM.exe",
     "RobloxAccountManager.exe",
 )
+DOWNLOAD_HOST = "github.com"
 PROCESS_WAIT_SECONDS = 120
 REPLACE_WAIT_SECONDS = 30
 
@@ -60,7 +63,7 @@ def check_latest_version() -> str | None:
         return None
 
 
-def get_exe_download_url() -> tuple[str, str] | None:
+def get_exe_asset() -> dict | None:
     try:
         response = requests.get(GITHUB_API, timeout=8)
         response.raise_for_status()
@@ -103,10 +106,50 @@ def get_exe_download_url() -> tuple[str, str] | None:
         )
         if not selected:
             return None
-        return selected["browser_download_url"], selected["name"]
+        return {
+            "url": selected["browser_download_url"],
+            "name": selected["name"],
+            "size": selected.get("size"),
+            "digest": selected.get("digest"),
+        }
     except Exception as exc:
         print(f"[ERROR] get_exe_download_url error: {exc}")
         return None
+
+
+def get_exe_download_url() -> tuple[str, str] | None:
+    asset = get_exe_asset()
+    if not asset:
+        return None
+    return asset["url"], asset["name"]
+
+
+def is_trusted_download_url(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    return parsed.scheme == "https" and parsed.hostname == DOWNLOAD_HOST
+
+
+def verify_download(path: str, expected_size=None, expected_digest=None) -> None:
+    actual_size = os.path.getsize(path)
+    if actual_size == 0:
+        raise RuntimeError("The downloaded update file is empty.")
+    if isinstance(expected_size, int) and expected_size > 0 and actual_size != expected_size:
+        raise RuntimeError(
+            f"The downloaded update is {actual_size} bytes but the release lists {expected_size}."
+        )
+    with open(path, "rb") as handle:
+        if handle.read(2) != b"MZ":
+            raise RuntimeError("The downloaded update is not a Windows executable.")
+    algorithm, _, expected_hash = str(expected_digest or "").partition(":")
+    if algorithm.lower() != "sha256" or not expected_hash:
+        print("[WARNING] The release does not publish a SHA-256 checksum, so only the size was verified.")
+        return
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest().lower() != expected_hash.strip().lower():
+        raise RuntimeError("The downloaded update does not match the checksum published for the release.")
 
 
 def get_update_target() -> str | None:
@@ -246,12 +289,14 @@ def download_update(
                 return
 
             on_progress(0)
-            result = get_exe_download_url()
-            if not result:
+            asset = get_exe_asset()
+            if not asset:
                 on_done(False, "No Evanovar RAM executable was found in the latest release.")
                 return
 
-            url, filename = result
+            url, filename = asset["url"], asset["name"]
+            if not is_trusted_download_url(url):
+                raise RuntimeError(f"The update download address is not a {DOWNLOAD_HOST} HTTPS link.")
             print(f"[INFO] Downloading {filename} from {url}")
             on_progress(2)
 
@@ -272,8 +317,9 @@ def download_update(
                     if total > 0:
                         on_progress(int(2 + (downloaded / total) * 95))
 
-            if not os.path.isfile(source_path) or os.path.getsize(source_path) == 0:
-                raise RuntimeError("The downloaded update file is empty.")
+            if total > 0 and not response.headers.get("content-encoding") and downloaded != total:
+                raise RuntimeError("The update download was interrupted before it finished.")
+            verify_download(source_path, asset.get("size"), asset.get("digest"))
 
             _launch_installer(source_path, target, update_directory)
             installer_started = True
