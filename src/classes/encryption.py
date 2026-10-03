@@ -10,6 +10,7 @@ import binascii
 import hashlib
 import platform
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from Crypto.Cipher import AES  # nosec B413
 from Crypto.Random import get_random_bytes  # nosec B413
 from Crypto.Protocol.KDF import PBKDF2  # nosec B413
@@ -80,15 +81,14 @@ class HardwareEncryption:
                     )
                     return output.decode(errors="ignore").strip()
 
-                identifiers.append(
-                    _ps("(Get-CimInstance Win32_ComputerSystemProduct).UUID")
+                commands = (
+                    "(Get-CimInstance Win32_ComputerSystemProduct).UUID",
+                    "(Get-CimInstance Win32_Processor).ProcessorId",
+                    "(Get-CimInstance Win32_BaseBoard).SerialNumber",
                 )
-                identifiers.append(
-                    _ps("(Get-CimInstance Win32_Processor).ProcessorId")
-                )
-                identifiers.append(
-                    _ps("(Get-CimInstance Win32_BaseBoard).SerialNumber")
-                )
+                with ThreadPoolExecutor(max_workers=len(commands)) as pool:
+                    for value in pool.map(_ps, commands):
+                        identifiers.append(value)
             else:
                 identifiers.append(platform.node())
                 identifiers.append(str(os.getuid()) if hasattr(os, 'getuid') else "0")

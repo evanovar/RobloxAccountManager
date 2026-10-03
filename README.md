@@ -168,7 +168,6 @@ The application does not include hidden telemetry, advertising SDKs, or analytic
 
 - Roblox API requests for account, game, presence, authentication, and download features.
 - GitHub requests for release and update checks.
-- Discord webhook requests when Discord integration is configured.
 - Connectivity checks used by Auto-Rejoin.
 
 Account cookies and stored WebSocket passwords remain local unless the user explicitly enables a feature that sends related data elsewhere.
@@ -210,6 +209,11 @@ This project is provided for educational and account management purposes. Users 
 ## Contributing
 
 Issues and pull requests are welcome. Keep changes focused, describe how they were tested, and avoid committing files from `AccountManagerData`.
+
+Run the regression tests with `uv run --no-sync python scripts/run_tests.py --all`.
+Use `--list` to see available tests, `--test <module-or-test-id>` for an individual
+selection, or `--suite unit`, `--suite ui`, or `--suite integration` to choose a suite.
+See [tests/README.md](tests/README.md) for setup, organization, and test isolation.
 
 ## Support
 
