@@ -224,8 +224,6 @@ class RobloxAccountManager:
         if isinstance(existing, dict):
             if not record.get('note'):
                 record['note'] = existing.get('note', '')
-            if not record.get('password') and existing.get('password'):
-                record['password'] = existing['password']
         return record
 
     def save_accounts(self):
