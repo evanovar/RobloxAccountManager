@@ -30,7 +30,7 @@ class ReimportTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         self.manager = am.RobloxAccountManager()
 
-    def test_reimport_keeps_note_and_saved_password(self):
+    def test_reimport_keeps_note(self):
         self.manager.accounts["alice"] = {
             "username": "alice",
             "cookie": COOKIE + "old",
@@ -43,7 +43,7 @@ class ReimportTests(unittest.TestCase):
         account = self.manager.accounts["alice"]
         self.assertEqual(account["cookie"], COOKIE + "new")
         self.assertEqual(account["note"], "main account")
-        self.assertEqual(account["password"], "hunter2")
+        self.assertNotIn("password", account)
         self.assertTrue(account["cookie_valid"])
 
     def test_new_account_has_empty_note(self):
