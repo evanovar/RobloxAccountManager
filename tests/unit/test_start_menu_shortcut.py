@@ -127,7 +127,11 @@ class RealShortcutTests(unittest.TestCase):
                 env={**os.environ, "RAM_SHORTCUT": shortcut},
                 capture_output=True, text=True, timeout=30,
             )
-            self.assertEqual(read_back.stdout.strip(), target)
+            self.assertEqual(read_back.returncode, 0, read_back.stderr)
+            self.assertTrue(
+                os.path.samefile(read_back.stdout.strip(), target),
+                f"Shortcut points to {read_back.stdout.strip()!r}, expected {target!r}",
+            )
 
 
 if __name__ == "__main__":
