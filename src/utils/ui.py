@@ -60,6 +60,7 @@ from classes.roblox_api import RobloxAPI
 import features.account_actions as actions
 import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
+import features.account_order as account_order
 import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
 import features.chromium as chromium_mod
@@ -7046,29 +7047,40 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         else:
             self._show_operation_error(operation_result)
 
+    def _row_username(self, row: int) -> str | None:
+        item = self._account_list.item(row)
+        if item is None:
+            return None
+        username = item.data(Qt.ItemDataRole.UserRole)
+        return username if username in self.manager.accounts else None
+
     def _on_account_reorder(self, from_row: int, insert_before_row: int): # Reoder accounts
-        items = list(self.manager.accounts.items())
-        if from_row < 0 or from_row >= len(items):
+        moved = self._row_username(from_row)
+        if moved is None:
             return
+        before = self._row_username(insert_before_row)
+        visible = [
+            name for name in (
+                self._row_username(row) for row in range(self._account_list.count())
+            ) if name
+        ]
 
-        moved = items.pop(from_row)
+        with self.manager._accounts_lock:
+            order = list(self.manager.accounts)
+            new_order = account_order.move_account(order, moved, before, visible)
+            if new_order == order:
+                return
+            self.manager.accounts = {
+                name: self.manager.accounts[name] for name in new_order
+            }
 
-        # Adjust target index after removal
-        target = insert_before_row
-        if insert_before_row > from_row:
-            target -= 1
-        target = max(0, min(target, len(items)))
-
-        items.insert(target, moved)
-        self.manager.accounts = dict(items)
-
-        try:
-            self.manager.save_accounts()
-        except Exception as e:
-            print(f"[WARNING] Could not save account order: {e}")
+            try:
+                self.manager.save_accounts()
+            except Exception as e:
+                print(f"[WARNING] Could not save account order: {e}")
 
         self._refresh_account_list()
-        print(f"[INFO] Moved '{moved[0]}' to position {target + 1}.")
+        print(f"[INFO] Moved '{moved}' to position {new_order.index(moved) + 1}.")
 
     # Remove account
     def _on_remove_account(self):
