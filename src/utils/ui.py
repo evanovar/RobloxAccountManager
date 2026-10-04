@@ -30,7 +30,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction, QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
-    QImage, QImageReader, QKeySequence, QMovie, QPalette, QPixmap, QPolygon, QRegion, QTextCharFormat,
+    QImage, QImageReader, QKeySequence, QMovie, QPalette, QPixmap, QPolygon, QRegion, QShortcut, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox,
@@ -60,6 +60,7 @@ from classes.roblox_api import RobloxAPI
 import features.account_actions as actions
 import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
+import features.account_filter as account_filter
 import features.account_order as account_order
 import features.avatars as avatars
 import features.cookie_validator as cookie_validator_mod
@@ -2270,6 +2271,30 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         header_row.addWidget(self._enc_label)
 
         lay.addLayout(header_row)
+
+        # account search
+        self._account_query = ""
+        self._account_search = QLineEdit()
+        self._account_search.setPlaceholderText("Search accounts (Ctrl+F)")
+        self._account_search.setClearButtonEnabled(True)
+        self._account_search.setAccessibleName("Search accounts")
+        self._account_search_timer = QTimer(self)
+        self._account_search_timer.setSingleShot(True)
+        self._account_search_timer.setInterval(150)
+        self._account_search_timer.timeout.connect(self._apply_account_search)
+        self._account_search.textChanged.connect(
+            lambda _text: self._account_search_timer.start()
+        )
+        QShortcut(
+            QKeySequence(QKeySequence.StandardKey.Find), self,
+            activated=self._focus_account_search,
+        )
+        clear_search = QShortcut(
+            QKeySequence("Escape"), self._account_search,
+            activated=self._account_search.clear,
+        )
+        clear_search.setContext(Qt.ShortcutContext.WidgetShortcut)
+        lay.addWidget(self._account_search)
 
         # group section
         self._group_scroll = QScrollArea()
@@ -6497,8 +6522,18 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 if assignments.get(u) == self._current_group
             ]
 
+        search_query = getattr(self, "_account_query", "")
+        if search_query:
+            account_items = account_filter.filter_accounts(
+                account_items, search_query, groups.get_assignments()
+            )
+
         if not account_items:
-            item = QListWidgetItem("No accounts, use 'Add Account' to add one.")
+            item = QListWidgetItem(
+                "No accounts match your search."
+                if search_query
+                else "No accounts, use 'Add Account' to add one."
+            )
             item.setForeground(QColor(MUTED))
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             self._account_list.addItem(item)
@@ -7046,6 +7081,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 _show_info(self, "Account Added", operation_result.message)
         else:
             self._show_operation_error(operation_result)
+
+    def _focus_account_search(self) -> None:
+        self._account_search.setFocus()
+        self._account_search.selectAll()
+
+    def _apply_account_search(self) -> None:
+        query = self._account_search.text().strip()
+        if query == self._account_query:
+            return
+        self._account_query = query
+        self._refresh_account_list()
 
     def _row_username(self, row: int) -> str | None:
         item = self._account_list.item(row)
