@@ -16,6 +16,7 @@ import time
 import webbrowser
 import weakref
 
+from utils import motion
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 from utils.version import APP_VERSION
 
@@ -1444,6 +1445,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # Cookie Validator
         self._cv_mod = cookie_validator_mod
+        self._animations_on = motion.animations_enabled(actions.load_ui_settings())
         self._cv_validator = None
         self._invalid_badges: dict[str, QLabel] = {}
         self._account_avatar_containers: dict[str, QWidget] = {}
@@ -1879,7 +1881,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _show_page(self, index: int) -> None:
         self._ensure_page_built(index)
+        changed = self._page_stack.currentIndex() != index
         self._page_stack.setCurrentIndex(index)
+        if changed:
+            motion.fade_in(self._page_stack.currentWidget(), enabled=self._animations_on)
         if index in self._detached_windows:
             self._show_detached_page(index)
 
@@ -3310,6 +3315,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         def _switch_cat(idx: int):
             content_stack.setCurrentIndex(idx)
+            motion.fade_in(content_stack.currentWidget(), enabled=self._animations_on)
             for i, b in enumerate(cat_buttons):
                 b.setChecked(i == idx)
 
@@ -3392,6 +3398,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_change=self._on_sett_tray,
         )
         f.addWidget(self._sett_tray_chk)
+
+        self._sett_animations_chk = _chk(
+            "ui_animations", "Smooth Animations",
+            "Fade between pages and highlight buttons when you point at or click them.\n"
+            "Turned off automatically when Windows animations are off. Takes effect on the next start.",
+            default=True,
+        )
+        f.addWidget(self._sett_animations_chk)
 
         f.addWidget(_sec("LAUNCH"))
         self._sett_confirm_chk = _chk(
@@ -8990,6 +9004,7 @@ def main(icon_path: str | None = None) -> int:
     app.setApplicationName("Roblox Account Manager")
     app.setFont(QFont("Segoe UI", 10))
     apply_palette(app)
+    motion.install(app, TEXT, actions.load_ui_settings())
     diagnostics.set_startup_stage("QApplication ready")
 
     password = None
