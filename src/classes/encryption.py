@@ -318,7 +318,7 @@ class EncryptionConfig:
                 if isinstance(config, dict):
                     config.pop('password_hash', None)
                 return config
-            except:
+            except Exception:
                 return {}
         return {}
     
@@ -339,7 +339,7 @@ class EncryptionConfig:
             if os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
-                except:
+                except Exception:
                     pass
             # Original direct write fallback
             with open(self.config_file, 'w', encoding='utf-8') as f:

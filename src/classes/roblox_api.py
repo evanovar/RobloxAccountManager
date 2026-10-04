@@ -107,7 +107,7 @@ class RobloxAPI:
             try:
                 shutil.rmtree(str(quarantine_path), ignore_errors=True)
                 print("[SUCCESS] Cleaned up quarantine folder")
-            except:
+            except Exception:
                 pass
         except Exception as e:
             print(f"[ERROR] Error restoring installers: {e}")
@@ -239,7 +239,7 @@ class RobloxAPI:
                         game_data = game_response.json()
                         if game_data and game_data.get("data") and len(game_data["data"]) > 0:
                             return game_data["data"][0].get("name", None)
-        except:
+        except Exception:
             pass
         return None
     
@@ -254,7 +254,7 @@ class RobloxAPI:
         try:
             response = requests.post(url, headers=headers, timeout=5)
             return response.headers.get('x-csrf-token')
-        except:
+        except Exception:
             return None
     
     

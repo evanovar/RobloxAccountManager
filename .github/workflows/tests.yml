@@ -29,5 +29,8 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Lint
+        run: uvx ruff@0.16.10 check src tests scripts
+
       - name: Run tests
         run: uv run --no-sync python scripts/run_tests.py --all -v

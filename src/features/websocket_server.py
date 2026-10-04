@@ -31,10 +31,13 @@ import shlex
 import threading
 import time
 import websockets
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 import features.auto_rejoin as _ar
 import features.presence as presence_mod
 from classes.roblox_api import RobloxAPI
+
+if TYPE_CHECKING:
+    from classes.account_manager import RobloxAccountManager
 
 
 AUTH_FAILURE_WINDOW_SECONDS = 60.0

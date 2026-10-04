@@ -1237,7 +1237,6 @@ def trigger_anti_afk() -> bool:
 
 
 def _afk_worker():
-    user32 = ctypes.windll.user32
     next_wait_seconds = max(60, _afk_interval * 60)
 
     while not _afk_stop_event.is_set(): # main loop
