@@ -766,7 +766,20 @@ def _build_login_script(username: str, password: str) -> str:
     }})();
     """
 
-IMPORT_BATCH_SIZE = 5
+IMPORT_BATCH_MIN = 1
+IMPORT_BATCH_MAX = 5
+IMPORT_BATCH_SIZE = IMPORT_BATCH_MAX
+IMPORT_BATCH_SETTING = "import_browser_count"
+
+
+def get_import_batch_size(settings: dict | None = None) -> int:
+    settings = settings if isinstance(settings, dict) else {}
+    try:
+        value = int(settings.get(IMPORT_BATCH_SETTING, IMPORT_BATCH_SIZE))
+    except (TypeError, ValueError):
+        return IMPORT_BATCH_SIZE
+    return max(IMPORT_BATCH_MIN, min(IMPORT_BATCH_MAX, value))
+
 
 def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[bool, str], None] = lambda *_: None) -> None:
     if not pairs:
@@ -784,8 +797,9 @@ def import_user_pass(manager, pairs: list[tuple[str, str]], on_done: Callable[[b
         imported_users: list[str] = []
         failures: list[OperationResult] = []
 
-        for start in range(0, len(pairs), IMPORT_BATCH_SIZE):
-            batch = pairs[start:start + IMPORT_BATCH_SIZE]
+        batch_size = get_import_batch_size(load_ui_settings())
+        for start in range(0, len(pairs), batch_size):
+            batch = pairs[start:start + batch_size]
             existing_before = set(manager.accounts.keys())
             try:
                 scripts = [_build_login_script(username, password) for username, password in batch]
