@@ -59,6 +59,7 @@ from classes.operation_result import OperationResult, ensure_result
 from classes.roblox_api import RobloxAPI
 
 import features.account_actions as actions
+import features.account_backup as account_backup
 import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
 import features.avatars as avatars
@@ -3985,6 +3986,22 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         f.addWidget(_enc_btn)
 
         f.addWidget(_sec("DATA"))
+        _export_btn = QPushButton("Export Accounts")
+        _export_btn.setToolTip(
+            "Save all accounts to a file protected by a password you choose.\n"
+            "Use it to back up your accounts or to move them to another computer."
+        )
+        _export_btn.clicked.connect(self._on_sett_export_accounts)
+        f.addWidget(_export_btn)
+
+        _import_btn = QPushButton("Import Accounts")
+        _import_btn.setToolTip(
+            "Add the accounts from a file made with Export Accounts.\n"
+            "You can choose whether accounts that already exist are replaced."
+        )
+        _import_btn.clicked.connect(self._on_sett_import_accounts)
+        f.addWidget(_import_btn)
+
         _wipe_btn = QPushButton("Wipe All Data")
         _wipe_btn.setToolTip(
             "Permanently delete all saved accounts, settings, and cached data.\n"
@@ -5634,6 +5651,82 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self, "Encryption Switched",
             f"Encryption method switched to {method_labels[new_method]}.",
         )
+
+    def _ask_backup_password(self, confirm: bool) -> str | None:
+        label = "Backup password:"
+        while True:
+            password, accepted = QInputDialog.getText(
+                self, "Accounts Backup", label, QLineEdit.EchoMode.Password
+            )
+            if not accepted:
+                return None
+            if confirm:
+                again, accepted = QInputDialog.getText(
+                    self, "Accounts Backup", "Repeat the password:", QLineEdit.EchoMode.Password
+                )
+                if not accepted:
+                    return None
+                if again != password:
+                    QMessageBox.warning(self, "Password Mismatch", "Passwords do not match.")
+                    continue
+            return password
+
+    def _on_sett_export_accounts(self) -> None:
+        if not self.manager.accounts:
+            _show_error(self, "Export Accounts", "There are no saved accounts to export.")
+            return
+        path, _selected = QFileDialog.getSaveFileName(
+            self, "Export Accounts", "RAM-accounts.rambak",
+            "Account backup (*.rambak);;All files (*)",
+        )
+        if not path:
+            return
+        password = self._ask_backup_password(confirm=True)
+        if password is None:
+            return
+        with self.manager._accounts_lock:
+            accounts = dict(self.manager.accounts)
+        result = account_backup.export_accounts(accounts, path, password)
+        if not result:
+            self._show_operation_error(result)
+            return
+        print(f"[INFO] Exported {result.data['count']} account(s) to {path}")
+        _show_info(
+            self, "Export Accounts",
+            f"{result.message}\n\nKeep the file and its password safe. "
+            "Anyone with both can sign in to these accounts.",
+        )
+
+    def _on_sett_import_accounts(self) -> None:
+        path, _selected = QFileDialog.getOpenFileName(
+            self, "Import Accounts", "",
+            "Account backup (*.rambak);;All files (*)",
+        )
+        if not path:
+            return
+        password = self._ask_backup_password(confirm=False)
+        if password is None:
+            return
+        reply = QMessageBox.question(
+            self, "Import Accounts",
+            "Replace accounts that already exist with the ones from the backup?\n\n"
+            "Choose No to keep your current accounts and only add new ones.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+        result = account_backup.import_accounts(
+            self.manager, path, password,
+            overwrite=(reply == QMessageBox.StandardButton.Yes),
+        )
+        if not result:
+            self._show_operation_error(result)
+            return
+        self._refresh_account_list()
+        print(f"[INFO] Imported accounts from {path}: {result.message}")
+        _show_info(self, "Import Accounts", result.message)
 
     def _on_sett_wipe_data(self):
         reply = QMessageBox.warning(

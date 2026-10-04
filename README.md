@@ -158,6 +158,7 @@ uv run python src/main.py
 | No encryption | Store account data without encryption when explicitly selected. |
 | Encryption switching | Re-encrypt saved accounts and secure settings when changing encryption methods. |
 | Encryption status | Display the active hardware, password, or unencrypted state beside the account list. |
+| Account backup | Export all accounts to a file protected by a password you choose and import them again from Settings > Misc, for example to move them to another computer. Existing accounts are kept unless you choose to replace them. |
 | Data removal | Wipe local application data from Settings > Misc. |
 
 ## Data and privacy
