@@ -353,6 +353,7 @@ class _Bridge(QObject):
     rejoin_status = Signal(str, str) # (account, status_str) from rejoin worker
     afk_tooltip = Signal(str, int, int) # (message, x, y) pass None to hide
     mr_download_done = Signal(bool) # (success) from download_handle64 worker
+    shortcut_toggle_done = Signal(str, bool, object) # (kind, enabled, OperationResult) from a shortcut worker
     chromium_progress = Signal(int, str) # (percent 0-100, label text) from chromium download
     chromium_done = Signal(object) # OperationResult from Chromium download
     chromium_status = Signal(object) # OperationResult from latest build check
@@ -1404,6 +1405,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.rejoin_status.connect(self._on_rejoin_status)
         self._bridge.afk_tooltip.connect(self._on_afk_tooltip_signal)
         self._bridge.mr_download_done.connect(self._update_mr_h64_status)
+        self._bridge.shortcut_toggle_done.connect(self._on_shortcut_toggle_done)
         self._bridge.chromium_progress.connect(self._on_chromium_progress)
         self._bridge.chromium_done.connect(self._on_chromium_done)
         self._bridge.chromium_status.connect(self._on_chromium_status)
@@ -3153,9 +3155,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 )
                 if reply == QMessageBox.StandardButton.Yes:
                     actions.kill_roblox()
-                    deadline = time.time() + 3.0
-                    while time.time() < deadline and actions.is_roblox_running():
-                        time.sleep(0.2)
+                    self._wait_for_roblox_exit(3.0, self._finish_start_multi_roblox)
+                    return
                 else:
                     self._mr_enabled = False
                     self._mr_enabled_chk.blockSignals(True)
@@ -3165,6 +3166,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     self._update_mr_status() 
                     return
 
+        self._finish_start_multi_roblox()
+
+    def _wait_for_roblox_exit(self, timeout: float, on_done) -> None:
+        deadline = time.monotonic() + timeout
+        timer = QTimer(self)
+        timer.setInterval(200)
+
+        def _check() -> None:
+            if actions.is_roblox_running() and time.monotonic() < deadline:
+                return
+            timer.stop()
+            timer.deleteLater()
+            on_done()
+
+        timer.timeout.connect(_check)
+        timer.start()
+
+    def _finish_start_multi_roblox(self) -> None:
         ok, msg = actions.enable_multi_roblox(self._mr_method)
         if not ok:
             if msg == "NEEDS_ADMIN":
@@ -4364,42 +4383,44 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     def _on_sett_start_menu(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
-        result = (
-            windows_startup_mod.enable_start_menu()
-            if enabled
-            else windows_startup_mod.disable_start_menu()
+        self._run_shortcut_toggle(
+            "start_menu", enabled, self._sett_startmenu_chk,
+            windows_startup_mod.enable_start_menu if enabled else windows_startup_mod.disable_start_menu,
         )
+
+    def _run_shortcut_toggle(self, kind: str, enabled: bool, checkbox: QCheckBox, work) -> None:
+        checkbox.setEnabled(False)
+
+        def _worker() -> None:
+            self._bridge.shortcut_toggle_done.emit(kind, enabled, work())
+
+        threading.Thread(target=_worker, daemon=True, name=f"shortcut-{kind}").start()
+
+    def _on_shortcut_toggle_done(self, kind: str, enabled: bool, result) -> None:
+        startup = kind == "startup"
+        checkbox = self._sett_startup_chk if startup else self._sett_startmenu_chk
+        checkbox.setEnabled(True)
         if result:
-            print(f"[INFO] Start Menu shortcut {'created' if enabled else 'removed'}")
+            if startup:
+                actions.save_ui_setting("start_with_windows", enabled)
+                print(f"[INFO] Start with Windows {'enabled' if enabled else 'disabled'}")
+            else:
+                print(f"[INFO] Start Menu shortcut {'created' if enabled else 'removed'}")
             return
 
-        self._sett_startmenu_chk.blockSignals(True)
-        self._sett_startmenu_chk.setChecked(not enabled)
-        self._sett_startmenu_chk.blockSignals(False)
+        checkbox.blockSignals(True)
+        checkbox.setChecked(not enabled)
+        checkbox.blockSignals(False)
+        if startup:
+            actions.save_ui_setting("start_with_windows", not enabled)
         self._show_operation_error(result)
-
-    def _set_startup_checkbox(self, enabled: bool) -> None:
-        if not hasattr(self, "_sett_startup_chk"):
-            return
-        self._sett_startup_chk.blockSignals(True)
-        self._sett_startup_chk.setChecked(enabled)
-        self._sett_startup_chk.blockSignals(False)
 
     def _on_sett_startup(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
-        result = (
-            windows_startup_mod.enable_startup()
-            if enabled
-            else windows_startup_mod.disable_startup()
+        self._run_shortcut_toggle(
+            "startup", enabled, self._sett_startup_chk,
+            windows_startup_mod.enable_startup if enabled else windows_startup_mod.disable_startup,
         )
-        if result:
-            actions.save_ui_setting("start_with_windows", enabled)
-            print(f"[INFO] Start with Windows {'enabled' if enabled else 'disabled'}")
-            return
-
-        self._set_startup_checkbox(not enabled)
-        actions.save_ui_setting("start_with_windows", not enabled)
-        self._show_operation_error(result)
 
     def _on_sett_boost_ram(self, enabled: bool):
         if hasattr(self, "_sett_ram_spin"):
