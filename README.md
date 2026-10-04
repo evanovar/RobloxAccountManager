@@ -84,6 +84,7 @@ uv run python src/main.py
 | Groups and notes | Organize accounts into groups and assign notes to one or multiple selected accounts. |
 | Account list controls | Use avatars, drag-and-drop ordering, multi-select actions, refresh, deletion, and controlled password or cookie copying. |
 | Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. The startup check and the delay between accounts can be changed under Settings > General. |
+| Avatar cache | Avatars are saved locally and downloaded again once they are 7 days old (change it under Settings > General, 0 keeps them forever). If a refresh fails the older copy is still shown, and copies for accounts that no longer exist are cleaned up. |
 | Activity data | Display online status, Roblox memory usage, and CPU usage beside saved accounts. |
 
 ### Game launching

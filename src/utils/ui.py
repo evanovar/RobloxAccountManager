@@ -3369,6 +3369,27 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         log_retention_row.addWidget(self._sett_log_retention_spin)
         f.addLayout(log_retention_row)
 
+        avatar_cache_row = QHBoxLayout()
+        avatar_cache_row.setContentsMargins(0, 0, 0, 0)
+        avatar_cache_label = QLabel("Refresh Avatars After")
+        avatar_cache_label.setToolTip(
+            "Download an account's avatar again once the saved copy is this many days old.\n"
+            "Set to 0 to keep saved avatars forever. Applies the next time avatars load."
+        )
+        avatar_cache_row.addWidget(avatar_cache_label)
+        avatar_cache_row.addStretch(1)
+        self._sett_avatar_cache_spin = QSpinBox()
+        self._sett_avatar_cache_spin.setRange(0, 365)
+        self._sett_avatar_cache_spin.setValue(avatars.get_cache_days())
+        self._sett_avatar_cache_spin.setSuffix(" days")
+        self._sett_avatar_cache_spin.setFixedWidth(80)
+        self._sett_avatar_cache_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_avatar_cache_spin.valueChanged.connect(
+            lambda value: actions.save_ui_setting(avatars.CACHE_DAYS_SETTING, int(value))
+        )
+        avatar_cache_row.addWidget(self._sett_avatar_cache_spin)
+        f.addLayout(avatar_cache_row)
+
         # Start Menu shortcut
         _sm_path = os.path.join(
             os.environ.get("APPDATA", ""),
