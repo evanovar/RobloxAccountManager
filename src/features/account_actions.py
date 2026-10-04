@@ -16,11 +16,11 @@ import tempfile
 import shutil
 import zipfile
 import subprocess
+import win32api
 import win32con
 import win32gui
 import msvcrt
 import requests
-from urllib.request import urlretrieve
 from ctypes import wintypes
 
 
@@ -28,6 +28,7 @@ from typing import Callable
 from classes.operation_result import OperationResult, ensure_result, unexpected_result
 from classes.roblox_api import RobloxAPI
 import features.browsers as browsers_mod
+import features.handle64_trust as handle64_trust
 import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.settings_store as settings_store_mod
@@ -1394,10 +1395,29 @@ def find_handle64() -> str | None:
     return None
 
 
-def download_handle64() -> bool:
-    
+Handle64VerificationError = handle64_trust.Handle64VerificationError
+
+
+def verify_handle64(path: str) -> bool:
     try:
-        
+        handle64_trust.trusted_executable(path)
+        return True
+    except Handle64VerificationError:
+        return False
+
+
+def run_handle64(path: str, arguments: list[str], **kwargs):
+    executable = handle64_trust.trusted_executable(path)
+    system_folders = os.pathsep.join(
+        (win32api.GetSystemDirectory(), win32api.GetWindowsDirectory())
+    )
+    kwargs.setdefault("cwd", os.path.dirname(executable))
+    kwargs.setdefault("env", {**os.environ, "PATH": system_folders})
+    return subprocess.run([executable, *arguments], **kwargs)
+
+
+def download_handle64() -> bool:
+    try:
         url = "https://download.sysinternals.com/files/Handle.zip"
         exe_name = "handle64.exe" if platform.architecture()[0] == "64bit" else "handle.exe"
         data_dir = _DATA_DIR
@@ -1405,10 +1425,17 @@ def download_handle64() -> bool:
         dest = os.path.join(data_dir, "handle64.exe")
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, "Handle.zip")
-            urlretrieve(url, zip_path)  # nosec B310
+            response = requests.get(url, timeout=(15, 60))
+            response.raise_for_status()
+            with open(zip_path, "wb") as handle:
+                handle.write(response.content)
             with zipfile.ZipFile(zip_path) as z:
                 z.extract(exe_name, tmp)
-                shutil.move(os.path.join(tmp, exe_name), dest)
+            extracted = os.path.join(tmp, exe_name)
+            if not handle64_trust.is_signed_by_microsoft(extracted):
+                print("[Multi Roblox] The downloaded Handle64 is not signed by Microsoft and was discarded.")
+                return False
+            shutil.move(extracted, dest)
         print(f"[Multi Roblox] handle64.exe downloaded to {dest}")
         return True
     except Exception as e:
@@ -1571,8 +1598,9 @@ def _mr_h64_query_handles(
     pid: int,
 ) -> tuple[list[tuple[str, str]], int, str]:
     try:
-        result = subprocess.run(
-            [handle_path, "-accepteula", "-p", str(pid), "-a"],
+        result = run_handle64(
+            handle_path,
+            ["-accepteula", "-p", str(pid), "-a"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
@@ -1621,9 +1649,9 @@ def _mr_h64_close_handle_values(
         if stop_event is not None and stop_event.is_set():
             return False
         try:
-            close_result = subprocess.run(
+            close_result = run_handle64(
+                executable,
                 [
-                    executable,
                     "-accepteula",
                     "-p",
                     str(pid),
@@ -1832,6 +1860,10 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         if not h64:
             print("[Multi Roblox] handle64.exe not found. Download it first.")
             return False, "HANDLE64_NOT_FOUND"
+
+        if not verify_handle64(h64):
+            print(f"[Multi Roblox] {h64} is not signed by Microsoft, so it will not be run with administrator rights.")
+            return False, "HANDLE64_UNVERIFIED"
 
         _mr_h64_path = h64
         _mr_h64_session_id += 1
@@ -2082,6 +2114,7 @@ def disable_multi_roblox():
         _mr_h64_thread = None
         _mr_h64_stop_event = None
         _mr_h64_path = None
+        handle64_trust.release_trusted_copies()
         print("[Multi Roblox] Handle64 monitor stopped.")
 
     if _mr_handle:
