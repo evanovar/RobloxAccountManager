@@ -3200,6 +3200,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     "Multi Roblox",
                     "Handle64 was not found. Download Handle64 before enabling this mode.",
                 )
+            elif msg == "HANDLE64_UNVERIFIED":
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "The Handle64 file is not signed by Microsoft, so it was not run "
+                    "with administrator rights. Delete it and download Handle64 again.",
+                )
             elif msg == "MUTEX_CREATE_FAILED":
                 QMessageBox.critical(
                     self,
