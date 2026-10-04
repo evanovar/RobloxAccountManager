@@ -25,6 +25,7 @@ class StableMachineIdTests(unittest.TestCase):
         self.enterContext(patch.object(encryption.platform, "system", return_value="Windows"))
         self.enterContext(patch.object(encryption.platform, "node", return_value="test-host"))
         self.enterContext(patch.object(encryption.platform, "machine", return_value="AMD64"))
+        self.enterContext(patch.object(encryption, "_read_wmi_identifiers", return_value=None))
         # Avoid real key derivation and hardware queries during construction.
         self.reader = HardwareEncryption.__new__(HardwareEncryption)
 

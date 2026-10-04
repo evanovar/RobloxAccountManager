@@ -47,6 +47,54 @@ def _decode_encrypted_package(encrypted_package):
             "The encrypted payload contains invalid encoded data."
         ) from exc
 
+_WMI_IDENTIFIER_QUERIES = (
+    ("Win32_ComputerSystemProduct", "UUID"),
+    ("Win32_Processor", "ProcessorId"),
+    ("Win32_BaseBoard", "SerialNumber"),
+)
+
+
+def _read_wmi_identifiers():
+    """Read the machine identifiers through WMI without starting PowerShell.
+
+    Returns None whenever the result could differ from the PowerShell lookup
+    (no WMI, an error, more than one row, or an empty value), so callers fall
+    back to the PowerShell path and the derived key stays the same.
+    """
+    if platform.system() != "Windows":
+        return None
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return None
+
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        return None
+    try:
+        locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
+        service = locator.ConnectServer(".", "root\\cimv2")
+        values = []
+        for class_name, property_name in _WMI_IDENTIFIER_QUERIES:
+            rows = [
+                getattr(item, property_name)
+                for item in service.ExecQuery(
+                    f"SELECT {property_name} FROM {class_name}"
+                )
+            ]
+            if len(rows) != 1 or not isinstance(rows[0], str) or not rows[0].strip():
+                return None
+            values.append(rows[0].strip())
+        return values
+    except Exception:
+        return None
+    finally:
+        locator = service = rows = None
+        pythoncom.CoUninitialize()
+
+
 class HardwareEncryption:
     """Hardware-based encryption using machine-specific identifiers"""
     
@@ -60,6 +108,13 @@ class HardwareEncryption:
         cached = _MACHINE_ID_CACHE.get("stable")
         if cached:
             return cached
+
+        wmi_identifiers = _read_wmi_identifiers()
+        if wmi_identifiers is not None:
+            machine_id = hashlib.sha256("-".join(wmi_identifiers).encode()).hexdigest()
+            _MACHINE_ID_CACHE["stable"] = machine_id
+            return machine_id
+
         identifiers = []
 
         try:

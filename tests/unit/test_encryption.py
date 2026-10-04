@@ -59,7 +59,9 @@ class HardwareEncryptionCompatibilityTests(unittest.TestCase):
             "(Get-CimInstance Win32_Processor).ProcessorId": b"CPU1\r\nCPU2\r\n",
             "(Get-CimInstance Win32_BaseBoard).SerialNumber": b"BOARD\r\n",
         }
-        with patch("classes.encryption.platform.system", return_value="Windows"):
+        with patch("classes.encryption.platform.system", return_value="Windows"), patch(
+            "classes.encryption._read_wmi_identifiers", return_value=None,
+        ):
             with patch(
                 "classes.encryption.subprocess.check_output",
                 side_effect=lambda args, **kwargs: outputs[args[-1]],
