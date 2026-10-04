@@ -8,10 +8,12 @@ import collections
 import concurrent.futures
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 import requests
 
+import features.settings_store as settings_store
 from classes.roblox_api import RobloxAPI
 from utils.app_paths import get_data_dir
 
@@ -29,6 +31,25 @@ _MEMORY_CACHE_LIMIT = 128
 _SYNC_RUNNING = False
 
 AVATAR_SIZE = 22
+DEFAULT_CACHE_DAYS = 7
+CACHE_DAYS_SETTING = "avatar_cache_days"
+
+
+def get_cache_days() -> int:
+    try:
+        return max(0, int(settings_store.get(CACHE_DAYS_SETTING, DEFAULT_CACHE_DAYS)))
+    except (TypeError, ValueError):
+        return DEFAULT_CACHE_DAYS
+
+
+def _is_stale(path: str, days: int | None = None) -> bool:
+    days = get_cache_days() if days is None else days
+    if days <= 0:
+        return False
+    try:
+        return time.time() - os.path.getmtime(path) > days * 86400
+    except OSError:
+        return False
 
 
 def _get_session() -> requests.Session:
@@ -52,7 +73,7 @@ def _remember(user_id: str, data: bytes) -> None:
             _MEMORY_CACHE.popitem(last=False)
 
 
-def load_cached_bytes(user_id: str) -> Optional[bytes]:
+def load_cached_bytes(user_id: str, allow_stale: bool = False) -> Optional[bytes]:
     uid = str(user_id)
     with _LOCK:
         cached = _MEMORY_CACHE.get(uid)
@@ -61,6 +82,8 @@ def load_cached_bytes(user_id: str) -> Optional[bytes]:
             return cached
 
     path = _cache_path(uid)
+    if not allow_stale and _is_stale(path):
+        return None
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -137,18 +160,37 @@ def _fetch_worker(user_id: str, image_url: str = "") -> None:
         return
 
     url = image_url or fetch_avatar_url(user_id) or ""
-    if not url:
-        _complete_fetch(user_id, None)
-        return
+    if url:
+        try:
+            response = _get_session().get(url, timeout=8)
+            if response.status_code == 200 and response.content:
+                _save_to_cache(user_id, response.content)
+                _complete_fetch(user_id, response.content)
+                return
+        except requests.RequestException:
+            pass
+    _complete_fetch(user_id, load_cached_bytes(user_id, allow_stale=True))
+
+
+def prune_unused_cache(user_ids: set[str]) -> int:
+    days = get_cache_days()
+    if days <= 0 or not user_ids:
+        return 0
+    removed = 0
     try:
-        response = _get_session().get(url, timeout=8)
-        if response.status_code == 200 and response.content:
-            _save_to_cache(user_id, response.content)
-            _complete_fetch(user_id, response.content)
-            return
-    except requests.RequestException:
-        pass
-    _complete_fetch(user_id, None)
+        entries = list(os.scandir(_CACHE_DIR))
+    except OSError:
+        return 0
+    for entry in entries:
+        name, extension = os.path.splitext(entry.name)
+        if extension != ".png" or name in user_ids or not _is_stale(entry.path, days * 4):
+            continue
+        try:
+            os.remove(entry.path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def fetch_avatar_async(
@@ -206,6 +248,7 @@ def sync_missing_avatar_cache(
                 if user_id and user_id != "0":
                     resolved.append((username, data, user_id))
 
+            prune_unused_cache({user_id for _, _, user_id in resolved})
             missing_ids = [
                 user_id for _, _, user_id in resolved
                 if load_cached_bytes(user_id) is None
