@@ -7,6 +7,11 @@ Main entry point for the application.
 
 import ctypes
 import os
+import sys
+
+from utils.app_paths import apply_data_dir_argument
+
+sys.argv[:] = apply_data_dir_argument(sys.argv)
 
 from features import diagnostics
 import features.settings_store as settings_store

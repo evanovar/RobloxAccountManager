@@ -164,6 +164,8 @@ uv run python src/main.py
 
 Evanovar RAM stores its persistent data in `AccountManagerData`. This includes saved accounts, settings, groups, recent games, local Roblox settings, avatar cache, and diagnostic logs.
 
+By default this folder is created next to the application. To keep the data somewhere else, or to run separate profiles side by side, start the application with `--data-dir "D:/Profiles/Alt"` or set the `RAM_DATA_DIR` environment variable. The option wins over the variable, and relative paths, `~` and `%VARIABLES%` are expanded.
+
 The application does not include hidden telemetry, advertising SDKs, or analytics tracking. Network communication is limited to enabled or requested functionality:
 
 - Roblox API requests for account, game, presence, authentication, and download features.
