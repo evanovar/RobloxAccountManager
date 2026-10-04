@@ -5,6 +5,7 @@ Core logic of update checker.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
@@ -18,7 +19,9 @@ from typing import Callable
 from urllib.parse import urlparse
 
 import requests
+import win32api
 
+from classes.operation_result import OperationResult
 from utils.app_paths import get_data_dir
 
 GITHUB_API = "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest"
@@ -32,6 +35,7 @@ LEGACY_ASSET_NAMES = (
     "RobloxAccountManager.exe",
 )
 DOWNLOAD_HOST = "github.com"
+MAX_NOTES_LENGTH = 6000
 PROCESS_WAIT_SECONDS = 120
 REPLACE_WAIT_SECONDS = 30
 
@@ -61,6 +65,43 @@ def check_latest_version() -> str | None:
     except Exception as exc:
         print(f"[ERROR] check_latest_version error: {exc}")
         return None
+
+
+def get_latest_release() -> OperationResult:
+    try:
+        response = requests.get(GITHUB_API, timeout=8)
+    except requests.RequestException as exc:
+        return OperationResult.failure(
+            "UPDATE_CHECK_FAILED",
+            "Update Check Failed",
+            "GitHub could not be reached. Check your connection and try again.",
+            detail=f"{type(exc).__name__}: {exc}",
+            retryable=True,
+        )
+    if response.status_code != 200:
+        return OperationResult.failure(
+            "UPDATE_CHECK_FAILED",
+            "Update Check Failed",
+            "GitHub did not return the latest release.",
+            detail=f"HTTP {response.status_code}",
+            retryable=response.status_code >= 500 or response.status_code == 429,
+        )
+    try:
+        release = response.json()
+        version = str(release.get("tag_name", "")).lstrip("v").strip()
+    except (ValueError, AttributeError):
+        version = ""
+    if not version:
+        return OperationResult.failure(
+            "UPDATE_CHECK_FAILED",
+            "Update Check Failed",
+            "GitHub returned a release without a version.",
+        )
+    return OperationResult.success(data={
+        "version": version,
+        "notes": str(release.get("body") or "").strip()[:MAX_NOTES_LENGTH],
+        "url": str(release.get("html_url") or RELEASES_PAGE),
+    })
 
 
 def get_exe_asset() -> dict | None:
@@ -168,16 +209,26 @@ def _build_update_log_path() -> str:
     return os.path.join(log_dir, f"update-{stamp}.log")
 
 
+def _system_powershell() -> str:
+    return os.path.join(
+        win32api.GetSystemDirectory(), "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+
+
 def _build_installer_script() -> str:
     return f'''param(
     [Parameter(Mandatory=$true)][int]$TargetProcessId,
     [Parameter(Mandatory=$true)][string]$SourcePath,
     [Parameter(Mandatory=$true)][string]$DestinationPath,
     [Parameter(Mandatory=$true)][string]$LogPath,
-    [Parameter(Mandatory=$true)][string]$UpdateDirectory
+    [Parameter(Mandatory=$true)][string]$UpdateDirectory,
+    [string]$ExpectedSha256 = "",
+    [string]$LaunchArgumentsBase64 = ""
 )
 
 $ErrorActionPreference = "Stop"
+$StagedPath = "$DestinationPath.new"
+$BackupPath = "$DestinationPath.old"
 
 function Write-UpdateFailure([string]$Message) {{
     try {{
@@ -186,6 +237,19 @@ function Write-UpdateFailure([string]$Message) {{
         $Message | Set-Content -LiteralPath $LogPath -Encoding UTF8
     }} catch {{
     }}
+}}
+
+function Start-Application {{
+    $start = @{{
+        FilePath = $DestinationPath
+        WorkingDirectory = (Split-Path -Parent $DestinationPath)
+    }}
+    if ($LaunchArgumentsBase64) {{
+        $start.ArgumentList = [System.Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($LaunchArgumentsBase64)
+        )
+    }}
+    Start-Process @start | Out-Null
 }}
 
 try {{
@@ -202,16 +266,11 @@ try {{
     }}
 
     $replaceDeadline = [DateTime]::UtcNow.AddSeconds({REPLACE_WAIT_SECONDS})
-    $installed = $false
-    while (-not $installed) {{
+    $staged = $false
+    while (-not $staged) {{
         try {{
-            Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
-            $sourceLength = (Get-Item -LiteralPath $SourcePath).Length
-            $destinationLength = (Get-Item -LiteralPath $DestinationPath).Length
-            if ($sourceLength -ne $destinationLength) {{
-                throw "The installed executable size does not match the download."
-            }}
-            $installed = $true
+            Copy-Item -LiteralPath $SourcePath -Destination $StagedPath -Force
+            $staged = $true
         }} catch {{
             if ([DateTime]::UtcNow -ge $replaceDeadline) {{
                 throw
@@ -220,6 +279,41 @@ try {{
         }}
     }}
 
+    $sourceLength = (Get-Item -LiteralPath $SourcePath).Length
+    if ((Get-Item -LiteralPath $StagedPath).Length -ne $sourceLength) {{
+        throw "The staged executable size does not match the download."
+    }}
+    if ($ExpectedSha256) {{
+        $stagedHash = (Get-FileHash -LiteralPath $StagedPath -Algorithm SHA256).Hash
+        if ($stagedHash -ne $ExpectedSha256) {{
+            throw "The staged executable does not match the published checksum."
+        }}
+    }}
+
+    $swapped = $false
+    while (-not $swapped) {{
+        try {{
+            if (Test-Path -LiteralPath $BackupPath) {{
+                Remove-Item -LiteralPath $BackupPath -Force
+            }}
+            if (Test-Path -LiteralPath $DestinationPath) {{
+                Move-Item -LiteralPath $DestinationPath -Destination $BackupPath -Force
+            }}
+            Move-Item -LiteralPath $StagedPath -Destination $DestinationPath -Force
+            $swapped = $true
+        }} catch {{
+            if ((Test-Path -LiteralPath $BackupPath) -and -not (Test-Path -LiteralPath $DestinationPath)) {{
+                Move-Item -LiteralPath $BackupPath -Destination $DestinationPath -Force
+            }}
+            if ([DateTime]::UtcNow -ge $replaceDeadline) {{
+                throw
+            }}
+            Start-Sleep -Milliseconds 500
+        }}
+    }}
+
+    Start-Application
+    Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $UpdateDirectory -Force -ErrorAction SilentlyContinue
@@ -230,6 +324,13 @@ try {{
     $detail += "Destination: $DestinationPath`r`n"
     $detail += "Error: $($_.Exception.Message)"
     Write-UpdateFailure $detail
+    Remove-Item -LiteralPath $StagedPath -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $DestinationPath) -and (Test-Path -LiteralPath $BackupPath)) {{
+        Move-Item -LiteralPath $BackupPath -Destination $DestinationPath -Force -ErrorAction SilentlyContinue
+    }}
+    if ((Test-Path -LiteralPath $DestinationPath) -and -not (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue)) {{
+        try {{ Start-Application }} catch {{ }}
+    }}
     exit 1
 }}
 '''
@@ -239,16 +340,21 @@ def _launch_installer(
     source_path: str,
     destination_path: str,
     update_directory: str,
+    expected_sha256: str = "",
+    launch_arguments: list[str] | None = None,
 ) -> None:
     script_path = os.path.join(update_directory, "install_update.ps1")
     log_path = _build_update_log_path()
     with open(script_path, "w", encoding="utf-8") as handle:
         handle.write(_build_installer_script())
 
+    arguments_text = subprocess.list2cmdline(list(launch_arguments or []))
+    encoded_arguments = base64.b64encode(arguments_text.encode("utf-8")).decode("ascii") if arguments_text else ""
+
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.Popen(
         [
-            "powershell.exe",
+            _system_powershell(),
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
@@ -265,6 +371,10 @@ def _launch_installer(
             log_path,
             "-UpdateDirectory",
             update_directory,
+            "-ExpectedSha256",
+            expected_sha256,
+            "-LaunchArgumentsBase64",
+            encoded_arguments,
         ],
         shell=False,
         creationflags=creation_flags,
@@ -321,7 +431,13 @@ def download_update(
                 raise RuntimeError("The update download was interrupted before it finished.")
             verify_download(source_path, asset.get("size"), asset.get("digest"))
 
-            _launch_installer(source_path, target, update_directory)
+            digest = str(asset.get("digest") or "")
+            expected_sha256 = digest.partition(":")[2].upper() if digest.lower().startswith("sha256:") else ""
+            _launch_installer(
+                source_path, target, update_directory,
+                expected_sha256=expected_sha256,
+                launch_arguments=sys.argv[1:],
+            )
             installer_started = True
             on_progress(100)
             print(
