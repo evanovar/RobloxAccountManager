@@ -32,10 +32,12 @@ import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.settings_store as settings_store_mod
 from utils.app_paths import get_app_dir, get_data_dir
+from utils.atomic_io import quarantine_corrupt, write_json_atomic
 
 # Paths
 _DATA_DIR = get_data_dir()
 _RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
+_RECENT_GAMES_LOCK = threading.RLock()
 
 # Recent games
 def load_recent_games() -> list[dict]:
@@ -45,6 +47,9 @@ def load_recent_games() -> list[dict]:
                 data = json.load(f)
             if isinstance(data, list):
                 return data
+            quarantine_corrupt(_RECENT_GAMES_FILE)
+    except ValueError:
+        quarantine_corrupt(_RECENT_GAMES_FILE)
     except Exception:
         pass
     return []
@@ -53,37 +58,19 @@ def load_recent_games() -> list[dict]:
 def save_recent_game(place_id: str, name: str, private_server: str = "") -> None:
     if not place_id:
         return
-    games = load_recent_games()
-    games = [
-        g for g in games
-        if not (str(g.get("place_id")) == str(place_id)
-                and str(g.get("private_server", "")) == str(private_server))
-    ]
-    games.insert(0, {
-        "place_id": place_id,
-        "name": name,
-        "private_server": private_server,
-        "private": bool(private_server),
-    })
-    games = games[:20]
-    os.makedirs(_DATA_DIR, exist_ok=True)
-    descriptor, temp_path = tempfile.mkstemp(
-        prefix=".recent_games.", suffix=".tmp", dir=_DATA_DIR
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as f:
-            json.dump(games, f, indent=2)
-        os.replace(temp_path, _RECENT_GAMES_FILE)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-        raise
+    with _RECENT_GAMES_LOCK:
+        games = [
+            g for g in load_recent_games()
+            if not (str(g.get("place_id")) == str(place_id)
+                    and str(g.get("private_server", "")) == str(private_server))
+        ]
+        games.insert(0, {
+            "place_id": place_id,
+            "name": name,
+            "private_server": private_server,
+            "private": bool(private_server),
+        })
+        write_json_atomic(_RECENT_GAMES_FILE, games[:20], prefix=".recent_games.")
 
 # UI settings persistence
 

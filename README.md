@@ -83,7 +83,7 @@ uv run python src/main.py
 | JavaScript login | Open multiple browser sessions and run custom JavaScript for advanced login workflows. |
 | Groups and notes | Organize accounts into groups and assign notes to one or multiple selected accounts. |
 | Account list controls | Use avatars, drag-and-drop ordering, multi-select actions, refresh, deletion, and controlled password or cookie copying. |
-| Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. |
+| Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. The startup check and the delay between accounts can be changed under Settings > General. |
 | Activity data | Display online status, Roblox memory usage, and CPU usage beside saved accounts. |
 
 ### Game launching
@@ -144,10 +144,10 @@ uv run python src/main.py
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
 | Update manager | Check GitHub releases on startup or manually, then download updates from the application. |
 | Discord webhooks | Send selected log levels, Auto-Rejoin events, optional mentions, and periodic screenshots to a configured webhook. |
-| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. |
+| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. After 10 wrong passwords within a minute, further attempts are refused for a while, and `websocket_max_auth_failures` in the same file changes that limit (0 turns it off). |
 | Console | Review timestamped, color-coded application output and copy or clear the current console view. |
 | Structured errors | Show specific error codes and technical details instead of generic failure messages. |
-| Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. |
+| Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. Only the newest 20 logs of each kind are kept by default, which can be changed under Settings > General. |
 
 ### Security and local data
 
@@ -168,7 +168,7 @@ The application does not include hidden telemetry, advertising SDKs, or analytic
 
 - Roblox API requests for account, game, presence, authentication, and download features.
 - GitHub requests for release and update checks.
-- Connectivity checks used by Auto-Rejoin.
+- Connectivity checks used by Auto-Rejoin. They use Google and Cloudflare by default, and `connectivity_check_urls` in `AccountManagerData/ui_settings.json` can replace them with your own list of addresses.
 
 Account cookies and stored WebSocket passwords remain local unless the user explicitly enables a feature that sends related data elsewhere.
 

@@ -14,10 +14,12 @@ import random
 import psutil
 import requests
 from typing import Callable, Optional
+from urllib.parse import urlparse
 from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
 import features.settings_store as settings_store
 from utils.app_paths import get_data_dir
+from utils.atomic_io import write_json_atomic
 
 _CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
 _CONFIG_LOCK = threading.RLock()
@@ -52,27 +54,33 @@ def save_configs(configs: dict) -> None:
     with _CONFIG_LOCK:
         if _CONFIG_CACHE == configs:
             return
-    os.makedirs(get_data_dir(), exist_ok=True)
-    temp_file = _CONFIG_FILE + ".tmp"
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(configs, f, indent=2)
-        os.replace(temp_file, _CONFIG_FILE)
-        with _CONFIG_LOCK:
-            _CONFIG_CACHE = dict(configs)
-    except Exception as e:
-        print(f"[WARNING] Safe configs save failed: {e}. Falling back to original direct write.")
-        if os.path.exists(temp_file):
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
-        # Original direct write fallback
         try:
-            with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(configs, f, indent=2)
-        except Exception:
-            pass
+            write_json_atomic(_CONFIG_FILE, configs, prefix=".auto_rejoin.")
+        except Exception as exc:
+            print(f"[ERROR] Auto-Rejoin configs could not be saved: {exc}")
+            return
+        _CONFIG_CACHE = dict(configs)
+
+DEFAULT_CONNECTIVITY_URLS = (
+    "https://www.google.com/generate_204",
+    "https://www.cloudflare.com/cdn-cgi/trace",
+)
+
+
+def get_connectivity_urls() -> tuple[str, ...]:
+    configured = settings_store.get("connectivity_check_urls")
+    if isinstance(configured, list):
+        urls = tuple(
+            url.strip()
+            for url in configured
+            if isinstance(url, str)
+            and urlparse(url.strip()).scheme in ("http", "https")
+            and urlparse(url.strip()).hostname
+        )
+        if urls:
+            return urls
+    return DEFAULT_CONNECTIVITY_URLS
+
 
 def _has_internet(timeout: int = 3) -> bool:
     global _INTERNET_CACHE
@@ -81,8 +89,7 @@ def _has_internet(timeout: int = 3) -> bool:
         checked_at, cached = _INTERNET_CACHE
         if now - checked_at < 10.0:
             return cached
-    for url in ("https://www.google.com/generate_204",
-                "https://www.cloudflare.com/cdn-cgi/trace"):
+    for url in get_connectivity_urls():
         try:
             if requests.get(url, timeout=timeout).status_code < 500:
                 with _INTERNET_LOCK:
