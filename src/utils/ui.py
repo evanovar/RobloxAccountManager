@@ -64,6 +64,7 @@ import features.auto_rejoin as ar
 import features.account_filter as account_filter
 import features.account_order as account_order
 import features.avatars as avatars
+import features.color_themes as color_themes
 import features.cookie_validator as cookie_validator_mod
 import features.chromium as chromium_mod
 import features.diagnostics as diagnostics
@@ -109,7 +110,7 @@ class _DragDropFilter(QObject):
 
         self._indicator = QFrame(self._viewport)
         self._indicator.setFixedHeight(2)
-        self._indicator.setStyleSheet("background: #0078D7; border: none;")
+        self._indicator.setStyleSheet(f"background: {FG_ACCENT}; border: none;")
         self._indicator.hide()
 
     def eventFilter(self, obj, event):
@@ -207,13 +208,13 @@ class _DragDropFilter(QObject):
             | Qt.WindowType.WindowStaysOnTopHint,
         )
         win.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        win.setStyleSheet("""
-            QFrame {
-                background: #1E1E1E;
-                border: 1px solid #3A3A3A;
+        win.setStyleSheet(f"""
+            QFrame {{
+                background: {PRESSED};
+                border: 1px solid {HOVER};
                 border-radius: 6px;
-            }
-            QLabel { background: transparent; color: #EDEDED; }
+            }}
+            QLabel {{ background: transparent; color: {TEXT}; }}
         """)
 
         h = QHBoxLayout(win)
@@ -227,7 +228,7 @@ class _DragDropFilter(QObject):
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
         )
         av_lbl.setStyleSheet(
-            "background: #2A2A2A; border-radius: 11px;"
+            f"background: {SELECT}; border-radius: 11px;"
         )
         h.addWidget(av_lbl)
         self._float_av = av_lbl
@@ -374,15 +375,26 @@ class _Bridge(QObject):
     console_wakeup = Signal()
 
 
-BG = "#0E0E0E"
-PANEL = "#151515"
-INPUT = "#1A1A1A"
-TEXT = "#EDEDED"
-MUTED = "#AAAAAA"
-LINE = "#242424"
-SELECT = "#2A2A2A"
-NOTE = "#D6BB7D"
-FG_ACCENT = "#0078D7"
+_THEME = color_themes.resolve_colors(actions.load_ui_settings())
+BG = _THEME["BG"]
+PANEL = _THEME["PANEL"]
+INPUT = _THEME["INPUT"]
+TEXT = _THEME["TEXT"]
+MUTED = _THEME["MUTED"]
+LINE = _THEME["LINE"]
+SELECT = _THEME["SELECT"]
+NOTE = _THEME["NOTE"]
+FG_ACCENT = _THEME["ACCENT"]
+HOVER = _THEME["HOVER"]
+PRESSED = _THEME["PRESSED"]
+RAISED = _THEME["RAISED"]
+ACCENT_HOVER = _THEME["ACCENT_HOVER"]
+ACCENT_PRESSED = _THEME["ACCENT_PRESSED"]
+ACCENT_BRIGHT = _THEME["ACCENT_BRIGHT"]
+ACCENT_SOFT = _THEME["ACCENT_SOFT"]
+ACCENT_TEXT = _THEME["ACCENT_TEXT"]
+ACCENT_DEEP = _THEME["ACCENT_DEEP"]
+ON_ACCENT = _THEME["ON_ACCENT"]
 
 _dropdown_arrow_cache: dict[str, str] = {}
 
@@ -811,7 +823,7 @@ class _BackgroundController(QObject):
                     transformed += (
                         'QMainWindow, QDialog { background: transparent; }'
                         'QCheckBox::indicator:checked, QRadioButton::indicator:checked {'
-                        ' background: #3A7BD5; }'
+                        f' background: {ACCENT_BRIGHT}; }}'
                         f"QToolTip {{ background: {self.colors['tint']};"
                         f" color: {self.colors['text']};"
                         f" border: 1px solid {self.colors['outline']}; padding: 4px 6px; }}"
@@ -1275,6 +1287,50 @@ class _DetachedPageWindow(QMainWindow):
         self.hide()
         self.reattach_requested.emit(self.page_index)
 
+class _ThemePreview(QWidget):
+    def __init__(self, colors: dict, parent=None):
+        super().__init__(parent)
+        self._colors = colors
+        self.setFixedHeight(76)
+        self.setAccessibleName("Color theme preview")
+
+    def set_colors(self, colors: dict) -> None:
+        self._colors = colors
+        self.update()
+
+    def paintEvent(self, event):
+        c = self._colors
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width, height = self.width(), self.height()
+        painter.fillRect(0, 0, width, height, QColor(c["BG"]))
+        painter.fillRect(0, 0, 70, height, QColor(c["PANEL"]))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(c["RAISED"]))
+        painter.drawRect(8, 10, 54, 16)
+        painter.setBrush(QColor(c["INPUT"]))
+        painter.drawRect(8, 32, 54, 12)
+        painter.drawRect(8, 50, 54, 12)
+        painter.setBrush(QColor(c["INPUT"]))
+        painter.drawRect(80, 10, width - 192, 20)
+        painter.setPen(QColor(c["LINE"]))
+        painter.drawRect(80, 10, width - 193, 19)
+        painter.setPen(QColor(c["TEXT"]))
+        painter.drawText(88, 25, "Account name")
+        painter.setPen(QColor(c["NOTE"]))
+        painter.drawText(88, 48, "note")
+        painter.setPen(QColor(c["MUTED"]))
+        painter.drawText(88, 66, "Muted text")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(c["ACCENT"]))
+        painter.drawRect(width - 104, 10, 96, 22)
+        painter.setPen(QColor(c["ON_ACCENT"]))
+        painter.drawText(width - 104, 10, 96, 22, Qt.AlignmentFlag.AlignCenter, "Accent")
+        painter.setPen(QColor(c["ACCENT_TEXT"]))
+        painter.drawText(width - 104, 52, "Link text")
+        painter.end()
+
+
 class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
@@ -1556,6 +1612,46 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         config = themes_mod.load_background()
         themes_mod.save_background(config['enabled'], config['path'], self._theme_blur.value())
 
+    def _selected_theme_colors(self) -> dict:
+        return color_themes.resolve_colors({
+            color_themes.THEME_SETTING: self._color_theme_combo.currentData(),
+            color_themes.ACCENT_SETTING: actions.load_ui_settings().get(color_themes.ACCENT_SETTING),
+        })
+
+    def _refresh_color_theme_controls(self) -> None:
+        colors = self._selected_theme_colors()
+        self._theme_preview.set_colors(colors)
+        accent_is_custom = color_themes.is_hex_color(
+            actions.load_ui_settings().get(color_themes.ACCENT_SETTING)
+        )
+        self._accent_button.setText(colors["ACCENT"].upper())
+        self._accent_reset_button.setEnabled(accent_is_custom)
+        self._color_theme_hint.setText(
+            "Restart the application to use the new colors."
+            if self._color_theme_pending()
+            else "Color themes are applied when the application starts."
+        )
+
+    def _color_theme_pending(self) -> bool:
+        return self._selected_theme_colors() != _THEME
+
+    def _on_color_theme_changed(self, _index: int) -> None:
+        actions.save_ui_setting(color_themes.THEME_SETTING, self._color_theme_combo.currentData())
+        self._refresh_color_theme_controls()
+
+    def _choose_accent_color(self) -> None:
+        color = QColorDialog.getColor(
+            QColor(self._selected_theme_colors()["ACCENT"]), self, "Choose Accent Color"
+        )
+        if not color.isValid():
+            return
+        actions.save_ui_setting(color_themes.ACCENT_SETTING, color.name().upper())
+        self._refresh_color_theme_controls()
+
+    def _reset_accent_color(self) -> None:
+        actions.save_ui_setting(color_themes.ACCENT_SETTING, "")
+        self._refresh_color_theme_controls()
+
     def _choose_theme_color(self, key):
         config = themes_mod.load_background()
         color = QColorDialog.getColor(QColor(config[key]), self, 'Choose Color')
@@ -1616,7 +1712,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 padding: 2px 8px; color: {MUTED}; font-size: 12px;
             }}
             QPushButton#navTab:checked {{
-                background: #2E2E2E; border: 1px solid #3A3A3A;
+                background: {RAISED}; border: 1px solid {HOVER};
                 color: {TEXT}; font-weight: 700;
             }}
 
@@ -1631,7 +1727,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             QLabel#noteSep {{ color: #7A7A7A; font-size: 11px; }}
             QLabel#noteText {{ color: {NOTE};  font-size: 11px; font-weight: 600; }}
             QLabel#performanceSep {{ color: #7A7A7A; font-size: 11px; }}
-            QLabel#ramUsage {{ color: #5DBBFF; font-size: 10px; }}
+            QLabel#ramUsage {{ color: {ACCENT_TEXT}; font-size: 10px; }}
             QLabel#cpuUsage {{ color: #2ECC71; font-size: 10px; }}
 
             QLineEdit {{
@@ -1687,7 +1783,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 padding: 0px 8px; font-size: 10px; color: {MUTED};
             }}
             QPushButton#groupTab:checked {{
-                background: #2E2E2E; border: 1px solid #3A3A3A; color: {TEXT};
+                background: {RAISED}; border: 1px solid {HOVER}; color: {TEXT};
             }}
             QPushButton#groupTab:hover {{ background: #232323; border-color: #333333; }}
 
@@ -1700,7 +1796,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 border: 1px solid {LINE}; background: {INPUT};
             }}
             QCheckBox::indicator:checked {{
-                background: #3A7BD5; border: 1px solid #3A7BD5;
+                background: {ACCENT_BRIGHT}; border: 1px solid {ACCENT_BRIGHT};
                 image: url(none);
             }}
             QCheckBox::indicator:disabled {{
@@ -1715,8 +1811,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 border: 1px solid {LINE}; background: {INPUT};
             }}
             QRadioButton::indicator:checked {{
-                background: #3A7BD5; border: 2px solid {INPUT};
-                outline: 1px solid #3A7BD5;
+                background: {ACCENT_BRIGHT}; border: 2px solid {INPUT};
+                outline: 1px solid {ACCENT_BRIGHT};
             }}
             QRadioButton:disabled {{ color: {MUTED}; }}
 
@@ -2083,8 +2179,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QPushButton {{ background: {INPUT}; color: {TEXT};"
             f"  border: 1px solid {LINE}; border-radius: 0;"
             f"  padding: 10px 16px; font-size: 12px; text-align: left; }}"
-            f"QPushButton:hover {{ background: {SELECT}; border-color: #3A3A3A; }}"
-            f"QPushButton:checked {{ background: #0A1A2A; border-color: #0078D7; color: {TEXT}; }}"
+            f"QPushButton:hover {{ background: {SELECT}; border-color: {HOVER}; }}"
+            f"QPushButton:checked {{ background: {ACCENT_DEEP}; border-color: {FG_ACCENT}; color: {TEXT}; }}"
         )
 
         btn_group = QButtonGroup(self)
@@ -2125,8 +2221,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; min-width: 120px; font-weight: 700;"
             f"  text-align: center; color: {TEXT}; border-radius: 0; }}"
-            f"QPushButton:hover   {{ background: #3A3A3A; }}"
-            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+            f"QPushButton:hover   {{ background: {HOVER}; }}"
+            f"QPushButton:pressed {{ background: {PRESSED}; }}"
         )
         cont_row.addWidget(self._setup_continue_btn)
         choice_lay.addLayout(cont_row)
@@ -2171,8 +2267,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; min-width: 120px; font-weight: 700;"
             f"  text-align: center; color: {TEXT}; border-radius: 0; }}"
-            f"QPushButton:hover   {{ background: #3A3A3A; }}"
-            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+            f"QPushButton:hover   {{ background: {HOVER}; }}"
+            f"QPushButton:pressed {{ background: {PRESSED}; }}"
         )
         pw_btn_row.addWidget(pw_back)
         pw_btn_row.addStretch()
@@ -3899,6 +3995,41 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Themes (Page 3)
         sa, f = _scrollable()
         content_stack.addWidget(sa)
+        f.addWidget(_sec("COLOR THEME"))
+        _theme_settings = actions.load_ui_settings()
+        self._color_theme_combo = QComboBox()
+        for _key, _label in color_themes.theme_choices():
+            self._color_theme_combo.addItem(_label, _key)
+        _saved_theme = _theme_settings.get(color_themes.THEME_SETTING)
+        _index = self._color_theme_combo.findData(_saved_theme)
+        self._color_theme_combo.setCurrentIndex(max(0, _index))
+        self._color_theme_combo.setAccessibleName("Color theme")
+        f.addWidget(self._color_theme_combo)
+
+        self._theme_preview = _ThemePreview(_THEME)
+        f.addWidget(self._theme_preview)
+
+        _accent_row = QHBoxLayout()
+        _accent_row.addWidget(QLabel("Accent Color"))
+        _accent_row.addStretch(1)
+        self._accent_button = QPushButton(_THEME["ACCENT"].upper())
+        self._accent_button.setToolTip("Replace the accent color of the selected theme.")
+        self._accent_button.clicked.connect(self._choose_accent_color)
+        _accent_row.addWidget(self._accent_button)
+        self._accent_reset_button = QPushButton("Reset")
+        self._accent_reset_button.setToolTip("Go back to the accent color of the selected theme.")
+        self._accent_reset_button.clicked.connect(self._reset_accent_color)
+        _accent_row.addWidget(self._accent_reset_button)
+        f.addLayout(_accent_row)
+
+        self._color_theme_hint = QLabel()
+        self._color_theme_hint.setWordWrap(True)
+        self._color_theme_hint.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        f.addWidget(self._color_theme_hint)
+        self._refresh_color_theme_controls()
+        self._color_theme_combo.currentIndexChanged.connect(self._on_color_theme_changed)
+
+        f.addWidget(_sec("BACKGROUND"))
         config = themes_mod.load_background()
         self._theme_enabled = QCheckBox('Enable Custom Background')
         self._theme_enabled.setChecked(config['enabled'])
@@ -4991,7 +5122,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         lbl_cur = QLabel(f"Your version is outdated:  v{APP_VERSION}")
         lbl_cur.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         lbl_new = QLabel(f"Latest version:  v{latest_version}")
-        lbl_new.setStyleSheet("color: #5DBBFF; font-size: 13px; font-weight: 600;")
+        lbl_new.setStyleSheet(f"color: {ACCENT_TEXT}; font-size: 13px; font-weight: 600;")
         card_lay.addWidget(lbl_cur)
         card_lay.addWidget(lbl_new)
         lay.addWidget(card)
@@ -5029,7 +5160,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     f"QPushButton {{"
                     f"  background: qlineargradient("
                     f"    x1:0, y1:0, x2:1, y2:0,"
-                    f"    stop:0 #3A5A9A, stop:{a} #3A5A9A,"
+                    f"    stop:0 {ACCENT_SOFT}, stop:{a} {ACCENT_SOFT},"
                     f"    stop:{b} {INPUT}, stop:1 {INPUT}"
                     f"  );"
                     f"  color: {TEXT}; border: 1px solid {LINE}; border-radius: 4px;"
@@ -5384,8 +5515,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QPushButton {{"
             f"  background: qlineargradient("
             f"    x1:0, y1:0, x2:1, y2:0,"
-            f"    stop:0 #3A5A9A,"
-            f"    stop:{stop_a} #3A5A9A,"
+            f"    stop:0 {ACCENT_SOFT},"
+            f"    stop:{stop_a} {ACCENT_SOFT},"
             f"    stop:{stop_b} {INPUT},"
             f"    stop:1 {INPUT}"
             f"  );"
@@ -5534,8 +5665,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             f"QPushButton {{"
             f"  background: qlineargradient("
             f"    x1:0, y1:0, x2:1, y2:0,"
-            f"    stop:0 #3A5A9A,"
-            f"    stop:{stop_a} #3A5A9A,"
+            f"    stop:0 {ACCENT_SOFT},"
+            f"    stop:{stop_a} {ACCENT_SOFT},"
             f"    stop:{stop_b} {INPUT},"
             f"    stop:1 {INPUT}"
             f"  );"
@@ -6390,8 +6521,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         join_btn.setStyleSheet(
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
-            f"QPushButton:hover   {{ background: #3A3A3A; }}"
-            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+            f"QPushButton:hover   {{ background: {HOVER}; }}"
+            f"QPushButton:pressed {{ background: {PRESSED}; }}"
         )
         join_btn.clicked.connect(self._on_join_place)
 
@@ -6509,7 +6640,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         result.fill(Qt.GlobalColor.transparent)
         painter = QPainter(result)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor("#2A2A2A"))
+        painter.setBrush(QColor(SELECT))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, size, size)
         painter.end()
@@ -7773,17 +7904,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         copy_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {FG_ACCENT};
-                color: white;
+                color: {ON_ACCENT};
                 border: none;
                 border-radius: 6px;
                 font-size: 12px;
                 font-weight: 600;
             }}
             QPushButton:hover {{
-                background: #1a8fe0;
+                background: {ACCENT_HOVER};
             }}
             QPushButton:pressed {{
-                background: #006dc4;
+                background: {ACCENT_PRESSED};
             }}
         """)
 
@@ -7809,17 +7940,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         copy_user_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {FG_ACCENT};
-                color: white;
+                color: {ON_ACCENT};
                 border: none;
                 border-radius: 6px;
                 font-size: 12px;
                 font-weight: 600;
             }}
             QPushButton:hover {{
-                background: #1a8fe0;
+                background: {ACCENT_HOVER};
             }}
             QPushButton:pressed {{
-                background: #006dc4;
+                background: {ACCENT_PRESSED};
             }}
         """)
 
@@ -8511,8 +8642,8 @@ class _AutoRejoinAddWindow(QDialog):
         self._add_btn.setStyleSheet(
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
-            f"QPushButton:hover   {{ background: #3A3A3A; }}"
-            f"QPushButton:pressed {{ background: #1E1E1E; }}"
+            f"QPushButton:hover   {{ background: {HOVER}; }}"
+            f"QPushButton:pressed {{ background: {PRESSED}; }}"
         )
         self._add_btn.clicked.connect(self._on_add)
         right.addWidget(self._add_btn)

@@ -141,6 +141,7 @@ uv run python src/main.py
 
 | Feature | Description |
 | :--- | :--- |
+| Color themes | Pick one of eight color presets (Default, Midnight, AMOLED Black, Nord, Dracula, Solarized Dark, Forest, Rose) and optionally your own accent color under Settings > Themes, with a live preview. The choice is applied the next time the application starts. |
 | System tray | Hide the main window to the system tray, restore it from the tray icon, or exit from the tray menu. |
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
 | Update manager | Check GitHub releases on startup or manually, then download updates from the application. |
