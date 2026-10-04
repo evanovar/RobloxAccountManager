@@ -14,6 +14,9 @@ Supported commands (case-insensitive, shlex-parsed):
 Authentication (when websocket_require_password is true):
   AUTH <password> | <command>
 
+After websocket_max_auth_failures wrong passwords (default 10, 0 disables) within
+60 seconds, further attempts are refused until the oldest failure ages out.
+
 Connections that send an Origin header (every browser page) are refused unless
 the origin is listed in the websocket_allowed_origins setting.
 """
@@ -21,15 +24,21 @@ the origin is listed in the websocket_allowed_origins setting.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import secrets
 import shlex
 import threading
+import time
 import websockets
 from typing import Callable
 import features.auto_rejoin as _ar
 import features.presence as presence_mod
 from classes.roblox_api import RobloxAPI
+
+
+AUTH_FAILURE_WINDOW_SECONDS = 60.0
+DEFAULT_MAX_AUTH_FAILURES = 10
 
 
 class WebSocketServer:
@@ -59,7 +68,8 @@ class WebSocketServer:
         self._stop = threading.Event()
         self._async_stop: asyncio.Event | None = None
         self.running = False
-
+        self._auth_failures: collections.deque[float] = collections.deque()
+        self._auth_lock = threading.Lock()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -206,11 +216,33 @@ class WebSocketServer:
         if len(auth_parts) < 2 or auth_parts[0].lower() != "auth":
             return False, "", "Auth format: AUTH <password> | <command>"
 
+        if self._auth_locked_out():
+            return False, "", "Too many failed attempts. Try again later."
+
         provided = " ".join(auth_parts[1:])
         if not secrets.compare_digest(provided.encode("utf-8"), stored.encode("utf-8")):
+            self._record_auth_failure()
             return False, "", "Authentication failed"
 
         return True, cmd_seg, None
+
+    def _auth_locked_out(self) -> bool:
+        limit = self._get_max_auth_failures()
+        if limit <= 0:
+            return False
+        with self._auth_lock:
+            self._prune_auth_failures()
+            return len(self._auth_failures) >= limit
+
+    def _record_auth_failure(self) -> None:
+        with self._auth_lock:
+            self._prune_auth_failures()
+            self._auth_failures.append(time.monotonic())
+
+    def _prune_auth_failures(self) -> None:
+        cutoff = time.monotonic() - AUTH_FAILURE_WINDOW_SECONDS
+        while self._auth_failures and self._auth_failures[0] <= cutoff:
+            self._auth_failures.popleft()
 
     def _cmd_account_list(self) -> dict:
         try:
@@ -447,6 +479,12 @@ class WebSocketServer:
             return max(0, int(self._get_settings().get("websocket_max_message_length", 4096)))
         except Exception:
             return 4096
+
+    def _get_max_auth_failures(self) -> int:
+        try:
+            return max(0, int(self._get_settings().get("websocket_max_auth_failures", DEFAULT_MAX_AUTH_FAILURES)))
+        except Exception:
+            return DEFAULT_MAX_AUTH_FAILURES
 
     def _get_max_cookies(self) -> int:
         try:
