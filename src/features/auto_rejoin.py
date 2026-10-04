@@ -14,6 +14,7 @@ import random
 import psutil
 import requests
 from typing import Callable, Optional
+from urllib.parse import urlparse
 from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
 import features.settings_store as settings_store
@@ -60,6 +61,27 @@ def save_configs(configs: dict) -> None:
             return
         _CONFIG_CACHE = dict(configs)
 
+DEFAULT_CONNECTIVITY_URLS = (
+    "https://www.google.com/generate_204",
+    "https://www.cloudflare.com/cdn-cgi/trace",
+)
+
+
+def get_connectivity_urls() -> tuple[str, ...]:
+    configured = settings_store.get("connectivity_check_urls")
+    if isinstance(configured, list):
+        urls = tuple(
+            url.strip()
+            for url in configured
+            if isinstance(url, str)
+            and urlparse(url.strip()).scheme in ("http", "https")
+            and urlparse(url.strip()).hostname
+        )
+        if urls:
+            return urls
+    return DEFAULT_CONNECTIVITY_URLS
+
+
 def _has_internet(timeout: int = 3) -> bool:
     global _INTERNET_CACHE
     now = time.monotonic()
@@ -67,8 +89,7 @@ def _has_internet(timeout: int = 3) -> bool:
         checked_at, cached = _INTERNET_CACHE
         if now - checked_at < 10.0:
             return cached
-    for url in ("https://www.google.com/generate_204",
-                "https://www.cloudflare.com/cdn-cgi/trace"):
+    for url in get_connectivity_urls():
         try:
             if requests.get(url, timeout=timeout).status_code < 500:
                 with _INTERNET_LOCK:
