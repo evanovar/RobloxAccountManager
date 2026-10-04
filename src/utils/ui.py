@@ -16,7 +16,7 @@ import time
 import webbrowser
 import weakref
 
-from utils import motion
+from utils import motion, splash
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 from utils.version import APP_VERSION
 
@@ -3406,6 +3406,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             default=True,
         )
         f.addWidget(self._sett_animations_chk)
+
+        self._sett_splash_chk = _chk(
+            "startup_splash", "Show Loading Screen",
+            "Show a small loading screen while the application starts.\n"
+            "Takes effect on the next start.",
+            default=True,
+        )
+        f.addWidget(self._sett_splash_chk)
 
         f.addWidget(_sec("LAUNCH"))
         self._sett_confirm_chk = _chk(
@@ -8913,6 +8921,7 @@ class _AutoRejoinAddWindow(QDialog):
 def _show_error(parent, title: str, msg: str):
     if not msg:
         return
+    splash.dismiss()
     dlg = QMessageBox(parent)
     dlg.setWindowTitle(title)
     dlg.setText(msg)
@@ -9006,6 +9015,7 @@ def main(icon_path: str | None = None) -> int:
     apply_palette(app)
     motion.install(app, TEXT, actions.load_ui_settings())
     diagnostics.set_startup_stage("QApplication ready")
+    splash.status("Starting", 0.2)
 
     password = None
     try:
@@ -9016,11 +9026,13 @@ def main(icon_path: str | None = None) -> int:
 
         if (enc_cfg.is_encryption_enabled()
                 and enc_cfg.get_encryption_method() == "password"):
+            splash.pause()
             dlg = _PasswordDialog()
             if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.password_value:
                 _show_error(None, "Error", "Password is required.")
                 return 1
             password = dlg.password_value
+            splash.resume()
     except Exception as exc:
         crash_path = diagnostics.report_exception(
             "Loading encryption settings",
@@ -9037,6 +9049,7 @@ def main(icon_path: str | None = None) -> int:
 
     try:
         diagnostics.set_startup_stage("initializing account manager")
+        splash.status("Opening your accounts", 0.5)
         manager = RobloxAccountManager(password=password)
     except AccountPasswordError as exc:
         print(f"[ERROR] ACCOUNT_PASSWORD_INVALID: {exc}")
@@ -9118,6 +9131,7 @@ def main(icon_path: str | None = None) -> int:
 
     try:
         diagnostics.set_startup_stage("creating main window")
+        splash.status("Building the interface", 0.8)
         window = AccountManagerUIQt(manager, icon_path=icon_path)
         app.aboutToQuit.connect(window._perform_shutdown_cleanup)
     except Exception as exc:
@@ -9134,7 +9148,8 @@ def main(icon_path: str | None = None) -> int:
         )
         return 1
 
-    window.show()
+    splash.status("Ready", 1.0)
+    splash.reveal(window)
     diagnostics.mark_ui_ready()
     return app.exec()
 

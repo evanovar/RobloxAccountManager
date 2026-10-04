@@ -20,6 +20,13 @@ from utils.version import APP_VERSION
 
 diagnostics.install(APP_VERSION)
 
+from utils import splash
+
+splash.show(
+    APP_VERSION,
+    [os.path.join(get_data_dir(), "icon.ico"), get_resource_path("assets", "icon.ico")],
+)
+
 from utils.ui import main as _ui_main
 
 DATA_FOLDER = get_data_dir()
@@ -63,6 +70,7 @@ def main():
     try:
         exit_code = _ui_main(icon_path=icon_path)
     except Exception as exc:
+        splash.dismiss()
         crash_path = diagnostics.report_exception(
             "Application startup or UI runtime",
             exc,
