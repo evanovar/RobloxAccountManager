@@ -78,7 +78,7 @@ uv run python src/main.py
 | :--- | :--- |
 | Browser login | Add an account through a supported browser and save it to the local account list. |
 | Cookie import | Import one or multiple `.ROBLOSECURITY` cookies. |
-| User and password import | Import credentials manually or from a `User:Pass` text file. Login sessions run in batches of up to five browsers. |
+| User and password import | Import credentials manually or from a `User:Pass` text file. Login sessions run in batches of up to five browsers, which can be lowered to as few as one under Settings > General. |
 | Account Creator | Create up to 100 accounts in one operation with up to five browser sessions, an optional custom prefix, and an optional shared password. |
 | JavaScript login | Open multiple browser sessions and run custom JavaScript for advanced login workflows. |
 | Account search | Filter the list by username, note, group or user ID with the search box above the list (Ctrl+F focuses it, Esc clears it). Every word has to match. |
@@ -111,7 +111,7 @@ uv run python src/main.py
 | Error 773 protection | Lock `RobloxCookies.dat` when possible while Multi Roblox is active. |
 | Rename Roblox windows | Continuously map Roblox processes to accounts and rename windows to the account username or note. |
 | Window Grid | Arrange visible Roblox windows into an equal grid with a customizable global keyboard shortcut. |
-| Headless Manager | List running Roblox clients and hide or show selected windows. Hidden windows are restored when the application exits. |
+| Headless Manager | List running Roblox clients and hide or show selected windows. Hidden windows are restored when the application exits. The scan interval (3 to 60 seconds, 10 by default) can be changed under Settings > Roblox. |
 | Kill all Roblox processes | Close every validated Roblox game client from General settings. |
 | Roblox Installer Fix | Temporarily quarantine Roblox installer executables to prevent installer popups, then restore them on exit. |
 | RAM optimization | Optionally trim the working set of detected Roblox clients to a configured target. |

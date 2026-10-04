@@ -17,6 +17,22 @@ from classes.roblox_api import RobloxAPI
 from features.window_operations import show_window_async
 
 _ENFORCE_INTERVAL = 1.0
+SCAN_INTERVAL_MIN = 3.0
+SCAN_INTERVAL_MAX = 60.0
+SCAN_INTERVAL_DEFAULT = 10.0
+SCAN_INTERVAL_SETTING = "headless_scan_interval_seconds"
+
+
+def get_scan_interval(settings: dict | None = None) -> float:
+    settings = settings if isinstance(settings, dict) else {}
+    try:
+        value = float(settings.get(SCAN_INTERVAL_SETTING, SCAN_INTERVAL_DEFAULT))
+    except (TypeError, ValueError):
+        return SCAN_INTERVAL_DEFAULT
+    if value != value:
+        return SCAN_INTERVAL_DEFAULT
+    return max(SCAN_INTERVAL_MIN, min(SCAN_INTERVAL_MAX, value))
+
 
 def _get_roblox_pids() -> set[int]:
     return set(presence_mod.get_roblox_processes())
@@ -70,9 +86,13 @@ def get_active_manager() -> "HeadlessManager | None":
 
 
 class HeadlessManager:
-    def __init__(self, on_update: Callable[[list[dict]], None], scan_interval: float = 10.0):
+    def __init__(
+        self,
+        on_update: Callable[[list[dict]], None],
+        scan_interval: float = SCAN_INTERVAL_DEFAULT,
+    ):
         self._on_update = on_update
-        self._scan_interval = max(3.0, scan_interval)
+        self._scan_interval = max(SCAN_INTERVAL_MIN, scan_interval)
         self._stop_evt = threading.Event()
         self._scan_thread: threading.Thread | None = None
         self._enforce_thread: threading.Thread | None = None
@@ -107,6 +127,9 @@ class HeadlessManager:
             self.restore_all()
         if _active_manager is self:
             _active_manager = None
+
+    def set_scan_interval(self, seconds: float) -> None:
+        self._scan_interval = max(SCAN_INTERVAL_MIN, min(SCAN_INTERVAL_MAX, float(seconds)))
 
     def set_hidden(self, pid: int, hidden: bool) -> None:
         with self._lock:

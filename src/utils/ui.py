@@ -3460,6 +3460,28 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         cookie_delay_row.addWidget(self._sett_cookie_delay_spin)
         f.addLayout(cookie_delay_row)
 
+        import_browsers_row = QHBoxLayout()
+        import_browsers_row.setContentsMargins(0, 0, 0, 0)
+        import_browsers_label = QLabel("Import Browsers at Once")
+        import_browsers_label.setToolTip(
+            "How many browser windows User:Pass import opens together.\n"
+            "Lower it on slower computers or if logins fail when many windows open."
+        )
+        import_browsers_row.addWidget(import_browsers_label)
+        import_browsers_row.addStretch(1)
+        self._sett_import_browsers_spin = QSpinBox()
+        self._sett_import_browsers_spin.setRange(
+            actions.IMPORT_BATCH_MIN, actions.IMPORT_BATCH_MAX
+        )
+        self._sett_import_browsers_spin.setValue(actions.get_import_batch_size(S))
+        self._sett_import_browsers_spin.setFixedWidth(80)
+        self._sett_import_browsers_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_import_browsers_spin.valueChanged.connect(
+            lambda value: actions.save_ui_setting(actions.IMPORT_BATCH_SETTING, int(value))
+        )
+        import_browsers_row.addWidget(self._sett_import_browsers_spin)
+        f.addLayout(import_browsers_row)
+
         f.addWidget(_sec("SYSTEM"))
         self._sett_update_chk = _chk(
             "check_updates_on_startup", "Check for Updates on Startup",
@@ -3880,6 +3902,30 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_change=self._on_sett_headless_manager,
         )
         f.addWidget(self._sett_headless_chk)
+
+        headless_interval_row = QHBoxLayout()
+        headless_interval_row.setContentsMargins(0, 0, 0, 0)
+        headless_interval_label = QLabel("Scan Interval")
+        headless_interval_label.setToolTip(
+            "How often the Headless Manager looks for new Roblox windows.\n"
+            "A longer interval uses less CPU but notices new clients later."
+        )
+        headless_interval_row.addWidget(headless_interval_label)
+        headless_interval_row.addStretch(1)
+        self._sett_headless_interval_spin = QSpinBox()
+        self._sett_headless_interval_spin.setRange(
+            int(headless_manager_mod.SCAN_INTERVAL_MIN),
+            int(headless_manager_mod.SCAN_INTERVAL_MAX),
+        )
+        self._sett_headless_interval_spin.setValue(
+            round(headless_manager_mod.get_scan_interval(S))
+        )
+        self._sett_headless_interval_spin.setSuffix(" s")
+        self._sett_headless_interval_spin.setFixedWidth(80)
+        self._sett_headless_interval_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_headless_interval_spin.valueChanged.connect(self._on_sett_headless_interval)
+        headless_interval_row.addWidget(self._sett_headless_interval_spin)
+        f.addLayout(headless_interval_row)
 
         self._headless_list = QListWidget()
         self._headless_list.setFixedHeight(160)
@@ -4917,11 +4963,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         else:
             self._stop_headless_manager()
 
+    def _on_sett_headless_interval(self, value: int) -> None:
+        actions.save_ui_setting(headless_manager_mod.SCAN_INTERVAL_SETTING, int(value))
+        if self._headless_manager is not None:
+            self._headless_manager.set_scan_interval(value)
+
     def _start_headless_manager(self) -> None:
         if self._headless_manager is not None:
             return
         self._headless_manager = headless_manager_mod.HeadlessManager(
             on_update=lambda rows: self._bridge.headless_update.emit(rows),
+            scan_interval=headless_manager_mod.get_scan_interval(actions.load_ui_settings()),
         )
         self._headless_manager.start()
         print("[INFO] Headless Manager started.")
