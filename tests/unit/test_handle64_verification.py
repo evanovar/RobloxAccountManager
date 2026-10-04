@@ -8,8 +8,11 @@ import unittest
 import zipfile
 from unittest.mock import MagicMock, patch
 
+import pywintypes
 import win32api
 import win32con
+import win32crypt
+import win32cryptcon
 import win32security
 
 from features import account_actions as actions
@@ -97,7 +100,21 @@ class NativeSignatureTests(Workspace):
         self.assertEqual(self.check(CMD_EXE), (None, False))
 
     def test_another_publisher_is_refused_even_though_it_is_signed(self):
-        organization, trusted = self.check(os.path.join(sys.base_prefix, "python.exe"))
+        fixture = os.environ.get("RAM_TEST_SIGNED_PYTHON")
+        path = fixture or os.path.join(sys.base_prefix, "python.exe")
+        # uv-managed interpreters need not be signed. Check fixture availability
+        # independently so a WinVerifyTrust regression still fails this test.
+        try:
+            win32crypt.CryptQueryObject(
+                win32cryptcon.CERT_QUERY_OBJECT_FILE, path,
+                win32cryptcon.CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                win32cryptcon.CERT_QUERY_FORMAT_FLAG_BINARY, 0,
+            )
+        except pywintypes.error as exc:
+            if fixture:
+                self.fail(f"Configured signed Python fixture is unavailable: {exc}")
+            self.skipTest("The current Python executable has no embedded signature; CI supplies a signed fixture")
+        organization, trusted = self.check(path)
         self.assertEqual(organization, "Python Software Foundation")
         self.assertFalse(trusted)
 
@@ -114,23 +131,26 @@ class NativeSignatureTests(Workspace):
             handle.write(bytes([original[0] ^ 0xFF]))
         self.assertFalse(self.check(tampered)[1])
 
+    def test_checking_a_signature_never_starts_another_program(self):
+        with patch.object(subprocess.Popen, "__init__", side_effect=AssertionError("no process may be started")):
+            self.assertTrue(trust.is_signed_by_microsoft(SIGNED_EXE))
+            self.assertFalse(trust.is_signed_by_microsoft(self.fake_source()))
+
+
+class SignaturePublisherPolicyTests(unittest.TestCase):
     def test_the_organization_has_to_match_exactly(self):
         for value, expected in (
             ("Microsoft Corporation", True),
             ("Microsoft Corporation Ltd", False),
             ("Not Microsoft Corporation", False),
             ("microsoft corporation", False),
+            ("Python Software Foundation", False),
             ("", False),
             (None, False),
         ):
             with self.subTest(organization=value):
                 with patch.object(trust, "signer_organization", return_value=value):
                     self.assertEqual(trust.is_trusted_signature(object()), expected)
-
-    def test_checking_a_signature_never_starts_another_program(self):
-        with patch.object(subprocess.Popen, "__init__", side_effect=AssertionError("no process may be started")):
-            self.assertTrue(trust.is_signed_by_microsoft(SIGNED_EXE))
-            self.assertFalse(trust.is_signed_by_microsoft(self.fake_source()))
 
 
 class ProtectedDirectoryTests(Workspace):
@@ -308,9 +328,9 @@ class BypassRegressionTests(Workspace):
         with self.patched_protection(), patch.object(actions.subprocess, "run", side_effect=swap_then_record):
             actions.run_handle64(os.path.join(junction, "handle64.exe"), ["-p", "1"])
 
-        self.assertEqual(os.path.normcase(launched["junction_now_points_to"]), os.path.normcase(evil_dir))
-        self.assertEqual(os.path.dirname(os.path.dirname(launched["command"])), self.folder)
-        self.assertFalse(os.path.normcase(launched["command"]).startswith(os.path.normcase(junction)))
+        self.assertTrue(os.path.samefile(launched["junction_now_points_to"], evil_dir))
+        self.assertTrue(os.path.samefile(os.path.dirname(os.path.dirname(launched["command"])), self.folder))
+        self.assertFalse(os.path.samefile(launched["command"], os.path.join(junction, "handle64.exe")))
         with open(SIGNED_EXE, "rb") as handle:
             self.assertEqual(launched["content"], handle.read())
 

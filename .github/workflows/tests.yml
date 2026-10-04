@@ -32,5 +32,14 @@ jobs:
       - name: Lint
         run: uvx ruff@0.16.10 check src tests scripts
 
+      - name: Prepare signed non-Microsoft test fixture
+        shell: pwsh
+        run: |
+          $fixtureArchive = Join-Path $env:RUNNER_TEMP "python-signed-fixture.zip"
+          $fixtureDirectory = Join-Path $env:RUNNER_TEMP "python-signed-fixture"
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip" -OutFile $fixtureArchive -TimeoutSec 60
+          Expand-Archive -LiteralPath $fixtureArchive -DestinationPath $fixtureDirectory
+          "RAM_TEST_SIGNED_PYTHON=$(Join-Path $fixtureDirectory 'python.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Run tests
         run: uv run --no-sync python scripts/run_tests.py --all -v
