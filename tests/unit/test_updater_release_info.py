@@ -76,6 +76,7 @@ class LaunchInstallerTests(unittest.TestCase):
                 patch.object(updater, "_build_update_log_path", return_value=os.path.join(folder, "update.log")), \
                 patch.object(updater.subprocess, "Popen") as popen:
             updater._launch_installer("C:/tmp/update.exe", "C:/App Dir/RAM.exe", folder, **kwargs)
+        self.last_env = popen.call_args.kwargs["env"]
         return popen.call_args.args[0]
 
     def value_after(self, command, flag):
@@ -104,6 +105,13 @@ class LaunchInstallerTests(unittest.TestCase):
         command = self.launch()
         self.assertEqual(self.value_after(command, "-DestinationPath"), "C:/App Dir/RAM.exe")
         self.assertEqual(self.value_after(command, "-TargetProcessId"), str(os.getpid()))
+
+
+    def test_powershell_does_not_inherit_the_module_path_of_powershell_7(self):
+        with patch.dict(os.environ, {"PSModulePath": "C:/Program Files/PowerShell/7/Modules", "KEEP_ME": "1"}):
+            self.launch()
+        self.assertFalse(any(key.upper() == "PSMODULEPATH" for key in self.last_env))
+        self.assertEqual(self.last_env["KEEP_ME"], "1")
 
 
 class DownloadHandsOverDigestTests(unittest.TestCase):

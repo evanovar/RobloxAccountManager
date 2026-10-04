@@ -215,6 +215,10 @@ def _system_powershell() -> str:
     )
 
 
+def _powershell_environment() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if key.upper() != "PSMODULEPATH"}
+
+
 def _build_installer_script() -> str:
     return f'''param(
     [Parameter(Mandatory=$true)][int]$TargetProcessId,
@@ -377,6 +381,7 @@ def _launch_installer(
             encoded_arguments,
         ],
         shell=False,
+        env=_powershell_environment(),
         creationflags=creation_flags,
     )
 

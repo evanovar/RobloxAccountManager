@@ -66,6 +66,7 @@ class InstallerScriptTests(unittest.TestCase):
         ]
         return subprocess.run(
             command, capture_output=True, text=True, timeout=timeout,
+            env=updater._powershell_environment(),
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
