@@ -3301,6 +3301,44 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         f.addWidget(self._sett_multisel_chk)
 
+        self._sett_cookie_check_chk = _chk(
+            "validate_cookies_on_startup", "Check Cookies on Startup",
+            "Check every saved account cookie with Roblox shortly after the app starts.\n"
+            "Turn this off to avoid the background requests. Takes effect on the next start.",
+            default=True,
+        )
+        f.addWidget(self._sett_cookie_check_chk)
+
+        cookie_delay_row = QHBoxLayout()
+        cookie_delay_row.setContentsMargins(0, 0, 0, 0)
+        cookie_delay_label = QLabel("Cookie Check Delay")
+        cookie_delay_label.setToolTip(
+            "Wait this long between accounts while checking cookies.\n"
+            "Raise it if Roblox rate limits the check. Takes effect on the next start."
+        )
+        cookie_delay_row.addWidget(cookie_delay_label)
+        cookie_delay_row.addStretch(1)
+        self._sett_cookie_delay_spin = QDoubleSpinBox()
+        self._sett_cookie_delay_spin.setRange(
+            self._cv_mod.MIN_DELAY, self._cv_mod.MAX_DELAY
+        )
+        self._sett_cookie_delay_spin.setDecimals(1)
+        self._sett_cookie_delay_spin.setSingleStep(0.5)
+        self._sett_cookie_delay_spin.setValue(self._cv_mod.get_validation_delay(S))
+        self._sett_cookie_delay_spin.setSuffix(" s")
+        self._sett_cookie_delay_spin.setFixedWidth(80)
+        self._sett_cookie_delay_spin.setButtonSymbols(
+            QDoubleSpinBox.ButtonSymbols.NoButtons
+        )
+        self._sett_cookie_delay_spin.valueChanged.connect(
+            lambda value: actions.save_ui_setting(
+                "cookie_validation_delay_seconds",
+                round(float(value), 1),
+            )
+        )
+        cookie_delay_row.addWidget(self._sett_cookie_delay_spin)
+        f.addLayout(cookie_delay_row)
+
         f.addWidget(_sec("SYSTEM"))
         self._sett_update_chk = _chk(
             "check_updates_on_startup", "Check for Updates on Startup",
@@ -5040,13 +5078,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _start_cookie_validator(self) -> None:
         if self._cv_validator is not None:
             return
+        settings = actions.load_ui_settings()
+        if not self._cv_mod.validation_enabled(settings):
+            print("[INFO] Cookie validation on startup is turned off.")
+            return
         self._cv_validator = self._cv_mod.CookieValidator(
             self.manager,
             on_result=lambda u, status: self._bridge.cookie_validated.emit(
                 u,
                 status,
             ),
-            delay_sec=1.5,
+            delay_sec=self._cv_mod.get_validation_delay(settings),
         )
         self._cv_validator.start()
 

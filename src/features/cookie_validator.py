@@ -16,6 +16,24 @@ UNKNOWN = "unknown"
 _VALIDATION_URL = "https://users.roblox.com/v1/users/authenticated"
 _VALIDATION_ATTEMPTS = 2
 _RETRY_DELAY = 0.75
+DEFAULT_DELAY = 1.5
+MIN_DELAY = 0.5
+MAX_DELAY = 60.0
+
+
+def validation_enabled(settings: dict) -> bool:
+    return bool(settings.get("validate_cookies_on_startup", True))
+
+
+def get_validation_delay(settings: dict) -> float:
+    try:
+        delay = float(settings.get("cookie_validation_delay_seconds", DEFAULT_DELAY))
+    except (TypeError, ValueError):
+        return DEFAULT_DELAY
+    if delay != delay:
+        return DEFAULT_DELAY
+    return max(MIN_DELAY, min(MAX_DELAY, delay))
+
 
 def is_flagged(data: dict) -> bool:
     if not isinstance(data, dict):
