@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 
+import features.settings_store as settings_store
 from utils.app_paths import get_data_dir
 
 _LOCK = threading.RLock()
@@ -35,6 +36,12 @@ _LAST_UI_HEARTBEAT = 0.0
 _HEALTH_STOP = threading.Event()
 _HEALTH_THREAD = None
 _SESSION_LOG_HANDLE = None
+
+DEFAULT_LOG_RETENTION = 20
+_LOG_FILE_GROUPS = (
+    ("logs", ("session-", "hang-", "update-")),
+    ("crash_logs", ("crash-",)),
+)
 
 _REDACTION_PATTERNS = (
     (
@@ -226,6 +233,43 @@ def _health_monitor() -> None:
             warned = True
         elif stalled_for < 15:
             warned = False
+
+
+def get_log_retention() -> int:
+    try:
+        return max(0, int(settings_store.get("log_retention_count", DEFAULT_LOG_RETENTION)))
+    except (TypeError, ValueError):
+        return DEFAULT_LOG_RETENTION
+
+
+def prune_old_logs(keep: int, protect: str = "") -> int:
+    if keep <= 0:
+        return 0
+    root = _get_diagnostics_root()
+    protected = os.path.abspath(protect) if protect else ""
+    removed = 0
+    for folder_name, prefixes in _LOG_FILE_GROUPS:
+        folder = os.path.join(root, folder_name)
+        for prefix in prefixes:
+            try:
+                entries = [
+                    entry for entry in os.scandir(folder)
+                    if entry.is_file()
+                    and entry.name.startswith(prefix)
+                    and entry.name.endswith(".log")
+                ]
+                entries.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+            except OSError:
+                continue
+            for entry in entries[keep:]:
+                if os.path.abspath(entry.path) == protected:
+                    continue
+                try:
+                    os.remove(entry.path)
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
 
 
 def report_ui_stall(stalled_for: float) -> str:
@@ -420,6 +464,11 @@ def install(app_version: str) -> str:
         )
     except OSError:
         _SESSION_LOG_HANDLE = None
+
+    try:
+        prune_old_logs(get_log_retention(), protect=_SESSION_LOG_PATH)
+    except Exception:
+        pass
 
     _ORIGINAL_STDOUT = sys.stdout or getattr(sys, "__stdout__", None)
     _ORIGINAL_STDERR = sys.stderr or getattr(sys, "__stderr__", None)

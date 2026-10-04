@@ -147,7 +147,7 @@ uv run python src/main.py
 | WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. |
 | Console | Review timestamped, color-coded application output and copy or clear the current console view. |
 | Structured errors | Show specific error codes and technical details instead of generic failure messages. |
-| Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. |
+| Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. Only the newest 20 logs of each kind are kept by default, which can be changed under Settings > General. |
 
 ### Security and local data
 

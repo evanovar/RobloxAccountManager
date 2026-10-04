@@ -3312,6 +3312,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         f.addWidget(self._sett_update_chk)
 
+        log_retention_row = QHBoxLayout()
+        log_retention_row.setContentsMargins(0, 0, 0, 0)
+        log_retention_label = QLabel("Log Files to Keep")
+        log_retention_label.setToolTip(
+            "Keep this many of the newest session, crash, hang and update logs.\n"
+            "Older ones are deleted when the application starts. Set to 0 to keep everything."
+        )
+        log_retention_row.addWidget(log_retention_label)
+        log_retention_row.addStretch(1)
+        self._sett_log_retention_spin = QSpinBox()
+        self._sett_log_retention_spin.setRange(0, 1000)
+        self._sett_log_retention_spin.setValue(diagnostics.get_log_retention())
+        self._sett_log_retention_spin.setFixedWidth(80)
+        self._sett_log_retention_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sett_log_retention_spin.valueChanged.connect(
+            lambda value: actions.save_ui_setting("log_retention_count", int(value))
+        )
+        log_retention_row.addWidget(self._sett_log_retention_spin)
+        f.addLayout(log_retention_row)
+
         # Start Menu shortcut
         _sm_path = os.path.join(
             os.environ.get("APPDATA", ""),
