@@ -81,6 +81,7 @@ uv run python src/main.py
 | User and password import | Import credentials manually or from a `User:Pass` text file. Login sessions run in batches of up to five browsers. |
 | Account Creator | Create up to 100 accounts in one operation with up to five browser sessions, an optional custom prefix, and an optional shared password. |
 | JavaScript login | Open multiple browser sessions and run custom JavaScript for advanced login workflows. |
+| Account search | Filter the list by username, note, group or user ID with the search box above the list (Ctrl+F focuses it, Esc clears it). Every word has to match. |
 | Groups and notes | Organize accounts into groups and assign notes to one or multiple selected accounts. |
 | Account list controls | Use avatars, drag-and-drop ordering, multi-select actions, refresh, deletion, and controlled password or cookie copying. |
 | Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. The startup check and the delay between accounts can be changed under Settings > General. |
