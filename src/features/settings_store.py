@@ -7,11 +7,11 @@ from __future__ import annotations
 import copy
 import json
 import os
-import tempfile
 import threading
 import time
 
 from utils.app_paths import get_data_dir
+from utils.atomic_io import write_json_atomic
 
 
 _SETTINGS_PATH = os.path.join(get_data_dir(), "ui_settings.json")
@@ -70,29 +70,7 @@ def _write_locked(settings: dict) -> None:
     global _MTIME_NS
     global _LAST_STAT_CHECK
 
-    data_dir = os.path.dirname(_SETTINGS_PATH)
-    os.makedirs(data_dir, exist_ok=True)
-    descriptor, temp_path = tempfile.mkstemp(
-        prefix=".ui_settings.",
-        suffix=".tmp",
-        dir=data_dir,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(settings, handle, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, _SETTINGS_PATH)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-        raise
+    write_json_atomic(_SETTINGS_PATH, settings, prefix=".ui_settings.", fsync=True)
 
     _CACHE = copy.deepcopy(settings)
     _MTIME_NS = _get_mtime_ns()
