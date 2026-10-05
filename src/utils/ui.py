@@ -16,7 +16,7 @@ import time
 import webbrowser
 import weakref
 
-from utils import motion
+from utils import motion, icons
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 from utils.version import APP_VERSION
 
