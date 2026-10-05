@@ -362,6 +362,7 @@ class _Bridge(QObject):
     presence_update = Signal(object) # set[str] of online usernames
     cookie_validated = Signal(str, str) # (username, status) from validator worker
     update_available = Signal(str) # (latest_version) from update check worker
+    update_check_finished = Signal(object) # OperationResult from a manual update check
     update_progress = Signal(int) # (pct 0-100) from auto download worker
     update_done = Signal(bool, str) # (success, error_msg) from auto download worker
     join_place_resolved = Signal(object) # dict payload from Place ID resolution worker
@@ -376,6 +377,7 @@ class _Bridge(QObject):
     console_wakeup = Signal()
 
 
+SKIPPED_UPDATE_SETTING = "skipped_update_version"
 _THEME = color_themes.resolve_colors(actions.load_ui_settings())
 BG = _THEME["BG"]
 PANEL = _THEME["PANEL"]
@@ -1416,6 +1418,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.console_wakeup.connect(self._drain_console_queue)
         diagnostics.set_console_wakeup(self._bridge.console_wakeup.emit)
         self._bridge.update_available.connect(self._on_update_available)
+        self._bridge.update_check_finished.connect(self._on_update_check_finished)
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
         self._bridge.favorite_place_resolved.connect(self._on_favorite_place_resolved)
@@ -3519,6 +3522,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         f.addWidget(self._sett_update_chk)
 
+        self._sett_update_now_btn = QPushButton("Check for Updates Now")
+        self._sett_update_now_btn.setToolTip(
+            "Look for a newer version on GitHub right now, including one you skipped."
+        )
+        self._sett_update_now_btn.clicked.connect(self._on_check_updates_now)
+        f.addWidget(self._sett_update_now_btn)
+
         log_retention_row = QHBoxLayout()
         log_retention_row.setContentsMargins(0, 0, 0, 0)
         log_retention_label = QLabel("Log Files to Keep")
@@ -5181,18 +5191,48 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not actions.load_ui_settings().get("check_updates_on_startup", True):
             return
         def _worker():
-            latest = updater_mod.check_latest_version()
-            if latest and updater_mod.is_newer(APP_VERSION, latest):
+            result = updater_mod.get_latest_release()
+            if not result:
+                print(f"[INFO] Update check failed: {result.detail}")
+                return
+            latest = result.data["version"]
+            skipped = actions.load_ui_settings().get(SKIPPED_UPDATE_SETTING, "")
+            if updater_mod.is_newer(APP_VERSION, latest) and latest != skipped:
+                self._latest_release = result.data
                 self._bridge.update_available.emit(latest)
         threading.Thread(target=_worker, daemon=True, name="UpdateCheck").start()
+
+    def _on_check_updates_now(self) -> None:
+        self._sett_update_now_btn.setEnabled(False)
+        self._sett_update_now_btn.setText("Checking...")
+
+        def _worker():
+            self._bridge.update_check_finished.emit(updater_mod.get_latest_release())
+
+        threading.Thread(target=_worker, daemon=True, name="UpdateCheckNow").start()
+
+    def _on_update_check_finished(self, result) -> None:
+        self._sett_update_now_btn.setEnabled(True)
+        self._sett_update_now_btn.setText("Check for Updates Now")
+        if not result:
+            self._show_operation_error(result)
+            return
+        latest = result.data["version"]
+        if updater_mod.is_newer(APP_VERSION, latest):
+            self._latest_release = result.data
+            self._show_update_dialog(latest)
+        else:
+            _show_info(self, "Up to Date", f"You are running the latest version (v{APP_VERSION}).")
 
     def _on_update_available(self, latest_version: str) -> None:
         self._show_update_dialog(latest_version)
 
     def _show_update_dialog(self, latest_version: str) -> None:
+        release = getattr(self, "_latest_release", None) or {}
+        notes = release.get("notes", "") if release.get("version") == latest_version else ""
         dlg = QDialog(self)
         dlg.setWindowTitle("Update Available")
-        dlg.setFixedSize(440, 290)
+        dlg.setFixedSize(440, 420 if notes else 290)
         dlg.setStyleSheet(f"""
             QDialog   {{ background: {BG}; }}
             QLabel    {{ color: {TEXT}; background: transparent; }}
@@ -5228,6 +5268,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         card_lay.addWidget(lbl_new)
         lay.addWidget(card)
 
+        if notes:
+            notes_view = QTextEdit()
+            notes_view.setReadOnly(True)
+            notes_view.setPlainText(notes)
+            notes_view.setAccessibleName("Release notes")
+            notes_view.setStyleSheet(
+                f"QTextEdit {{ background: {INPUT}; color: {TEXT}; border: 1px solid {LINE};"
+                f" font-size: 11px; }}"
+            )
+            lay.addWidget(notes_view, 1)
+
         # Progress download button (mimics chromium bar)
         dl_btn = QPushButton("Download Automatically")
         dl_btn.setFixedHeight(34)
@@ -5243,8 +5294,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         manual_btn = QPushButton("Manual Download")
+        skip_btn = QPushButton("Skip This Version")
+        skip_btn.setToolTip("Do not show this update again. A newer version will still be offered.")
         ignore_btn = QPushButton("Ignore")
         btn_row.addWidget(manual_btn)
+        btn_row.addWidget(skip_btn)
         btn_row.addWidget(ignore_btn)
         lay.addLayout(btn_row)
 
@@ -5271,6 +5325,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         def _set_buttons_enabled(enabled: bool) -> None:
             dl_btn.setEnabled(enabled)
             manual_btn.setEnabled(enabled)
+            skip_btn.setEnabled(enabled)
             ignore_btn.setEnabled(enabled)
 
         # Download signal connections
@@ -5321,6 +5376,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         dl_btn.clicked.connect(_on_download_clicked)
         manual_btn.clicked.connect(lambda: (
             webbrowser.open(updater_mod.RELEASES_PAGE),
+            dlg.accept(),
+        ))
+        skip_btn.clicked.connect(lambda: (
+            actions.save_ui_setting(SKIPPED_UPDATE_SETTING, latest_version),
             dlg.accept(),
         ))
         ignore_btn.clicked.connect(dlg.accept)
