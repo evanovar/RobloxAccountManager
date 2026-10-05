@@ -16,6 +16,7 @@ import time
 import webbrowser
 import weakref
 
+from utils import icons
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
 from utils.version import APP_VERSION
 
@@ -2088,6 +2089,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         }
 
         self._normal_nav_btns: list[QPushButton] = []
+        _nav_icons = {
+            "Accounts": "accounts", "Auto-Rejoin": "refresh", "Anti AFK": "clock",
+            "Multi Roblox": "windows", "Settings": "sliders", "Console": "terminal",
+            "Donations": "heart",
+        }
 
         for label, checked in [
             ("Accounts", True),
@@ -2103,6 +2109,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
             btn.setChecked(checked)
+            icons.set_button_icon(btn, _nav_icons[label], _THEME)
             if label in _NAV_PAGES:
                 page_idx = _NAV_PAGES[label]
                 btn.clicked.connect(
@@ -2125,6 +2132,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Setup nav button
         self._setup_nav_btn = QPushButton("Setup")
         self._setup_nav_btn.setObjectName("navTab")
+        icons.set_button_icon(self._setup_nav_btn, "shield", _THEME)
         self._setup_nav_btn.setCheckable(True)
         self._setup_nav_btn.setAutoExclusive(True)
         self._setup_nav_btn.setChecked(False)
@@ -2138,6 +2146,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         kill_roblox_button = QPushButton("Kill All Roblox")
         kill_roblox_button.setToolTip("Close every running Roblox process")
+        icons.set_button_icon(kill_roblox_button, "power", _THEME)
         kill_roblox_button.clicked.connect(self._on_kill_all_roblox)
         lay.addWidget(kill_roblox_button)
 
@@ -2436,6 +2445,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Add account button
         self._add_btn = QToolButton()
         self._add_btn.setText("Add Account")
+        icons.set_button_icon(self._add_btn, "plus", _THEME)
+        self._add_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._add_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._add_btn.setFixedHeight(26)
@@ -2465,6 +2476,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # Remove Button
         remove_btn = QPushButton("Remove")
+        icons.set_button_icon(remove_btn, "trash", _THEME)
         remove_btn.setFixedWidth(86)
         remove_btn.setFixedHeight(26)
         remove_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -6678,6 +6690,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         # join button
         join_btn = QPushButton("Join Place ID")
+        icons.set_button_icon(join_btn, "enter", _THEME)
         join_btn.setStyleSheet(
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
@@ -6755,12 +6768,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         lay.addWidget(self._recent_list)
 
         # Quick action buttons
-        for label, slot in [
-            ("Edit Note",           self._on_edit_note),
-            ("Refresh List",        self._refresh_account_list),
-            ("Launch Roblox Home",  self._on_launch_home),
+        for label, slot, icon_name in [
+            ("Edit Note",           self._on_edit_note, "pencil"),
+            ("Refresh List",        self._refresh_account_list, "refresh"),
+            ("Launch Roblox Home",  self._on_launch_home, "home"),
         ]:
             btn = QPushButton(label)
+            icons.set_button_icon(btn, icon_name, _THEME)
             btn.setStyleSheet(
                 f"QPushButton {{ text-align: center; color: {TEXT}; }}"
             )
