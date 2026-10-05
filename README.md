@@ -146,7 +146,7 @@ uv run python src/main.py
 | Color themes | Pick one of eight color presets (Default, Midnight, AMOLED Black, Nord, Dracula, Solarized Dark, Forest, Rose) and optionally your own accent color under Settings > Themes, with a live preview. The choice is applied the next time the application starts. |
 | System tray | Hide the main window to the system tray, restore it from the tray icon, or exit from the tray menu. |
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
-| Update manager | Check GitHub releases on startup or manually, then download updates from the application. |
+| Update manager | Check GitHub releases on startup or with Check for Updates Now, read the release notes, and skip a version you do not want. Downloads are verified, installed with a backup that is restored if anything fails, and the application starts again by itself. |
 | Discord webhooks | Send selected log levels, Auto-Rejoin events, optional mentions, and periodic screenshots to a configured webhook. |
 | WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. After 10 wrong passwords within a minute, further attempts are refused for a while, and `websocket_max_auth_failures` in the same file changes that limit (0 turns it off). |
 | Console | Review timestamped, color-coded application output and copy or clear the current console view. |
