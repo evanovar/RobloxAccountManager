@@ -16,6 +16,7 @@ import win32process
 
 from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
+from features.window_log_probe import probe_open_log_paths
 from features.window_operations import set_window_title
 
 
@@ -28,6 +29,7 @@ _TRACKER_PATTERN = re.compile(
 _EVIDENCE_TIMESTAMP = 1
 _EVIDENCE_OPEN_FILE = 2
 _EVIDENCE_TRACKER = 3
+_MAX_PROBES_PER_SCAN = 2
 _EVIDENCE_NAMES = {
     _EVIDENCE_TIMESTAMP: "single timestamp match",
     _EVIDENCE_OPEN_FILE: "exact open log file",
@@ -65,6 +67,9 @@ class RobloxWindowRenamer:
         self._ambiguities: dict[tuple[int, float], str] = {}
         self._main_windows: dict[tuple[int, float], int] = {}
         self._managed_titles: set[str] = set()
+        self._open_log_cache: dict[tuple[int, float], set[str]] = {}
+        self._probe_retry_at: dict[tuple[int, float], float] = {}
+        self._probe_failures: dict[tuple[int, float], int] = {}
 
     @staticmethod
     def _normalize_title_mode(mode: str) -> str:
@@ -93,9 +98,12 @@ class RobloxWindowRenamer:
     def stop(self, join_timeout: float = 2.0) -> None:
         self._stop_evt.set()
         thread = self._thread
-        self._thread = None
         if thread and thread.is_alive():
             thread.join(timeout=max(0.0, join_timeout))
+        # Never clear state while a cancelled scan is still unwinding.
+        if thread and thread.is_alive():
+            return
+        self._thread = None
         self._identities.clear()
         self._claimed_logs.clear()
         self._username_cache.clear()
@@ -103,6 +111,9 @@ class RobloxWindowRenamer:
         self._waiting_for_window.clear()
         self._ambiguities.clear()
         self._main_windows.clear()
+        self._open_log_cache.clear()
+        self._probe_retry_at.clear()
+        self._probe_failures.clear()
         self._managed_titles.clear()
 
     def is_running(self) -> bool:
@@ -210,22 +221,29 @@ class RobloxWindowRenamer:
             pass
         return ""
 
-    @classmethod
-    def _get_open_log_paths(cls, process: psutil.Process) -> set[str]:
-        paths: set[str] = set()
-        try:
-            for opened_file in process.open_files():
-                path = str(getattr(opened_file, "path", "") or "")
-                if path.lower().endswith("_last.log"):
-                    paths.add(cls._normalized_path(path))
-        except (
-            OSError,
-            psutil.NoSuchProcess,
-            psutil.AccessDenied,
-            psutil.ZombieProcess,
-        ):
-            pass
-        return paths
+    def _get_open_log_paths(self, key: tuple[int, float]) -> set[str] | None:
+        if time.monotonic() < self._probe_retry_at.get(key, 0.0):
+            cached = self._open_log_cache.get(key)
+            return set(cached) if cached is not None else None
+        started = time.monotonic()
+        result = probe_open_log_paths(key, self._stop_evt)
+        if result.status == "cancelled":
+            return None
+        elapsed = time.monotonic() - started
+        print(f"[Window Rename] File scan PID:{key[0]} "
+              f"status={result.status} duration={elapsed:.2f}s")
+        if result.status == "ok":
+            paths = set(result.paths)
+            self._open_log_cache[key] = paths
+            self._probe_failures.pop(key, None)
+            self._probe_retry_at[key] = time.monotonic() + (30.0 if paths else 5.0)
+            return set(paths)
+        # A failed/expired probe is unknown evidence, not an empty file list.
+        self._open_log_cache.pop(key, None)
+        failures = self._probe_failures.get(key, 0) + 1
+        self._probe_failures[key] = failures
+        self._probe_retry_at[key] = time.monotonic() + min(60.0, 5.0 * 2 ** min(failures, 4))
+        return None
 
     @staticmethod
     def _process_is_current(key: tuple[int, float]) -> bool:
@@ -238,6 +256,9 @@ class RobloxWindowRenamer:
         )
 
     def _remove_exited_state(self, live_keys: set[tuple[int, float]]) -> None:
+        for cache in (self._open_log_cache, self._probe_retry_at, self._probe_failures):
+            for key in set(cache) - live_keys:
+                cache.pop(key, None)
         self._identities = {
             key: value
             for key, value in self._identities.items()
@@ -368,12 +389,14 @@ class RobloxWindowRenamer:
         for key, process in live_processes.items():
             identity = self._identities.get(key)
             if identity and identity.evidence >= _EVIDENCE_OPEN_FILE:
+                # Count resolved trackers too, so duplicate IDs remain ambiguous.
+                if identity.browser_tracker_id:
+                    tracker_processes.setdefault(identity.browser_tracker_id, []).append(key)
                 continue
             tracker = self._extract_process_tracker(process)
             process_trackers[key] = tracker
             if tracker:
                 tracker_processes.setdefault(tracker, []).append(key)
-            process_log_paths[key] = self._get_open_log_paths(process)
 
         for key, tracker in process_trackers.items():
             if not tracker:
@@ -394,6 +417,24 @@ class RobloxWindowRenamer:
                 saved_usernames,
                 process_tracker=tracker,
             )
+
+        # Resolve tracker evidence first. Only unresolved/weak identities need a
+        # helper, with a per-pass limit and failure backoff to avoid process churn.
+        probes = 0
+        for key in sorted(live_processes, key=lambda key: self._probe_retry_at.get(key, 0.0)):
+            if self._stop_evt.is_set():
+                break
+            identity = self._identities.get(key)
+            if identity and identity.evidence >= _EVIDENCE_OPEN_FILE:
+                continue
+            due = time.monotonic() >= self._probe_retry_at.get(key, 0.0)
+            if due:
+                if probes >= _MAX_PROBES_PER_SCAN:
+                    continue
+                probes += 1
+            open_paths = self._get_open_log_paths(key)
+            if open_paths is not None:
+                process_log_paths[key] = open_paths
 
         for key, open_paths in process_log_paths.items():
             matches = [
@@ -439,6 +480,10 @@ class RobloxWindowRenamer:
             return
 
         key = unresolved[0]
+        # A timeout or deferred probe must not be treated as proof that no logs
+        # are open. Other unknown processes still count toward ambiguity above.
+        if key not in process_log_paths:
+            return
         create_time = self._create_time_utc(key[1])
         candidates = [
             entry
@@ -600,6 +645,8 @@ class RobloxWindowRenamer:
                 entries,
                 saved_usernames,
             )
+            if self._stop_evt.is_set():
+                return
             self._apply_safe_timestamp_fallback(
                 live_processes,
                 entries,
