@@ -30,6 +30,7 @@ PATHS: dict[str, str] = {
     "home": '<path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/>',
     "power": '<path d="M12 3v9"/><path d="M6.5 6.5a8 8 0 1 0 11 0"/>',
     "enter": '<path d="M5 12h12M13 6l6 6-6 6"/>',
+    "resize": '<path d="M8 20L20 8M14 20l6-6M20 20h.01"/>',
 }
 
 _cache: dict[tuple, QPixmap] = {}

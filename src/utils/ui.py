@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
-    QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
+    QSizeGrip, QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
     QToolButton, QVBoxLayout, QWidget,
     QStyle, QStyleOptionButton,
@@ -1335,6 +1335,46 @@ class _ThemePreview(QWidget):
         painter.end()
 
 
+class _ResizeHandle(QSizeGrip):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("resizeHandle")
+        self.setFixedSize(20, 20)
+        self.setStyleSheet("background: transparent; border: 0;")
+        self.setMask(QRegion(QPolygon([QPoint(20, 0), QPoint(20, 20), QPoint(0, 20)])))
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Resize window")
+        self.setToolTip("Drag to resize. Arrow keys resize when focused.")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        color = TEXT if self.underMouse() or self.hasFocus() else MUTED
+        painter.drawPixmap(2, 2, icons.pixmap("resize", color))
+        painter.end()
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        steps = {
+            Qt.Key.Key_Left: (-10, 0), Qt.Key.Key_Right: (10, 0),
+            Qt.Key.Key_Up: (0, -10), Qt.Key.Key_Down: (0, 10),
+        }
+        if event.key() in steps:
+            dx, dy = steps[event.key()]
+            window = self.window()
+            window.resize(window.width() + dx, window.height() + dy)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class AccountManagerUIQt(QMainWindow): # Main Window
     def __init__(self, manager, icon_path: str | None = None):
         super().__init__()
@@ -1482,7 +1522,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setWindowTitle("Evanovar's Roblox Account Manager")
-        self.setFixedSize(640, 520)
+        self._init_window_size()
         if self._icon_path:
             try:
                 self.setWindowIcon(QIcon(self._icon_path))
@@ -1882,6 +1922,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         body.addWidget(self._page_stack, 1)
         outer.addLayout(body, 1)
 
+        self._resize_handle = _ResizeHandle(central)
+        self._position_resize_handle()
+
     def _show_page(self, index: int) -> None:
         self._ensure_page_built(index)
         changed = self._page_stack.currentIndex() != index
@@ -2052,6 +2095,56 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         lay.addWidget(close_btn)
 
         return bar
+
+    def _init_window_size(self) -> None:
+        self._window_size_save_timer = QTimer(self)
+        self._window_size_save_timer.setSingleShot(True)
+        self._window_size_save_timer.setInterval(400)
+        self._window_size_save_timer.timeout.connect(self._save_window_size)
+        self.setMinimumSize(640, 520)
+
+        size = self.minimumSize()
+        saved = actions.load_ui_settings().get("main_window_size")
+        if (isinstance(saved, list) and len(saved) == 2
+                and all(type(value) is int and value > 0 for value in saved)):
+            screen = self.screen()
+            available = screen.availableGeometry().size() if screen else QSize(640, 520)
+            size = QSize(min(saved[0], available.width()), min(saved[1], available.height()))
+            size = size.expandedTo(self.minimumSize())
+        self.resize(size)
+        self._last_saved_window_size = [self.width(), self.height()]
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_resize_handle()
+        if (hasattr(self, "_window_size_save_timer") and self.isVisible()
+                and not self.isMaximized() and not self.isFullScreen()
+                and not self.isMinimized()):
+            self._window_size_save_timer.start()
+
+    def _position_resize_handle(self) -> None:
+        handle = getattr(self, "_resize_handle", None)
+        if handle is not None:
+            parent = handle.parentWidget()
+            handle.move(parent.width() - handle.width(), parent.height() - handle.height())
+            handle.raise_()
+
+    def _save_window_size(self) -> None:
+        self._window_size_save_timer.stop()
+        geometry_size = self.size()
+        if self.isMaximized() or self.isFullScreen() or self.isMinimized():
+            geometry_size = self.normalGeometry().size()
+        if not geometry_size.isValid():
+            return
+        size = [geometry_size.width(), geometry_size.height()]
+        if size == self._last_saved_window_size:
+            return
+        try:
+            actions.save_ui_setting("main_window_size", size)
+        except Exception as exc:
+            print(f"[WARNING] Could not save window size: {exc}")
+        else:
+            self._last_saved_window_size = size
 
     # Drag window
     def mousePressEvent(self, event):
@@ -6528,6 +6621,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             app.quit()
 
     def _perform_shutdown_cleanup(self) -> None:
+        self._save_window_size()
         diagnostics.set_console_wakeup(None)
         private_manager = getattr(self, '_private_server_manager', None)
         if private_manager is not None and isValid(private_manager):
@@ -6615,6 +6709,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._disable_system_tray()
 
     def closeEvent(self, event):
+        self._save_window_size()
         hide_to_tray = actions.load_ui_settings().get(
             "hide_to_system_tray",
             False,
