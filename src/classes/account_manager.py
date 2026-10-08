@@ -60,6 +60,8 @@ class RobloxAccountManager:
         self._accounts_lock = threading.RLock()
         self._browser_setup_lock = threading.Lock()
         self._pre_launch_hook = None
+        # Session-only launch evidence; never persist cookies or launch URLs.
+        self._launch_records: dict[str, tuple[str, float]] = {}
         
         if self.encryption_config.is_encryption_enabled():
             method = self.encryption_config.get_encryption_method()
@@ -88,6 +90,11 @@ class RobloxAccountManager:
     def set_pre_launch_hook(self, callback) -> None:
         # Set the callback that runs before Roblox launches.
         self._pre_launch_hook = callback
+
+    def get_launch_records(self) -> dict[str, tuple[str, float]]:
+        """Snapshot successful session launches: tracker -> (user ID, UTC time)."""
+        with self._accounts_lock:
+            return dict(self._launch_records)
         
     def load_accounts(self):
         """Load saved accounts from JSON file"""
@@ -1165,6 +1172,16 @@ class RobloxAccountManager:
             job_id,
             custom_launcher_path,
         )
+        if launched and isinstance(launched.data, dict):
+            tracker = launched.data.get('browser_tracker_id')
+            launch_time = launched.data.get('launch_time')
+            with self._accounts_lock:
+                user_id = str(self.accounts.get(username, {}).get('user_id', '') or '')
+                if tracker and launch_time is not None and user_id and user_id != '0':
+                    self._launch_records[tracker] = (user_id, launch_time)
+                    # Bound pending evidence even if the renamer is disabled.
+                    while len(self._launch_records) > 256:
+                        self._launch_records.pop(next(iter(self._launch_records)))
         if launched and self.accounts[username].get('cookie_valid') is not True:
             with self._accounts_lock:
                 self.accounts[username]['cookie_valid'] = True

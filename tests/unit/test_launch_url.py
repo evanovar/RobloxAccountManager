@@ -1,8 +1,10 @@
 import unittest
+import threading
 from unittest import mock
 
 from classes.operation_result import OperationResult
 from classes.roblox_api import RobloxAPI
+from classes.account_manager import RobloxAccountManager
 
 JOB_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
@@ -59,6 +61,70 @@ class LaunchUrlTests(unittest.TestCase):
         result, run = launch()
         self.assertTrue(result)
         self.assertIn("launchmode:play+gameinfo:TICKET", run.call_args.args[0])
+
+    def test_success_preserves_sent_tracker_and_launch_time_for_home_and_game(self):
+        for game_id in ("", "1818"):
+            with self.subTest(game_id=game_id), \
+                    mock.patch("classes.roblox_api.secrets.randbelow", return_value=123), \
+                    mock.patch("classes.roblox_api.time.time", return_value=100.5):
+                result, run = launch(game_id=game_id)
+            self.assertEqual(result.data, {
+                "browser_tracker_id": "1000000000000123", "launch_time": 100.5})
+            self.assertIn("+browsertrackerid:1000000000000123+", run.call_args.args[0])
+            self.assertIn("+launchtime:100500+", run.call_args.args[0])
+
+    def test_failed_execution_does_not_supply_launch_evidence(self):
+        failure = OperationResult.failure("LAUNCH_FAILED", "Failed", "Test failure")
+        with mock.patch.object(RobloxAPI, "get_auth_ticket", return_value=OperationResult.success(data="TICKET")), \
+                mock.patch.object(RobloxAPI, "_execute_launch", return_value=failure):
+            result = RobloxAPI.launch_roblox("alice", "cookie", game_id="1818")
+        self.assertIs(result, failure)
+        self.assertIsNone(result.data)
+
+
+class LaunchRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = RobloxAccountManager.__new__(RobloxAccountManager)
+        self.manager._accounts_lock = threading.RLock()
+        self.manager._launch_records = {}
+        self.manager._pre_launch_hook = None
+        self.manager.accounts = {"alice": {
+            "cookie": "TEST_COOKIE", "user_id": "42", "cookie_valid": True}}
+        self.manager.save_accounts = mock.Mock()
+        self.launcher = self.enterContext(mock.patch.object(RobloxAPI, "launch_roblox"))
+
+    def test_successful_launch_records_only_identity_and_time(self):
+        self.launcher.return_value = OperationResult.success(data={
+            "browser_tracker_id": "987", "launch_time": 100.0})
+        self.manager.launch_roblox("alice", "1818")
+        self.assertEqual(self.manager.get_launch_records(), {"987": ("42", 100.0)})
+        self.manager.save_accounts.assert_not_called()
+
+    def test_failed_launch_records_nothing(self):
+        self.launcher.return_value = OperationResult.failure("FAILED", "Failed", "Test failure")
+        self.assertFalse(self.manager.launch_roblox("alice", "1818"))
+        self.assertFalse(self.manager.get_launch_records())
+
+    def test_launch_without_account_id_records_nothing(self):
+        self.manager.accounts["alice"].pop("user_id")
+        self.launcher.return_value = OperationResult.success(data={
+            "browser_tracker_id": "987", "launch_time": 100.0})
+        self.manager.launch_roblox("alice", "1818")
+        self.assertFalse(self.manager.get_launch_records())
+
+    def test_record_snapshot_cannot_mutate_shared_state(self):
+        self.manager._launch_records["987"] = ("42", 100.0)
+        self.manager.get_launch_records().clear()
+        self.assertEqual(self.manager.get_launch_records(), {"987": ("42", 100.0)})
+
+    def test_records_are_bounded_when_renamer_is_disabled(self):
+        self.manager._launch_records = {str(index): ("42", 100.0) for index in range(256)}
+        self.launcher.return_value = OperationResult.success(data={
+            "browser_tracker_id": "987", "launch_time": 200.0})
+        self.manager.launch_roblox("alice", "1818")
+        self.assertEqual(len(self.manager.get_launch_records()), 256)
+        self.assertNotIn("0", self.manager.get_launch_records())
+        self.assertEqual(self.manager.get_launch_records()["987"], ("42", 200.0))
 
 
 if __name__ == "__main__":
