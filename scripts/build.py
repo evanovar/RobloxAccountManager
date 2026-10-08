@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -20,6 +22,50 @@ _VERSION_ASSIGNMENT = re.compile(
     r'^\s*APP_VERSION\s*=\s*["\']([^"\']+)["\']\s*$'
 )
 _VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
+
+
+def collect_ssl_binaries() -> list[tuple[str, str]]:
+    """Prefer this interpreter's OpenSSL DLLs over unrelated copies on PATH."""
+    if sys.platform != "win32":
+        return []
+    import _ssl
+
+    dll_dir = Path(_ssl.__file__).resolve().parent
+    binaries = []
+    for pattern in ("libssl-*.dll", "libcrypto-*.dll"):
+        matches = sorted(dll_dir.glob(pattern))
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Expected one Python OpenSSL DLL matching {pattern} in {dll_dir}; "
+                f"found {len(matches)}. Refusing to use DLLs from PATH."
+            )
+        binaries.append((str(matches[0]), "."))
+    return binaries
+
+
+def validate_frozen_runtime() -> str:
+    """Exercise the actual executable before reporting a successful build."""
+    import ssl
+
+    with tempfile.TemporaryDirectory(prefix="ram-build-check-") as directory:
+        report_path = Path(directory) / "runtime.json"
+        result = subprocess.run(
+            [str(OUTPUT_PATH), "--build-self-test", str(report_path)],
+            cwd=directory, check=False, timeout=60,
+        )
+        if not report_path.is_file():
+            raise RuntimeError(
+                f"Executable did not produce a runtime report (exit {result.returncode})."
+            )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if result.returncode != 0 or report.get("ok") is not True:
+            raise RuntimeError(f"Executable runtime check failed: {report.get('error', report)}")
+        version = report.get("openssl_version")
+        if version != ssl.OPENSSL_VERSION:
+            raise RuntimeError(
+                f"Executable OpenSSL {version!r} differs from Python's {ssl.OPENSSL_VERSION!r}."
+            )
+        return version
 
 
 def read_app_version() -> str:
@@ -127,6 +173,7 @@ def main() -> int:
             "-m",
             "PyInstaller",
             "--noconfirm",
+            "--clean",
             str(SPEC_PATH),
         ],
         cwd=PROJECT_ROOT,
@@ -139,6 +186,13 @@ def main() -> int:
         print(f"[ERROR] Build output was not found: {OUTPUT_PATH}")
         return 1
 
+    try:
+        openssl_version = validate_frozen_runtime()
+    except Exception as exc:
+        print(f"[ERROR] Built executable validation failed: {exc}")
+        return 1
+
+    print(f"[INFO] Executable SSL check passed: {openssl_version}")
     print(f"[SUCCESS] Build complete: {OUTPUT_PATH}")
     if is_release:
         try:

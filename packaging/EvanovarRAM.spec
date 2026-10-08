@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT))
+from scripts.build import collect_ssl_binaries
+
 SOURCE_ROOT = PROJECT_ROOT / "src"
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 VERSION_INFO_PATH = PROJECT_ROOT / "build" / "version_info.txt"
@@ -17,7 +21,8 @@ datas = [
     (str(ASSETS_ROOT / "icon.ico"), "assets"),
     (str(ASSETS_ROOT / "discordlogo.png"), "assets"),
 ]
-binaries = []
+# Explicit inputs take precedence over native dependencies discovered on PATH.
+binaries = collect_ssl_binaries()
 hiddenimports = [
     "requests",
     "Crypto",
