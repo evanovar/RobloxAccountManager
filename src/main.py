@@ -9,6 +9,13 @@ import ctypes
 import os
 import sys
 
+# A windowed frozen helper cannot use stdout. Dispatch before importing Qt or
+# installing diagnostics, so probing never starts another application instance.
+if len(sys.argv) > 1 and sys.argv[1] == "--window-log-probe":
+    from features.window_log_probe import helper_main
+
+    raise SystemExit(helper_main(sys.argv[2:]))
+
 from utils.app_paths import apply_data_dir_argument
 
 sys.argv[:] = apply_data_dir_argument(sys.argv)
