@@ -77,9 +77,13 @@ jobs:
             throw "Expected exactly one signed EXE."
           }
           $signature = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
-          # A self-signed test certificate can be untrusted on the GitHub runner.
+          $expectedThumbprint = 'C2713034F69DC7531852BE6BB004A7198232B2C7'
+          $untrustedRootMessage = [System.ComponentModel.Win32Exception]::new(-2146762487).Message
+          $isUntrustedTestRoot = $signature.Status -eq 'UnknownError' -and
+              $signature.StatusMessage -eq $untrustedRootMessage
           if ($null -eq $signature.SignerCertificate -or
-              $signature.Status -notin @('Valid', 'NotTrusted')) {
+              $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint -or
+              ($signature.Status -ne 'Valid' -and -not $isUntrustedTestRoot)) {
             throw "Test signature check failed: $($signature.Status) - $($signature.StatusMessage)"
           }
           Write-Host "Signature status: $($signature.Status)"
