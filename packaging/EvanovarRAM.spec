@@ -1,18 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import _ssl
 from pathlib import Path
-import sys
 
 from PyInstaller.utils.hooks import collect_all
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
-sys.path.insert(0, str(PROJECT_ROOT))
-from scripts.build import collect_ssl_binaries
-
 SOURCE_ROOT = PROJECT_ROOT / "src"
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 VERSION_INFO_PATH = PROJECT_ROOT / "build" / "version_info.txt"
+PYTHON_DLLS_ROOT = Path(_ssl.__file__).resolve().parent
 
 if not VERSION_INFO_PATH.is_file():
     raise FileNotFoundError("Run scripts/build.py to generate version information.")
@@ -22,7 +20,10 @@ datas = [
     (str(ASSETS_ROOT / "discordlogo.png"), "assets"),
 ]
 # Explicit inputs take precedence over native dependencies discovered on PATH.
-binaries = collect_ssl_binaries()
+binaries = [
+    (str(PYTHON_DLLS_ROOT / "libssl-*.dll"), "."),
+    (str(PYTHON_DLLS_ROOT / "libcrypto-*.dll"), "."),
+]
 hiddenimports = [
     "requests",
     "Crypto",

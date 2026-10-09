@@ -9,11 +9,6 @@ import ctypes
 import os
 import sys
 
-if len(sys.argv) > 1 and sys.argv[1] == "--build-self-test":
-    from utils.runtime_check import helper_main
-
-    raise SystemExit(helper_main(sys.argv[2:]))
-
 # A windowed frozen helper cannot use stdout. Dispatch before importing Qt or
 # installing diagnostics, so probing never starts another application instance.
 if len(sys.argv) > 1 and sys.argv[1] == "--window-log-probe":

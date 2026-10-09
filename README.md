@@ -191,8 +191,6 @@ uv run --no-sync python scripts/build.py
 
 The executable is written to `dist/EvanovarRAM.exe`. Build configuration lives in `packaging/EvanovarRAM.spec`, and version metadata is generated during the build. Release builds also create `dist/EvanovarRAM-v<version>.exe` for GitHub Releases.
 
-The build bundles OpenSSL from the active Python interpreter and checks SSL inside the finished executable before reporting success. This check runs offline and does not load account data or open the application UI.
-
 `src/utils/version.py` is the single source of truth for the application version. Release tags must match `APP_VERSION`.
 
 ## System changes and uninstallation
