@@ -1,0 +1,94 @@
+name: SignPath test signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_configuration_slug:
+        description: "SignPath ZIP artifact configuration slug"
+        required: true
+        default: windows-exe
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build-and-sign:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.7"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Sync dependencies
+        run: uv sync --locked --group build
+
+      - name: Set build version
+        run: |
+          $version = uv run --no-sync python -c "from scripts.build import read_app_version; print(read_app_version())"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the application version."
+          }
+          "RAM_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+
+      - name: Build with PyInstaller
+        run: uv run --no-sync python scripts/build.py
+
+      - name: Upload unsigned EXE
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: EvanovarRAM-unsigned-test
+          path: dist/EvanovarRAM-v*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Submit test signing request
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 8e3e635e-89d8-4e59-b1a2-8af3fbc8abe0
+          project-slug: RobloxAccountManager
+          signing-policy-slug: test-signing
+          artifact-configuration-slug: ${{ inputs.artifact_configuration_slug }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Check test signature
+        run: |
+          $files = @(Get-ChildItem -LiteralPath signed -Filter 'EvanovarRAM-v*.exe' -File)
+          if ($files.Count -ne 1) {
+            throw "Expected exactly one signed EXE."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $files[0].FullName
+          # A self-signed test certificate can be untrusted on the GitHub runner.
+          if ($null -eq $signature.SignerCertificate -or
+              $signature.Status -notin @('Valid', 'NotTrusted')) {
+            throw "Test signature check failed: $($signature.Status) - $($signature.StatusMessage)"
+          }
+          Write-Host "Signature status: $($signature.Status)"
+          Write-Host "Signer: $($signature.SignerCertificate.Subject)"
+
+      - name: Upload test-signed EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: EvanovarRAM-test-signed
+          path: signed/EvanovarRAM-v*.exe
+          if-no-files-found: error
+          retention-days: 7
