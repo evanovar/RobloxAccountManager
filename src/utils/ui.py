@@ -9,6 +9,7 @@ import ctypes
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1403,6 +1404,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._tray_restore_maximized = False
         self._tray_detached_states: dict[int, str] = {}
         self._shutdown_cleanup_done = False
+        self._admin_restart_pending = False
         self._page_hosts: dict[int, _DetachablePageHost] = {}
         self._detached_windows: dict[int, _DetachedPageWindow] = {}
         self._page_names = {
@@ -3189,6 +3191,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_mr_h64_status()
         self._update_mr_status()
 
+    def _restore_multi_roblox(self) -> None:
+        # Called after the splash finishes and app.exec() starts.
         if self._mr_enabled:
             self._start_multi_roblox()
 
@@ -3212,7 +3216,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             return
         if self._mr_handle64_radio.isChecked():
             if not self._is_admin():
-                self._mr_ask_restart_as_admin()
+                self._mr_method = "handle64"
+                actions.save_ui_setting("multi_roblox_method", self._mr_method)
+                if self._mr_ask_restart_as_admin():
+                    return
                 self._mr_default_radio.blockSignals(True)
                 self._mr_handle64_radio.blockSignals(True)
                 self._mr_default_radio.setChecked(True)
@@ -3250,6 +3257,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             print(f"Error in _on_mr_enabled_changed: {e}")
 
     def _start_multi_roblox(self):
+        if getattr(self, "_admin_restart_pending", False):
+            return
         if actions.is_multi_roblox_running(self._mr_method):
             self._update_mr_status()
             return
@@ -3299,7 +3308,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         ok, msg = actions.enable_multi_roblox(self._mr_method)
         if not ok:
             if msg == "NEEDS_ADMIN":
-                self._mr_ask_restart_as_admin()
+                if self._mr_ask_restart_as_admin():
+                    return
             elif msg == "ROBLOX_RUNNING":
                 QMessageBox.critical(
                     self,
@@ -3341,7 +3351,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         else:
             self._update_mr_status()
 
-    def _mr_ask_restart_as_admin(self):
+    def _mr_ask_restart_as_admin(self) -> bool:
+        if self._admin_restart_pending:
+            return True
         reply = QMessageBox.question(
             self,
             "Administrator Required",
@@ -3353,15 +3365,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 if getattr(sys, "frozen", False):
-                    executable = sys.executable
-                    params = " ".join(f'"{a}"' for a in sys.argv[1:])
+                    arguments = sys.argv[1:]
                 else:
-                    executable = sys.executable
-                    params = " ".join(f'"{a}"' for a in sys.argv)
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+                    arguments = [os.path.abspath(sys.argv[0]), *sys.argv[1:]]
+                params = subprocess.list2cmdline([*arguments, "--data-dir", get_data_dir()])
+                launch = ctypes.windll.shell32.ShellExecuteW
+                launch.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                                   ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_int]
+                launch.restype = ctypes.c_void_p
+                result = launch(int(self.winId()), "runas", sys.executable, params, os.getcwd(), 1)
+                if not result or result <= 32:
+                    raise OSError(f"Windows did not start the elevated app (code {result or 0}).")
+                self._admin_restart_pending = True
+                self.hide()
                 QApplication.quit()
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to restart as administrator:\n{e}")
+        return False
 
     def _stop_multi_roblox(self):
         actions.disable_multi_roblox()
@@ -9316,7 +9337,7 @@ def main(icon_path: str | None = None) -> int:
         return 1
 
     splash.status("Ready", 1.0)
-    splash.reveal(window)
+    splash.reveal(window, on_ready=window._restore_multi_roblox)
     diagnostics.mark_ui_ready()
     return app.exec()
 

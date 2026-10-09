@@ -5,6 +5,7 @@ Loading screen shown while the application starts.
 from __future__ import annotations
 
 import sys
+from typing import Callable
 
 from PySide6.QtCore import QEasingCurve, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPen
@@ -185,7 +186,7 @@ def dismiss() -> None:
         splash.deleteLater()
 
 
-def reveal(window: QWidget) -> None:
+def reveal(window: QWidget, on_ready: Callable[[], None] | None = None) -> None:
     global _active
     splash, _active = _active, None
     if splash is None or not splash.animate:
@@ -193,6 +194,8 @@ def reveal(window: QWidget) -> None:
         if splash is not None:
             splash.hide()
             splash.deleteLater()
+        if on_ready is not None:
+            QTimer.singleShot(0, window, on_ready)
         return
 
     window.setWindowOpacity(0.0)
@@ -216,6 +219,8 @@ def reveal(window: QWidget) -> None:
         window.setWindowOpacity(1.0)
         splash.hide()
         splash.deleteLater()
+        if on_ready is not None:
+            QTimer.singleShot(0, window, on_ready)
 
     fade.valueChanged.connect(step)
     fade.finished.connect(done)

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import shiboken6
 from PySide6.QtGui import QColor
@@ -113,6 +113,32 @@ class ProgressTests(SplashCase):
 
 
 class RevealTests(SplashCase):
+    def test_ready_callback_runs_after_the_splash_is_hidden(self):
+        for animate in (False, True):
+            with self.subTest(animate=animate):
+                window = self.start(animate=animate)
+                target = QWidget()
+                self.addCleanup(target.close)
+                seen = []
+
+                def ready():
+                    seen.append((target.isVisible(),
+                                 shiboken6.isValid(window) and window.isVisible()))
+
+                splash.reveal(target, on_ready=ready)
+                self.assertEqual(seen, [])
+                QTest.qWait(splash.FADE_MS * 4)
+                self.assertEqual(seen, [(True, False)])
+
+    def test_ready_callback_without_splash_is_queued(self):
+        target = QWidget()
+        self.addCleanup(target.close)
+        ready = Mock()
+        splash.reveal(target, on_ready=ready)
+        ready.assert_not_called()
+        QTest.qWait(20)
+        ready.assert_called_once_with()
+
     def test_reveal_without_animation_shows_the_window_at_once(self):
         window = self.start(animate=False)
         target = QWidget()
