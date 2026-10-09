@@ -28,26 +28,20 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.7"
+          version: "0.12.23"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Install Python
-        run: uv python install 3.14
-
-      - name: Sync dependencies
-        run: uv sync --locked --group build
-
       - name: Set build version
         run: |
-          $version = uv run --no-sync python -c "from scripts.build import read_app_version; print(read_app_version())"
+          $version = uv run --locked --managed-python python -c "from scripts.build import read_app_version; print(read_app_version())"
           if ($LASTEXITCODE -ne 0) {
             throw "Could not read the application version."
           }
           "RAM_RELEASE_TAG=v$version" >> $env:GITHUB_ENV
 
       - name: Build with PyInstaller
-        run: uv run --no-sync python scripts/build.py
+        run: .\scripts\build.cmd
 
       - name: Upload unsigned EXE
         id: unsigned

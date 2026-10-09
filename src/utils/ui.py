@@ -9193,7 +9193,7 @@ def _show_account_recovery_warning(manager):
         )
 
 
-def main(icon_path: str | None = None) -> int:
+def main(icon_path: str | None = None, *, smoke_test: bool = False) -> int:
     # QApplication MUST exist before any QWidget / QDialog is created.
     # Create it first, before setup_encryption() and before _PasswordDialog.
     diagnostics.set_startup_stage("creating QApplication")
@@ -9336,8 +9336,13 @@ def main(icon_path: str | None = None) -> int:
         )
         return 1
 
-    splash.status("Ready", 1.0)
-    splash.reveal(window, on_ready=window._restore_multi_roblox)
+    if smoke_test:
+        splash.dismiss()
+        window.show()
+        QTimer.singleShot(0, app.quit)
+    else:
+        splash.status("Ready", 1.0)
+        splash.reveal(window, on_ready=window._restore_multi_roblox)
     diagnostics.mark_ui_ready()
     return app.exec()
 
