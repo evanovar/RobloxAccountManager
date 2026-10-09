@@ -4,6 +4,7 @@ Handles authentication, info, and game launching
 """
 
 import os
+from dataclasses import replace
 import re
 import time
 import secrets
@@ -560,6 +561,17 @@ class RobloxAPI:
         ) + 1_000_000_000_000_000
         launch_time = int(time.time() * 1000)
 
+        def execute_launch(url):
+            result = RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
+            if result:
+                # Roblox can replace the tracker in its logs. Preserve the ID
+                # sent to the client so the manager can identify that launch.
+                return replace(result, data={
+                    "browser_tracker_id": str(browser_tracker_id),
+                    "launch_time": launch_time / 1000.0,
+                })
+            return result
+
         if not game_id and not private_server_id:
             url = (
                 "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
@@ -568,7 +580,7 @@ class RobloxAPI:
                 "+robloxLocale:en_us+gameLocale:en_us"
             )
             print(f"[INFO] Launching Roblox Home for {username}")
-            return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
+            return execute_launch(url)
 
         link_code = None
 
@@ -639,7 +651,7 @@ class RobloxAPI:
             print(f"[INFO] Job ID: {job_id}")
         print(f"[INFO] Launcher: {launcher_preference}")
 
-        return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
+        return execute_launch(url)
     
     @staticmethod
     def _execute_launch(url, launcher_preference, custom_launcher_path=""):

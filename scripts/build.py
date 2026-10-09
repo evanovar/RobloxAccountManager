@@ -127,6 +127,7 @@ def main() -> int:
             "-m",
             "PyInstaller",
             "--noconfirm",
+            "--clean",
             str(SPEC_PATH),
         ],
         cwd=PROJECT_ROOT,
