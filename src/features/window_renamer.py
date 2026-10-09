@@ -22,6 +22,7 @@ from features.window_operations import set_window_title
 
 _LOG_EARLY_TOLERANCE_SEC = 2.0
 _LOG_STARTUP_WINDOW_SEC = 60.0
+_LAUNCH_STARTUP_WINDOW_SEC = 300.0
 _TRACKER_PATTERN = re.compile(
     r"browsertrackerid[^0-9]{0,32}(\d+)",
     re.IGNORECASE,
@@ -29,11 +30,13 @@ _TRACKER_PATTERN = re.compile(
 _EVIDENCE_TIMESTAMP = 1
 _EVIDENCE_OPEN_FILE = 2
 _EVIDENCE_TRACKER = 3
+_EVIDENCE_LAUNCH = 4
 _MAX_PROBES_PER_SCAN = 2
 _EVIDENCE_NAMES = {
     _EVIDENCE_TIMESTAMP: "single timestamp match",
     _EVIDENCE_OPEN_FILE: "exact open log file",
     _EVIDENCE_TRACKER: "browser tracker ID",
+    _EVIDENCE_LAUNCH: "recorded launch tracker ID",
 }
 
 
@@ -301,7 +304,7 @@ class RobloxWindowRenamer:
         saved_usernames: dict[str, str],
         process_tracker: str = "",
     ) -> bool:
-        owner = self._claimed_logs.get(entry.path)
+        owner = self._claimed_logs.get(entry.path) if entry.path else None
         if owner is not None and owner != key:
             owner_identity = self._identities.get(owner)
             if owner_identity is not None and evidence > owner_identity.evidence:
@@ -341,7 +344,8 @@ class RobloxWindowRenamer:
         if old_identity is not None and old_identity.log_path != entry.path:
             self._claimed_logs.pop(old_identity.log_path, None)
         self._identities[key] = new_identity
-        self._claimed_logs[entry.path] = key
+        if entry.path:
+            self._claimed_logs[entry.path] = key
         self._clear_ambiguity(key)
         if username:
             self._managed_titles.add(username)
@@ -378,6 +382,8 @@ class RobloxWindowRenamer:
             self._normalized_path(entry.path): entry
             for entry in entries
         }
+        get_launch_records = getattr(self._manager, "get_launch_records", None)
+        launch_records = get_launch_records() if callable(get_launch_records) else {}
 
         for entry in entries:
             if entry.browser_tracker_id:
@@ -403,6 +409,24 @@ class RobloxWindowRenamer:
                 continue
             matching_processes = tracker_processes.get(tracker, [])
             matching_entries = tracker_entries.get(tracker, [])
+            if len(matching_processes) == 1 and tracker in launch_records:
+                user_id, launch_time = launch_records[tracker]
+                if (
+                    user_id in saved_usernames
+                    and -_LOG_EARLY_TOLERANCE_SEC
+                    <= key[1] - launch_time <= _LAUNCH_STARTUP_WINDOW_SEC
+                ):
+                    entry = presence_mod.RobloxLogEntry(
+                        timestamp=self._create_time_utc(key[1]),
+                        path="",
+                        user_id=user_id,
+                        browser_tracker_id=tracker,
+                    )
+                    self._set_identity(
+                        key, entry, _EVIDENCE_LAUNCH,
+                        saved_usernames, process_tracker=tracker,
+                    )
+                    continue
             if len(matching_processes) != 1 or len(matching_entries) != 1:
                 if len(matching_processes) > 1 or len(matching_entries) > 1:
                     self._set_ambiguity(
@@ -485,10 +509,18 @@ class RobloxWindowRenamer:
         if key not in process_log_paths:
             return
         create_time = self._create_time_utc(key[1])
+        # A recorded launch has no claimed log path. Its account's logs may
+        # belong to that resolved client, so never give them to another PID
+        # using timestamps alone.
+        logless_user_ids = {
+            identity.user_id for identity in self._identities.values()
+            if not identity.log_path
+        }
         candidates = [
             entry
             for entry in entries
             if entry.path not in self._claimed_logs
+            and entry.user_id not in logless_user_ids
             and entry.user_id in saved_usernames
             and -_LOG_EARLY_TOLERANCE_SEC
             <= (entry.timestamp - create_time).total_seconds()
