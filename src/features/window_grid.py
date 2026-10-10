@@ -223,8 +223,11 @@ def tile_roblox_windows() -> OperationResult:
             try:
                 if win32gui.IsIconic(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                _, actual_top, _, actual_bottom = win32gui.GetWindowRect(hwnd)
-                sizes.append((index, hwnd, actual_bottom - actual_top))
+                actual_left, actual_top, actual_right, actual_bottom = win32gui.GetWindowRect(hwnd)
+                client_left, client_top, client_right, client_bottom = win32gui.GetClientRect(hwnd)
+                frame_width = actual_right - actual_left - (client_right - client_left)
+                frame_height = actual_bottom - actual_top - (client_bottom - client_top)
+                sizes.append((index, hwnd, frame_width, frame_height))
             except Exception as exc:
                 print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
 
@@ -232,14 +235,21 @@ def tile_roblox_windows() -> OperationResult:
         while sizes:
             resized = []
             widths_fit = True
-            for index, hwnd, original_height in sizes:
+            rows = math.ceil(len(windows) / columns)
+            for index, hwnd, frame_width, frame_height in sizes:
                 column = index % columns
                 cell_left = column * available_width // columns
                 cell_right = (column + 1) * available_width // columns
                 width = max(1, cell_right - cell_left - gap * 2)
-                height = original_height
-                if len(windows) == 2 and columns == 2:
-                    height = max(1, available_height - gap * 2)
+                if len(windows) <= 2:
+                    height = max(1, available_height // rows - gap * 2)
+                else:
+                    # Target a 16:9 game area, excluding the title bar and borders.
+                    client_width = max(1, width - frame_width)
+                    height = max(1, min(
+                        available_height - gap * 2,
+                        (client_width * 9 + 8) // 16 + frame_height,
+                    ))
                 try:
                     win32gui.SetWindowPos(
                         hwnd, 0, 0, 0, width, height,
@@ -263,8 +273,8 @@ def tile_roblox_windows() -> OperationResult:
 
         rows = math.ceil(len(windows) / columns)
         if resized:
-            # Preserve heights and distribute rows evenly, allowing vertical
-            # overlap so the last row stays above the taskbar.
+            # Fill rows left to right so taller stacks stay on the left. Allow
+            # vertical overlap so the last row stays above the taskbar.
             row_span = max(0, available_height - max(item[2] for item in resized) - gap * 2)
             for index, hwnd, _ in resized:
                 x = left + gap + (index % columns) * available_width // columns
