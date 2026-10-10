@@ -59,7 +59,8 @@ The release executable is unsigned. Windows or antivirus software may display a 
 Requirements:
 
 - Windows 10 or Windows 11
-- [uv](https://docs.astral.sh/uv/)
+- Python 3.15 (uv installs the required version automatically)
+- [uv](https://docs.astral.sh/uv/) 0.13.0 or newer
 - Git
 - Chrome, Firefox, or Edge for browser login, unless portable Chromium is installed from the application
 

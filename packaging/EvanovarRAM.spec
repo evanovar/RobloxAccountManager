@@ -4,6 +4,7 @@ import _ssl
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.win32.winutils import get_windows_dir
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
@@ -11,6 +12,7 @@ SOURCE_ROOT = PROJECT_ROOT / "src"
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 VERSION_INFO_PATH = PROJECT_ROOT / "build" / "version_info.txt"
 PYTHON_DLLS_ROOT = Path(_ssl.__file__).resolve().parent
+WINDOWS_ICU_PATH = Path(get_windows_dir()) / "System32" / "icuuc.dll"
 
 if not VERSION_INFO_PATH.is_file():
     raise FileNotFoundError("Run scripts/build.py to generate version information.")
@@ -23,6 +25,7 @@ datas = [
 binaries = [
     (str(PYTHON_DLLS_ROOT / "libssl-*.dll"), "."),
     (str(PYTHON_DLLS_ROOT / "libcrypto-*.dll"), "."),
+    (str(WINDOWS_ICU_PATH), "."),
 ]
 hiddenimports = [
     "requests",
@@ -53,6 +56,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+a.binaries = [entry for entry in a.binaries if entry[0].lower() != "icuuc.dll"]
 pyz = PYZ(a.pure)
 
 exe = EXE(

@@ -5,7 +5,7 @@ Avatar headshot fetching logic.
 from __future__ import annotations
 
 import collections
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -19,7 +19,7 @@ from utils.app_paths import get_data_dir
 
 
 _CACHE_DIR = os.path.join(get_data_dir(), "avatar_cache")
-_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="avatar",
 )
