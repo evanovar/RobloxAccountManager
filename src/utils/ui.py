@@ -16,6 +16,7 @@ import threading
 import time
 import webbrowser
 import weakref
+import uuid
 
 from utils import motion, icons, splash
 from utils.app_paths import get_app_dir, get_data_dir, get_resource_path
@@ -43,7 +44,7 @@ from PySide6.QtWidgets import (
     QSizeGrip, QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
     QToolButton, QVBoxLayout, QWidget,
-    QStyle, QStyleOptionButton,
+    QStyle, QStyleOptionButton, QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink
 from shiboken6 import isValid
@@ -72,6 +73,7 @@ import features.chromium as chromium_mod
 import features.diagnostics as diagnostics
 import features.favorites as favorites_mod
 import features.groups as groups
+import features.game_selector as game_selector_mod
 import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.private_servers as private_servers_mod
@@ -6785,7 +6787,28 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         # Place ID
         place_lbl = QLabel("Place ID")
         place_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
-        lay.addWidget(place_lbl)
+        place_header = QHBoxLayout()
+        place_header.setSpacing(6)
+        place_header.addWidget(place_lbl)
+        place_header.addStretch(1)
+        self._games_selector_btn = QPushButton()
+        self._games_selector_btn.setObjectName("gamesSelectorButton")
+        self._games_selector_btn.setFixedSize(18, 18)
+        self._games_selector_btn.setFlat(True)
+        self._games_selector_btn.setIcon(icons.make_icon("search", MUTED,
+                                                       disabled=LINE, size=14))
+        self._games_selector_btn.setIconSize(QSize(14, 14))
+        self._games_selector_btn.setToolTip("Games Selector")
+        self._games_selector_btn.setAccessibleName("Open Games Selector")
+        self._games_selector_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._games_selector_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: 0; padding: 0; }"
+            "QPushButton:hover { background: transparent; }"
+            "QPushButton:focus { background: transparent; border: 0; outline: none; }"
+        )
+        self._games_selector_btn.clicked.connect(self._open_games_selector)
+        place_header.addWidget(self._games_selector_btn)
+        lay.addLayout(place_header)
 
         self._place_id_edit = QComboBox()
         self._place_id_edit.setEditable(True)
@@ -7365,6 +7388,14 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 df.update_float_avatar(pix)
         except Exception:
             pass
+
+    def _open_games_selector(self):
+        dialog = _GamesSelectorDialog(self)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_place_id:
+                self._place_id_edit.setCurrentText(dialog.selected_place_id)
+        finally:
+            dialog.deleteLater()
 
     # Recent games
     def _refresh_recent_games(self):
@@ -8356,6 +8387,309 @@ _DLG_STYLE = f"""
     QPushButton:hover   {{ background: {SELECT}; }}
     QPushButton:pressed {{ background: {SELECT}; }}
 """
+
+
+class _GamesSelectorBridge(QObject):
+    loaded = Signal(int, object)
+    thumbnail = Signal(int, str, object)
+
+
+class _GameItemDelegate(QStyledItemDelegate):
+    """Draw cards without a separate widget and layout for every result."""
+
+    def __init__(self, dialog):
+        super().__init__(dialog.games)
+        self._dialog = dialog
+
+    def paint(self, painter, option, index):
+        background = QStyleOptionViewItem(option)
+        self.initStyleOption(background, index)
+        background.text = ""
+        background.icon = QIcon()
+        option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, background, painter, option.widget)
+        game = index.data(Qt.ItemDataRole.UserRole)
+        is_list = self._dialog.list_view.isChecked()
+        image_rect = option.rect.adjusted(8, 8, -8, -8)
+        image_rect.setWidth(72 if is_list else 128)
+        image_rect.setHeight(image_rect.width())
+        painter.save()
+        painter.setClipRect(option.rect)
+        painter.fillRect(image_rect, QColor(INPUT))
+        pixmap = self._dialog._images.get(game.universe_id)
+        if pixmap is not None:
+            painter.drawPixmap(image_rect, pixmap, pixmap.rect())
+        else:
+            placeholder = icons.pixmap("home", MUTED, 24)
+            painter.drawPixmap(image_rect.center() - QPoint(12, 12), placeholder)
+        title_rect = option.rect.adjusted(92, 12, -8, -30) if is_list else option.rect.adjusted(8, 142, -8, -8)
+        font = QFont(option.font)
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(TEXT))
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop |
+                         Qt.TextFlag.TextWordWrap, game.title)
+        if is_list:
+            font.setPixelSize(10)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(QColor(MUTED))
+            painter.drawText(option.rect.adjusted(92, 58, -8, -8), Qt.AlignmentFlag.AlignLeft |
+                             Qt.AlignmentFlag.AlignTop, f"Place ID: {game.place_id}")
+        painter.restore()
+
+
+class _GamesSelectorDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_place_id = ""
+        self._generation = 0
+        self._requests = []
+        self._pages = []
+        self._page_index = 0
+        self._requested_page = 0
+        self._query = ""
+        self._loading = False
+        self._closed = False
+        self._items = {}
+        self._images = {}
+        self._session_id = str(uuid.uuid4())
+        self._bridge = _GamesSelectorBridge()
+        self._bridge.loaded.connect(self._on_loaded, Qt.ConnectionType.QueuedConnection)
+        self._bridge.thumbnail.connect(self._on_thumbnail, Qt.ConnectionType.QueuedConnection)
+        self.setWindowTitle("Games Selector")
+        if parent is not None:
+            self.setWindowIcon(parent.windowIcon())
+        self.resize(660, 560)
+        self.setMinimumSize(440, 360)
+        self.setStyleSheet(_DLG_STYLE + f"""
+            QListWidget {{ background: {PANEL}; border: 1px solid {LINE}; color: {TEXT}; }}
+            QListWidget::item {{ border: 1px solid transparent; }}
+            QListWidget::item:hover {{ background: {HOVER}; }}
+            QListWidget::item:selected {{ background: {SELECT}; border-color: {FG_ACCENT}; }}
+            QPushButton:disabled {{ color: {MUTED}; }}
+            QPushButton:focus, QLineEdit:focus {{ border-color: {FG_ACCENT}; }}
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        layout.addWidget(QLabel("Search games"))
+        search_row = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search Roblox games...")
+        self.search.setAccessibleName("Search Roblox games")
+        self.search.setMaxLength(100)
+        self.search.setClearButtonEnabled(True)
+        self.search_button = QPushButton("Search")
+        self.list_view = QCheckBox("List View")
+        search_row.addWidget(self.search, 1)
+        search_row.addWidget(self.list_view)
+        search_row.addWidget(self.search_button)
+        layout.addLayout(search_row)
+        self.status = QLabel("Loading popular games...")
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet(f"color: {MUTED};")
+        layout.addWidget(self.status)
+        self.games = QListWidget()
+        self.games.setAccessibleName("Game search results")
+        self.games.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.games.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.games.setSpacing(4)
+        self.games.setMovement(QListWidget.Movement.Static)
+        self.games.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.games.setUniformItemSizes(True)
+        self.games.setItemDelegate(_GameItemDelegate(self))
+        layout.addWidget(self.games, 1)
+        buttons = QHBoxLayout()
+        self.previous = QPushButton("Previous")
+        self.next = QPushButton("Next")
+        self.page_label = QLabel("Page 1")
+        self.page_label.setStyleSheet(f"color: {MUTED};")
+        buttons.addWidget(self.previous)
+        buttons.addWidget(self.page_label)
+        buttons.addWidget(self.next)
+        buttons.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+        buttons.addWidget(close)
+        self.apply = QPushButton("Apply to Field")
+        self.apply.setEnabled(False)
+        self.apply.setStyleSheet(f"QPushButton {{ background: {SELECT}; font-weight: 600; }}")
+        buttons.addWidget(self.apply)
+        layout.addLayout(buttons)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(350)
+        self._search_timer.timeout.connect(self._load_games)
+        self.search.textChanged.connect(self._search_changed)
+        self.search.returnPressed.connect(self._load_games)
+        self.search_button.clicked.connect(lambda: self._load_games())
+        self.previous.clicked.connect(lambda: self._go_to_page(self._page_index - 1))
+        self.next.clicked.connect(lambda: self._go_to_page(self._page_index + 1))
+        self.list_view.toggled.connect(self._render_page)
+        self.games.itemSelectionChanged.connect(self._selection_changed)
+        self.games.itemDoubleClicked.connect(self._apply_item)
+        self.apply.clicked.connect(self._apply)
+        # Enter in the search box always searches rather than accepting a game.
+        for button in (self.search_button, self.previous, self.next, close, self.apply):
+            button.setAutoDefault(False)
+        self._render_page()
+        self._update_navigation()
+        self.search.setFocus()
+        QTimer.singleShot(0, self, self._load_games)
+
+    def _cancel_requests(self):
+        self._generation += 1
+        for request in self._requests:
+            request.set()
+        self._requests.clear()
+
+    def _clear_results(self):
+        self._cancel_requests()
+        self._pages.clear()
+        self._images.clear()
+        self._page_index = 0
+        self.games.clear()
+        self._items.clear()
+        self.apply.setEnabled(False)
+
+    def _search_changed(self):
+        self._clear_results()
+        self._loading = False
+        self.search_button.setEnabled(True)
+        self._update_navigation()
+        self.status.setText("Searching..." if self.search.text().strip() else "Loading popular games...")
+        self._search_timer.start()
+
+    def _load_games(self):
+        if self._closed:
+            return
+        self._search_timer.stop()
+        self._clear_results()
+        self._query = self.search.text().strip()
+        self._request_page(0, "")
+
+    def _update_navigation(self):
+        available = len(self._pages)
+        if self._pages and self._pages[-1]["next_page_token"]:
+            available += 1
+        self.previous.setEnabled(not self._loading and self._page_index > 0)
+        self.next.setEnabled(not self._loading and self._page_index + 1 < available)
+        self.page_label.setText(f"Page {self._page_index + 1}")
+
+    def _go_to_page(self, index):
+        if self._closed or self._loading or index < 0 or index == self._page_index:
+            return
+        if index < len(self._pages):
+            self._cancel_requests()
+            self._page_index = index
+            self.games.clearSelection()
+            self._render_page()
+            self._update_navigation()
+            self._show_result_status()
+            generation, bridge = self._generation, self._bridge
+            missing = [game for game in self._pages[index]["games"]
+                       if game.universe_id not in self._images]
+            self._requests.append(game_selector_mod.start_thumbnails(
+                missing, lambda universe, image: bridge.thumbnail.emit(generation, universe, image)))
+        elif index == len(self._pages) and self._pages and self._pages[-1]["next_page_token"]:
+            self._cancel_requests()
+            self._request_page(index, self._pages[-1]["next_page_token"])
+
+    def _request_page(self, index, page_token):
+        self._requested_page = index
+        self._loading = True
+        self.search_button.setEnabled(False)
+        self.games.setEnabled(False)
+        self.apply.setEnabled(False)
+        self._update_navigation()
+        self.status.setText(f"Loading page {index + 1}..." if self._query else "Loading popular games...")
+        generation = self._generation
+        bridge = self._bridge
+        self._requests.append(game_selector_mod.start_load(
+            self._query, self._session_id, page_token,
+            lambda result: bridge.loaded.emit(generation, result),
+            lambda universe, image: bridge.thumbnail.emit(generation, universe, image),
+        ))
+
+    def _on_loaded(self, generation, result):
+        if self._closed or generation != self._generation:
+            return
+        self._loading = False
+        self.search_button.setEnabled(True)
+        self.games.setEnabled(True)
+        if not result:
+            self.status.setText(result.message)
+            self._update_navigation()
+            self._selection_changed()
+            return
+        self._pages.append(result.data)
+        self._pages.extend({"games": games, "next_page_token": ""}
+                           for games in result.data.get("remaining_pages", []))
+        self._page_index = self._requested_page
+        self.games.clearSelection()
+        self._render_page()
+        self._update_navigation()
+        self._show_result_status()
+
+    def _render_page(self):
+        selected = self.games.selectedItems()
+        selected_id = selected[0].data(Qt.ItemDataRole.UserRole).universe_id if selected else ""
+        self.games.clear()
+        self._items.clear()
+        is_list = self.list_view.isChecked()
+        self.games.setViewMode(QListWidget.ViewMode.ListMode if is_list else QListWidget.ViewMode.IconMode)
+        self.games.setWrapping(not is_list)
+        self.games.setGridSize(QSize() if is_list else QSize(146, 190))
+        self.games.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.games.verticalScrollBar().setSingleStep(40)
+        games = self._pages[self._page_index]["games"] if self._pages else []
+        for game in games:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, game)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{game.title}, Place ID {game.place_id}")
+            item.setSizeHint(QSize(0, 88) if is_list else QSize(146, 190))
+            item.setToolTip(f"{game.title}\nPlace ID: {game.place_id}")
+            self.games.addItem(item)
+            self._items[game.universe_id] = item
+            if game.universe_id == selected_id:
+                self.games.setCurrentItem(item)
+        self._selection_changed()
+
+    def _show_result_status(self):
+        count = self.games.count()
+        self.status.setText(
+            f"{count} {'games found' if self._query else 'popular games'}. Select a game to apply its Place ID."
+            if count else "No games found. Try a different search."
+        )
+
+    def _on_thumbnail(self, generation, universe_id, image):
+        if self._closed or generation != self._generation:
+            return
+        item = self._items.get(universe_id)
+        pixmap = QPixmap()
+        if item is not None and pixmap.loadFromData(image):
+            self._images[universe_id] = pixmap
+            self.games.viewport().update(self.games.visualItemRect(item))
+
+    def _selection_changed(self):
+        self.apply.setEnabled(not self._loading and bool(self.games.selectedItems()))
+
+    def _apply(self):
+        selected = self.games.selectedItems()
+        if selected:
+            self._apply_item(selected[0])
+
+    def _apply_item(self, item):
+        if not self._loading and not self._closed:
+            self.selected_place_id = item.data(Qt.ItemDataRole.UserRole).place_id
+            self.accept()
+
+    def done(self, result):
+        self._closed = True
+        self._search_timer.stop()
+        self._cancel_requests()
+        super().done(result)
 
 
 class _ImportCookieDialog(QDialog):
