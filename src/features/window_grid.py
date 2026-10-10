@@ -217,26 +217,66 @@ def tile_roblox_windows() -> OperationResult:
         available_height = bottom - top
         gap = 4
         moved = 0
+        sizes = []
 
         for index, hwnd in enumerate(windows):
-            row = index // columns
-            column = index % columns
-            cell_left = left + column * available_width // columns
-            cell_right = left + (column + 1) * available_width // columns
-            cell_top = top + row * available_height // rows
-            cell_bottom = top + (row + 1) * available_height // rows
-
-            x = cell_left + gap
-            y = cell_top + gap
-            width = max(1, cell_right - cell_left - gap * 2)
-            height = max(1, cell_bottom - cell_top - gap * 2)
-
             try:
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                win32gui.MoveWindow(hwnd, x, y, width, height, True)
-                moved += 1
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                _, actual_top, _, actual_bottom = win32gui.GetWindowRect(hwnd)
+                sizes.append((index, hwnd, actual_bottom - actual_top))
             except Exception as exc:
                 print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
+
+        resized = []
+        while sizes:
+            resized = []
+            widths_fit = True
+            for index, hwnd, original_height in sizes:
+                column = index % columns
+                cell_left = column * available_width // columns
+                cell_right = (column + 1) * available_width // columns
+                width = max(1, cell_right - cell_left - gap * 2)
+                height = original_height
+                if len(windows) == 2 and columns == 2:
+                    height = max(1, available_height - gap * 2)
+                try:
+                    win32gui.SetWindowPos(
+                        hwnd, 0, 0, 0, width, height,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+                    )
+                    actual_left, actual_top, actual_right, actual_bottom = win32gui.GetWindowRect(hwnd)
+                    widths_fit &= actual_right - actual_left <= width
+                    resized.append((index, hwnd, actual_bottom - actual_top))
+                except Exception as exc:
+                    print(f"[Window Grid] Failed to resize window {hwnd}: {exc}")
+            if widths_fit or not resized:
+                break
+            if columns == 1:
+                return OperationResult.failure(
+                    "WINDOW_GRID_MONITOR_TOO_NARROW",
+                    "Monitor Too Narrow",
+                    "This monitor cannot fit a Roblox window at its minimum width.",
+                )
+            # Measure the enforced width instead of assuming Roblox accepted it.
+            columns -= 1
+
+        rows = math.ceil(len(windows) / columns)
+        if resized:
+            # Preserve heights and distribute rows evenly, allowing vertical
+            # overlap so the last row stays above the taskbar.
+            row_span = max(0, available_height - max(item[2] for item in resized) - gap * 2)
+            for index, hwnd, _ in resized:
+                x = left + gap + (index % columns) * available_width // columns
+                y = top + gap + (index // columns) * row_span // max(1, rows - 1)
+                try:
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_TOP, x, y, 0, 0,
+                        win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+                    )
+                    moved += 1
+                except Exception as exc:
+                    print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
 
         if not moved:
             return OperationResult.failure(
