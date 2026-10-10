@@ -19,6 +19,9 @@ if len(sys.argv) > 1 and sys.argv[1] == "--window-log-probe":
 from utils.app_paths import apply_data_dir_argument
 
 sys.argv[:] = apply_data_dir_argument(sys.argv)
+SMOKE_TEST = "--smoke-test" in sys.argv[1:]
+if SMOKE_TEST:
+    sys.argv.remove("--smoke-test")
 
 from features import diagnostics
 import features.settings_store as settings_store
@@ -75,7 +78,7 @@ def main():
     icon_path = resolve_icon_path()
 
     try:
-        exit_code = _ui_main(icon_path=icon_path)
+        exit_code = _ui_main(icon_path=icon_path, smoke_test=SMOKE_TEST)
     except Exception as exc:
         splash.dismiss()
         crash_path = diagnostics.report_exception(

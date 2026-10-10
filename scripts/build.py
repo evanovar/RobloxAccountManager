@@ -5,7 +5,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import win32api
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +113,50 @@ def create_release_asset(version: str) -> Path:
     return release_path
 
 
+def build_environment() -> dict[str, str]:
+    path_overrides = {
+        "PATH", "PYTHONPATH", "PYTHONHOME", "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH",
+    }
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key.upper() not in path_overrides
+    }
+    # Native dependency discovery must not search unrelated host installations.
+    environment["PATH"] = os.pathsep.join([
+        win32api.GetSystemDirectory(),
+        win32api.GetWindowsDirectory(),
+        str(Path(sys.executable).parent),
+        sys.base_prefix,
+        str(Path(sys.base_prefix) / "DLLs"),
+    ])
+    return environment
+
+
+def check_packaged_startup(environment: dict[str, str]) -> None:
+    with tempfile.TemporaryDirectory(prefix="ram-build-check-") as data_dir:
+        smoke_environment = {**environment, "QT_QPA_PLATFORM": "offscreen"}
+        with subprocess.Popen(
+            [str(OUTPUT_PATH), "--smoke-test", "--data-dir", data_dir],
+            cwd=PROJECT_ROOT,
+            env=smoke_environment,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ) as process:
+            try:
+                exit_code = process.wait(timeout=60)
+            except subprocess.TimeoutExpired as exc:
+                # A one-file build has a bootloader and child; stop both on timeout.
+                subprocess.run(
+                    [str(Path(win32api.GetSystemDirectory()) / "taskkill.exe"),
+                     "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                )
+                raise RuntimeError("Packaged app startup check timed out.") from exc
+        if exit_code != 0:
+            raise RuntimeError(f"Packaged app startup check exited with code {exit_code}.")
+
+
 def main() -> int:
     try:
         validate_build_files()
@@ -121,9 +168,11 @@ def main() -> int:
         return 1
 
     print(f"[INFO] Building Evanovar RAM {version}")
+    environment = build_environment()
     result = subprocess.run(
         [
             sys.executable,
+            "-I",
             "-m",
             "PyInstaller",
             "--noconfirm",
@@ -131,6 +180,7 @@ def main() -> int:
             str(SPEC_PATH),
         ],
         cwd=PROJECT_ROOT,
+        env=environment,
         check=False,
     )
     if result.returncode != 0:
@@ -140,7 +190,14 @@ def main() -> int:
         print(f"[ERROR] Build output was not found: {OUTPUT_PATH}")
         return 1
 
-    print(f"[SUCCESS] Build complete: {OUTPUT_PATH}")
+    print("[INFO] Checking packaged app startup")
+    try:
+        check_packaged_startup(environment)
+    except Exception as exc:
+        print(f"[ERROR] Build startup check failed: {exc}")
+        return 1
+
+    print(f"[SUCCESS] Build and startup check complete: {OUTPUT_PATH}")
     if is_release:
         try:
             release_path = create_release_asset(version)
