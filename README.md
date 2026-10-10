@@ -182,13 +182,13 @@ Account cookies and stored WebSocket passwords remain local unless the user expl
 
 ## Build from source
 
-Install [uv](https://docs.astral.sh/uv/) 0.12.23 or newer, then run the shared build command on Windows:
+Install [uv](https://docs.astral.sh/uv/), then run the shared build command on Windows:
 
 ```powershell
 .\scripts\build.cmd
 ```
 
-The command clears inherited Python path overrides, then uv installs the Python version in `.python-version` and the locked dependencies into a fresh build environment. The builder limits DLL discovery to that Python installation and Windows system directories, so unrelated tools on your PATH are not used. Local builds and CI use the same command.
+The command clears inherited Python path overrides, then uv installs the Python version in `.python-version` and the locked dependencies into a fresh build environment. The builder limits DLL discovery to that Python installation and Windows system directories, so unrelated tools on your PATH are not used. Local builds and CI use the same Python build script.
 
 The executable is written to `dist/EvanovarRAM.exe`. Before reporting success, the builder checks that the packaged app can create its main window and exit, using Qt's offscreen platform and temporary application data. Build configuration lives in `packaging/EvanovarRAM.spec`, and version metadata is generated during the build. Release builds also create `dist/EvanovarRAM-v<version>.exe` for GitHub Releases.
 
