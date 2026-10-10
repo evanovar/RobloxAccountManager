@@ -455,7 +455,7 @@ class RobloxAccountManager:
                 options.add_argument("--disable-logging")
                 options.add_argument("--disable-gpu-logging")
                 options.add_argument("--disable-default-apps")
-                options.add_argument("--disable-extensions")
+                # options.add_argument("--disable-extensions")
                 options.add_argument("--disable-plugins")
                 options.add_argument("--disable-dev-shm-usage")
                 options.add_argument("--no-sandbox")
