@@ -104,7 +104,16 @@ def _batch_launch_result(
     total: int,
     success_count: int,
     failures: list[tuple[str, OperationResult]],
+    successful_launches: list[tuple[str, OperationResult]] = (),
 ) -> OperationResult:
+    from features.launch_monitor import check_launched_client
+
+    failures = list(failures)
+    for username, launch in successful_launches:
+        checked = check_launched_client(launch, username)
+        if not checked:
+            success_count -= 1
+            failures.append((username, checked))
     summary = f"{action} {success_count}/{total} accounts."
     if not failures:
         return OperationResult.success(summary)
@@ -189,6 +198,7 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
     def _worker():
         success = 0
         failures: list[tuple[str, OperationResult]] = []
+        successful_launches: list[tuple[str, OperationResult]] = []
         for index, u in enumerate(usernames):
             try:
                 result = ensure_result(manager.launch_roblox(
@@ -199,6 +209,7 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
                 ))
                 if result:
                     success += 1
+                    successful_launches.append((u, result))
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_place_all {u}: {'OK' if result else 'FAIL'}")
@@ -217,6 +228,7 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
             len(usernames),
             success,
             failures,
+            successful_launches,
         )
         print(f"[INFO] join_place_all done: {result.message}")
         on_done(bool(result), result)
@@ -371,6 +383,7 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
 
         success = 0
         failures: list[tuple[str, OperationResult]] = []
+        successful_launches: list[tuple[str, OperationResult]] = []
         for index, account in enumerate(usernames):
             try:
                 result = ensure_result(
@@ -387,6 +400,7 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
                 )
                 if result:
                     success += 1
+                    successful_launches.append((account, result))
                 else:
                     failures.append((account, result))
                 print(
@@ -415,6 +429,7 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
             len(usernames),
             success,
             failures,
+            successful_launches,
         )
         print(f"[INFO] launch_home done: {result.message}")
         on_done(bool(result), result)
@@ -491,6 +506,7 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
 
             success = 0
             failures: list[tuple[str, OperationResult]] = []
+            successful_launches: list[tuple[str, OperationResult]] = []
             launch_delay = get_launch_delay_seconds(S)
             for index, u in enumerate(usernames):
                 try:
@@ -502,6 +518,7 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
                     ))
                     if result:
                         success += 1
+                        successful_launches.append((u, result))
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_user {u}: {'OK' if result else 'FAIL'}")
@@ -521,6 +538,7 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
                 len(usernames),
                 success,
                 failures,
+                successful_launches,
             )
             print(f"[INFO] join_user done: {result.message}")
             on_done(bool(result), result)
@@ -544,6 +562,7 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
     def _worker():
         success = 0
         failures: list[tuple[str, OperationResult]] = []
+        successful_launches: list[tuple[str, OperationResult]] = []
         for index, u in enumerate(usernames):
             try:
                 result = ensure_result(manager.launch_roblox(
@@ -554,6 +573,7 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
                 ))
                 if result:
                     success += 1
+                    successful_launches.append((u, result))
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_job_id {u}: {'OK' if result else 'FAIL'}")
@@ -572,6 +592,7 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
             len(usernames),
             success,
             failures,
+            successful_launches,
         )
         print(f"[INFO] join_job_id done: {result.message}")
         on_done(bool(result), result)
@@ -616,6 +637,7 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
 
             success = 0
             failures: list[tuple[str, OperationResult]] = []
+            successful_launches: list[tuple[str, OperationResult]] = []
             for index, u in enumerate(usernames):
                 try:
                     result = ensure_result(manager.launch_roblox(
@@ -626,6 +648,7 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
                     ))
                     if result:
                         success += 1
+                        successful_launches.append((u, result))
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_small_server {u}: {'OK' if result else 'FAIL'}")
@@ -645,6 +668,7 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
                 len(usernames),
                 success,
                 failures,
+                successful_launches,
             )
             print(f"[INFO] join_small_server done: {result.message}")
             on_done(bool(result), result)
@@ -1368,6 +1392,7 @@ _mr_h64_stop_event: threading.Event | None = None
 _mr_h64_session_id = 0
 _mr_h64_worker_threads: set[threading.Thread] = set()
 _mr_h64_worker_lock = threading.Lock()
+_mr_h64_ready: set[tuple[int, float]] = set()
 _MR_SINGLETON_NAMES = (
     "ROBLOX_SingletonEvent",
     "ROBLOX_singletonEvent",
@@ -1495,6 +1520,10 @@ def _mr_h64_monitor_worker(
             )
             with state_lock:
                 in_flight.discard(identity)
+                if result in {_MR_H64_ALREADY_CLEAR, _MR_H64_CLOSED}:
+                    with _mr_h64_worker_lock:
+                        if _mr_h64_session_active(stop_event, session_id):
+                            _mr_h64_ready.add(identity)
                 if result in {
                     _MR_H64_PROCESS_GONE,
                     _MR_H64_PROCESS_REPLACED,
@@ -1529,6 +1558,8 @@ def _mr_h64_monitor_worker(
                     f"[Multi Roblox] Detected Roblox process PID:{identity[0]}"
                 )
             known_processes = current
+            with _mr_h64_worker_lock:
+                _mr_h64_ready.intersection_update(current)
             with state_lock:
                 completed.intersection_update(current)
                 for identity in list(retry_after):
@@ -2013,6 +2044,12 @@ def is_multi_roblox_running(method: str | None = None) -> bool:
     return False
 
 
+def singleton_handles_ready(identities: set[tuple[int, float]]) -> bool:
+    """Use verified monitor results; do not run competing Handle64 queries."""
+    with _mr_h64_worker_lock:
+        return identities.issubset(_mr_h64_ready)
+
+
 def is_roblox_running() -> bool:
     try:
         return bool(presence_mod.get_roblox_processes(force=True))
@@ -2102,6 +2139,8 @@ def disable_multi_roblox():
         _mr_h64_session_id += 1
         if h64_event is not None:
             h64_event.set()
+        with _mr_h64_worker_lock:
+            _mr_h64_ready.clear()
         if h64_thread and h64_thread is not threading.current_thread():
             h64_thread.join(timeout=2.0)
         with _mr_h64_worker_lock:

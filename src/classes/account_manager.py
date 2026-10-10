@@ -1126,6 +1126,25 @@ class RobloxAccountManager:
         return False
     
     def launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
+        # All entry points (batch, Auto-Rejoin and WebSocket) share this gate.
+        from features import account_actions, launch_monitor
+
+        with launch_monitor.LAUNCH_LOCK:
+            session = account_actions._mr_handle if account_actions.is_multi_roblox_running() else None
+            if session is not None:
+                ready = launch_monitor.wait_for_launch_slot(session)
+                if not ready:
+                    return ready
+                before = launch_monitor._snapshot()
+            result = self._launch_roblox(
+                username, game_id, private_server_id, launcher_preference,
+                job_id, custom_launcher_path,
+            )
+            if result and session is not None:
+                return launch_monitor.confirm_launch(result, session, before, username)
+            return result
+
+    def _launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         """Launch Roblox game with specified account"""
         if username not in self.accounts:
             print(f"[ERROR] Account '{username}' not found")
