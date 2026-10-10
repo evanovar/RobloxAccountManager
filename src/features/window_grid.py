@@ -217,26 +217,81 @@ def tile_roblox_windows() -> OperationResult:
         available_height = bottom - top
         gap = 4
         moved = 0
+        sizes = []
 
         for index, hwnd in enumerate(windows):
-            row = index // columns
-            column = index % columns
-            cell_left = left + column * available_width // columns
-            cell_right = left + (column + 1) * available_width // columns
-            cell_top = top + row * available_height // rows
-            cell_bottom = top + (row + 1) * available_height // rows
-
-            x = cell_left + gap
-            y = cell_top + gap
-            width = max(1, cell_right - cell_left - gap * 2)
-            height = max(1, cell_bottom - cell_top - gap * 2)
-
             try:
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                win32gui.MoveWindow(hwnd, x, y, width, height, True)
-                moved += 1
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                actual_left, actual_top, actual_right, actual_bottom = win32gui.GetWindowRect(hwnd)
+                client_left, client_top, client_right, client_bottom = win32gui.GetClientRect(hwnd)
+                frame_width = actual_right - actual_left - (client_right - client_left)
+                frame_height = actual_bottom - actual_top - (client_bottom - client_top)
+                sizes.append((index, hwnd, frame_width, frame_height))
             except Exception as exc:
                 print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
+
+        resized = []
+        while sizes:
+            resized = []
+            widths_fit = True
+            rows = math.ceil(len(windows) / columns)
+            for index, hwnd, frame_width, frame_height in sizes:
+                column = index % columns
+                cell_left = column * available_width // columns
+                cell_right = (column + 1) * available_width // columns
+                width = max(1, cell_right - cell_left - gap * 2)
+                if len(windows) <= 2:
+                    height = max(1, available_height // rows - gap * 2)
+                else:
+                    # Prefer 16:9, but shorten windows to fit their rows without
+                    # overlap while keeping the columns at full width.
+                    client_width = max(1, width - frame_width)
+                    height = max(1, min(
+                        available_height // rows - gap * 2,
+                        (client_width * 9 + 8) // 16 + frame_height,
+                    ))
+                try:
+                    win32gui.SetWindowPos(
+                        hwnd, 0, 0, 0, width, height,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+                    )
+                    actual_left, actual_top, actual_right, actual_bottom = win32gui.GetWindowRect(hwnd)
+                    widths_fit &= actual_right - actual_left <= width
+                    resized.append((index, hwnd, actual_bottom - actual_top))
+                except Exception as exc:
+                    print(f"[Window Grid] Failed to resize window {hwnd}: {exc}")
+            if widths_fit or not resized:
+                break
+            if columns == 1:
+                return OperationResult.failure(
+                    "WINDOW_GRID_MONITOR_TOO_NARROW",
+                    "Monitor Too Narrow",
+                    "This monitor cannot fit a Roblox window at its minimum width.",
+                )
+            # Measure the enforced width instead of assuming Roblox accepted it.
+            columns -= 1
+
+        rows = math.ceil(len(windows) / columns)
+        if resized:
+            # Fill rows left to right so taller stacks stay on the left. Use
+            # actual heights so stacking is only needed for enforced minimums.
+            row_span = max(0, available_height - max(item[2] for item in resized) - gap * 2)
+            # Start at the bottom and explicitly place each upper window behind
+            # the previous one, regardless of their existing stacking order.
+            insert_after = win32con.HWND_TOP
+            for index, hwnd, _ in reversed(resized):
+                x = left + gap + (index % columns) * available_width // columns
+                y = top + gap + (index // columns) * row_span // max(1, rows - 1)
+                try:
+                    win32gui.SetWindowPos(
+                        hwnd, insert_after, x, y, 0, 0,
+                        win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+                    )
+                    insert_after = hwnd
+                    moved += 1
+                except Exception as exc:
+                    print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
 
         if not moved:
             return OperationResult.failure(
