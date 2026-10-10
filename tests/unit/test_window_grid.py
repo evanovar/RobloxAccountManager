@@ -6,7 +6,7 @@ from features import window_grid as grid
 
 class WindowGridTests(unittest.TestCase):
     def tile(self, count, work_area, window_size=(845, 627), failed=(), minimized=(),
-             minimum_width=0, frame_size=(16, 39)):
+             minimum_width=0, frame_size=(16, 39), minimum_height=0):
         windows = list(range(1, count + 1))
         rectangles = {hwnd: (100, 200, 100 + window_size[0], 200 + window_size[1])
                       for hwnd in windows}
@@ -24,7 +24,8 @@ class WindowGridTests(unittest.TestCase):
                 self.assertEqual(flags, grid.win32con.SWP_NOMOVE |
                                  grid.win32con.SWP_NOZORDER | grid.win32con.SWP_NOACTIVATE)
                 resized_widths.append(width)
-                rectangles[hwnd] = (left, top, left + max(width, minimum_width), top + height)
+                rectangles[hwnd] = (left, top, left + max(width, minimum_width),
+                                    top + max(height, minimum_height))
 
         with patch.object(grid, "_get_roblox_windows", return_value=windows), \
                 patch.object(grid, "_get_cursor_monitor_work_area", return_value=work_area), \
@@ -47,24 +48,36 @@ class WindowGridTests(unittest.TestCase):
             self.assertLessEqual(rectangle[2], right - 4)
             self.assertLessEqual(rectangle[3], bottom - 4)
 
-    def assert_widescreen(self, rectangles, frame_size=(16, 39)):
+    def assert_preferred_height(self, rectangles, row_height, frame_size=(16, 39)):
         for left, top, right, bottom in rectangles.values():
             client_width = right - left - frame_size[0]
             client_height = bottom - top - frame_size[1]
-            self.assertAlmostEqual(client_height, client_width * 9 / 16, delta=0.5)
+            self.assertAlmostEqual(client_height, min(
+                client_width * 9 / 16, row_height - frame_size[1],
+            ), delta=0.5)
 
-    def test_nine_windows_fill_columns_with_widescreen_game_areas(self):
+    def assert_no_overlap(self, rectangles):
+        windows = list(rectangles.values())
+        for index, before in enumerate(windows):
+            for after in windows[index + 1:]:
+                self.assertTrue(
+                    before[2] <= after[0] or after[2] <= before[0]
+                    or before[3] <= after[1] or after[3] <= before[1],
+                    (before, after),
+                )
+
+    def test_nine_windows_fill_columns_without_overlap(self):
         work_area = (0, 0, 3440, 1392)
         result, rectangles, restore, _ = self.tile(9, work_area)
         self.assertTrue(result)
         self.assertEqual(result.data, {"count": 9, "columns": 3, "rows": 3})
         self.assert_in_work_area(rectangles, work_area)
-        self.assertEqual([rectangles[hwnd][1] for hwnd in (1, 4, 7)], [4, 360, 717])
+        self.assertEqual([rectangles[hwnd][1] for hwnd in (1, 4, 7)], [4, 468, 932])
         self.assertEqual([rectangles[hwnd][0] for hwnd in (1, 2, 3)], [4, 1150, 2297])
         self.assertEqual([rectangles[hwnd][2] for hwnd in (1, 2, 3)], [1142, 2289, 3436])
-        self.assert_widescreen(rectangles)
+        self.assert_preferred_height(rectangles, 456)
         self.assertEqual(rectangles[9][3], work_area[3] - 4)
-        self.assertGreater(rectangles[1][3], rectangles[4][1])
+        self.assert_no_overlap(rectangles)
         restore.assert_not_called()
 
     def test_two_windows_fill_both_halves_side_by_side(self):
@@ -76,14 +89,21 @@ class WindowGridTests(unittest.TestCase):
         self.assertEqual(rectangles[2], (-1716, 36, -4, 1420))
         self.assert_in_work_area(rectangles, work_area)
 
-    def test_three_windows_use_two_columns_with_widescreen_game_areas(self):
-        result, rectangles, _, _ = self.tile(3, (0, 0, 2560, 1392))
-        self.assertTrue(result)
-        self.assertEqual(result.data, {"count": 3, "columns": 2, "rows": 2})
-        self.assertEqual(rectangles[1], (4, 4, 1276, 750))
-        self.assertEqual(rectangles[2], (1284, 4, 2556, 750))
-        self.assertEqual(rectangles[3], (4, 642, 1276, 1388))
-        self.assert_widescreen(rectangles)
+    def test_three_and_four_windows_fill_two_by_two_grid_without_overlap(self):
+        work_area = (0, 0, 3440, 1392)
+        for count in (3, 4):
+            with self.subTest(count=count):
+                result, rectangles, _, _ = self.tile(count, work_area)
+                self.assertTrue(result)
+                self.assertEqual(result.data, {"count": count, "columns": 2, "rows": 2})
+                self.assertEqual(rectangles[1], (4, 4, 1716, 692))
+                self.assertEqual(rectangles[2], (1724, 4, 3436, 692))
+                self.assertEqual(rectangles[3], (4, 700, 1716, 1388))
+                if count == 4:
+                    self.assertEqual(rectangles[4], (1724, 700, 3436, 1388))
+                self.assert_in_work_area(rectangles, work_area)
+                self.assert_no_overlap(rectangles)
+                self.assert_preferred_height(rectangles, 688)
 
     def test_ten_windows_do_not_overlap_horizontally(self):
         work_area = (0, 0, 3440, 1392)
@@ -96,7 +116,8 @@ class WindowGridTests(unittest.TestCase):
                 for hwnd in range(1, 10):
                     if hwnd % columns:
                         self.assertLessEqual(rectangles[hwnd][2], rectangles[hwnd + 1][0])
-                self.assert_widescreen(rectangles)
+                self.assert_preferred_height(rectangles, work_area[3] // result.data["rows"] - 8)
+                self.assert_no_overlap(rectangles)
 
     def test_taller_stacks_are_on_the_left_and_windows_fill_rows_in_order(self):
         for count, expected_counts in ((5, [2, 2, 1]), (8, [3, 3, 2]), (10, [3, 3, 2, 2])):
@@ -115,17 +136,18 @@ class WindowGridTests(unittest.TestCase):
                     else:
                         self.assertLess(before[1], after[1])
 
-    def test_previously_tall_windows_are_resized_to_widescreen(self):
+    def test_previously_tall_windows_are_shortened_to_fit_rows(self):
         result, rectangles, _, _ = self.tile(10, (0, 0, 3440, 1392), window_size=(845, 1384))
         self.assertTrue(result)
-        self.assert_widescreen(rectangles)
+        self.assert_preferred_height(rectangles, 456)
+        self.assert_no_overlap(rectangles)
 
     def test_widescreen_sizing_accounts_for_different_window_borders(self):
         for frame_size in ((0, 0), (16, 39), (24, 59)):
             with self.subTest(frame_size=frame_size):
-                result, rectangles, _, _ = self.tile(9, (0, 0, 3440, 1392), frame_size=frame_size)
+                result, rectangles, _, _ = self.tile(9, (0, 0, 1920, 1392), frame_size=frame_size)
                 self.assertTrue(result)
-                self.assert_widescreen(rectangles, frame_size)
+                self.assert_preferred_height(rectangles, 456, frame_size)
 
     def test_incomplete_row_keeps_the_same_column_widths(self):
         result, rectangles, _, _ = self.tile(5, (0, 0, 3441, 1392))
@@ -145,7 +167,18 @@ class WindowGridTests(unittest.TestCase):
         self.assert_in_work_area(rectangles, work_area)
         self.assertLessEqual(rectangles[1][2], rectangles[2][0])
         self.assertEqual(rectangles[9][3], work_area[3] - 4)
-        self.assert_widescreen(rectangles)
+        self.assert_preferred_height(rectangles, 200)
+        self.assert_no_overlap(rectangles)
+
+    def test_vertical_stacking_is_used_when_minimum_height_prevents_a_fit(self):
+        work_area = (0, 0, 3440, 1392)
+        result, rectangles, _, _ = self.tile(4, work_area, minimum_height=800)
+        self.assertTrue(result)
+        self.assert_in_work_area(rectangles, work_area)
+        self.assertEqual({rect[3] - rect[1] for rect in rectangles.values()}, {800})
+        self.assertGreater(rectangles[1][3], rectangles[3][1])
+        self.assertLessEqual(rectangles[1][2], rectangles[2][0])
+        self.assertEqual(rectangles[4][3], work_area[3] - 4)
 
     def test_two_windows_fall_back_to_one_column_when_halves_are_too_narrow(self):
         work_area = (0, 0, 1280, 984)
@@ -169,19 +202,22 @@ class WindowGridTests(unittest.TestCase):
                 self.assertTrue(result)
                 self.assert_in_work_area(rectangles, work_area)
                 self.assertEqual(rectangles[1][:2], (work_area[0] + 4, work_area[1] + 4))
-                self.assert_widescreen(rectangles)
+                row_height = (work_area[3] - work_area[1]) // result.data["rows"] - 8
+                self.assert_preferred_height(rectangles, row_height)
+                self.assert_no_overlap(rectangles)
 
     def test_single_window_fills_the_monitor_work_area(self):
         result, rectangles, _, _ = self.tile(1, (-1280, 0, 0, 984))
         self.assertTrue(result)
         self.assertEqual(rectangles[1], (-1276, 4, -4, 980))
 
-    def test_widescreen_height_is_limited_by_the_monitor_work_area(self):
+    def test_window_height_is_limited_by_row_space_on_wide_monitors(self):
         work_area = (0, 0, 5120, 1040)
         result, rectangles, _, _ = self.tile(3, work_area)
         self.assertTrue(result)
         self.assert_in_work_area(rectangles, work_area)
-        self.assertEqual({rect[3] - rect[1] for rect in rectangles.values()}, {1032})
+        self.assertEqual({rect[3] - rect[1] for rect in rectangles.values()}, {512})
+        self.assert_no_overlap(rectangles)
 
     def test_only_minimized_windows_are_restored(self):
         result, _, restore, _ = self.tile(8, (0, 0, 2560, 1392), minimized=(4,))

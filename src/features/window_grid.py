@@ -244,10 +244,11 @@ def tile_roblox_windows() -> OperationResult:
                 if len(windows) <= 2:
                     height = max(1, available_height // rows - gap * 2)
                 else:
-                    # Target a 16:9 game area, excluding the title bar and borders.
+                    # Prefer 16:9, but shorten windows to fit their rows without
+                    # overlap while keeping the columns at full width.
                     client_width = max(1, width - frame_width)
                     height = max(1, min(
-                        available_height - gap * 2,
+                        available_height // rows - gap * 2,
                         (client_width * 9 + 8) // 16 + frame_height,
                     ))
                 try:
@@ -273,8 +274,8 @@ def tile_roblox_windows() -> OperationResult:
 
         rows = math.ceil(len(windows) / columns)
         if resized:
-            # Fill rows left to right so taller stacks stay on the left. Allow
-            # vertical overlap so the last row stays above the taskbar.
+            # Fill rows left to right so taller stacks stay on the left. Use
+            # actual heights so stacking is only needed for enforced minimums.
             row_span = max(0, available_height - max(item[2] for item in resized) - gap * 2)
             for index, hwnd, _ in resized:
                 x = left + gap + (index % columns) * available_width // columns
