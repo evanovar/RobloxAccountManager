@@ -277,14 +277,18 @@ def tile_roblox_windows() -> OperationResult:
             # Fill rows left to right so taller stacks stay on the left. Use
             # actual heights so stacking is only needed for enforced minimums.
             row_span = max(0, available_height - max(item[2] for item in resized) - gap * 2)
-            for index, hwnd, _ in resized:
+            # Start at the bottom and explicitly place each upper window behind
+            # the previous one, regardless of their existing stacking order.
+            insert_after = win32con.HWND_TOP
+            for index, hwnd, _ in reversed(resized):
                 x = left + gap + (index % columns) * available_width // columns
                 y = top + gap + (index // columns) * row_span // max(1, rows - 1)
                 try:
                     win32gui.SetWindowPos(
-                        hwnd, win32con.HWND_TOP, x, y, 0, 0,
+                        hwnd, insert_after, x, y, 0, 0,
                         win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
                     )
+                    insert_after = hwnd
                     moved += 1
                 except Exception as exc:
                     print(f"[Window Grid] Failed to move window {hwnd}: {exc}")

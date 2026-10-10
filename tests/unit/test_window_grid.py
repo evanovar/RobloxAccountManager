@@ -6,19 +6,34 @@ from features import window_grid as grid
 
 class WindowGridTests(unittest.TestCase):
     def tile(self, count, work_area, window_size=(845, 627), failed=(), minimized=(),
-             minimum_width=0, frame_size=(16, 39), minimum_height=0):
+             minimum_width=0, frame_size=(16, 39), minimum_height=0,
+             z_order=None, topmost=(), move_failed=()):
         windows = list(range(1, count + 1))
         rectangles = {hwnd: (100, 200, 100 + window_size[0], 200 + window_size[1])
                       for hwnd in windows}
         resized_widths = []
+        topmost = set(topmost)
 
         def move(hwnd, insert_after, x, y, width, height, flags):
             if hwnd in failed:
                 raise OSError("Window closed")
             left, top, right, bottom = rectangles[hwnd]
             if flags & grid.win32con.SWP_NOSIZE:
-                self.assertEqual(insert_after, grid.win32con.HWND_TOP)
+                if hwnd in move_failed:
+                    raise OSError("Window closed while moving")
                 self.assertEqual(flags, grid.win32con.SWP_NOSIZE | grid.win32con.SWP_NOACTIVATE)
+                if z_order is not None:
+                    z_order.remove(hwnd)
+                    if insert_after == grid.win32con.HWND_TOP:
+                        position = 0 if hwnd in topmost else len(topmost)
+                    else:
+                        self.assertNotIn(insert_after, move_failed)
+                        position = z_order.index(insert_after) + 1
+                        if insert_after in topmost:
+                            topmost.add(hwnd)
+                        else:
+                            topmost.discard(hwnd)
+                    z_order.insert(position, hwnd)
                 rectangles[hwnd] = (x, y, x + right - left, y + bottom - top)
             else:
                 self.assertEqual(flags, grid.win32con.SWP_NOMOVE |
@@ -179,6 +194,31 @@ class WindowGridTests(unittest.TestCase):
         self.assertGreater(rectangles[1][3], rectangles[3][1])
         self.assertLessEqual(rectangles[1][2], rectangles[2][0])
         self.assertEqual(rectangles[4][3], work_area[3] - 4)
+
+    def test_lower_windows_are_in_front_regardless_of_initial_stacking_order(self):
+        for topmost in ((), (1,), (10,)):
+            with self.subTest(topmost=topmost):
+                z_order = list(topmost) + [
+                    hwnd for hwnd in (6, 8, 4, 10, 2, 5, 9, 1, 7, 3) if hwnd not in topmost
+                ]
+                result, rectangles, _, _ = self.tile(
+                    10, (0, 0, 1920, 1040), minimum_width=800, minimum_height=600,
+                    z_order=z_order, topmost=topmost,
+                )
+                self.assertTrue(result)
+                self.assertEqual(z_order, list(range(10, 0, -1)))
+                self.assertGreater(rectangles[1][3], rectangles[3][1])
+                self.assert_in_work_area(rectangles, (0, 0, 1920, 1040))
+
+    def test_window_closing_during_move_does_not_break_the_remaining_stack(self):
+        z_order = [3, 1, 4, 2]
+        result, _, _, _ = self.tile(
+            4, (0, 0, 3440, 1392), minimum_height=800,
+            z_order=z_order, move_failed=(3,),
+        )
+        self.assertTrue(result)
+        self.assertEqual(result.data["count"], 3)
+        self.assertEqual([hwnd for hwnd in z_order if hwnd != 3], [4, 2, 1])
 
     def test_two_windows_fall_back_to_one_column_when_halves_are_too_narrow(self):
         work_area = (0, 0, 1280, 984)
