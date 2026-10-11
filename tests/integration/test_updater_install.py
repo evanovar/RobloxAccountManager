@@ -8,6 +8,8 @@ import tempfile
 import time
 import unittest
 
+import psutil
+
 from features import updater
 
 CMD_EXE = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
@@ -34,6 +36,7 @@ class InstallerScriptTests(unittest.TestCase):
         os.makedirs(self.app_dir)
         os.makedirs(self.update_dir)
         self.app = os.path.join(self.app_dir, "RAM.exe")
+        self.addCleanup(self.stop_test_app)
         self.update = os.path.join(self.update_dir, "update.exe")
         self.marker = os.path.join(self.folder, "launched.txt")
         self.log = os.path.join(self.folder, "update.log")
@@ -45,11 +48,31 @@ class InstallerScriptTests(unittest.TestCase):
         self.old_bytes = read(self.app)
         self.new_bytes = read(self.update)
         with open(self.script, "w", encoding="utf-8") as handle:
-            handle.write(updater._build_installer_script())
+            handle.write(updater._build_installer_script().replace(
+                "Start-Process @start | Out-Null",
+                "Start-Process @start -WindowStyle Hidden | Out-Null",
+            ))
 
     def launch_arguments(self):
-        text = f'/c echo launched> "{self.marker}"'
+        text = f'/c echo launched argument with spaces> "{self.marker}"'
         return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+    def stop_test_app(self):
+        processes = []
+        for process in psutil.process_iter(["exe"]):
+            try:
+                if os.path.normcase(process.info["exe"] or "") == os.path.normcase(self.app):
+                    processes.append(process)
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(processes, timeout=3)
+        for process in alive:
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(alive, timeout=3)
+        self.assertFalse(alive, "the updater test helper did not exit")
 
     def run_script(self, pid=NO_PROCESS, sha=None, source=None, with_arguments=True, timeout=60):
         checksum = sha256_of(self.update) if sha is None else sha
@@ -64,11 +87,14 @@ class InstallerScriptTests(unittest.TestCase):
             "-ExpectedSha256", checksum,
             "-LaunchArgumentsBase64", self.launch_arguments() if with_arguments else "",
         ]
-        return subprocess.run(
+        result = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout,
             env=updater._powershell_environment(),
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        if with_arguments:
+            self.assertTrue(self.wait_for_marker(), "the test application was not restarted")
+        return result
 
     def wait_for_marker(self, present=True, seconds=15):
         deadline = time.time() + seconds
@@ -95,7 +121,7 @@ class InstallerScriptTests(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertTrue(self.wait_for_marker())
         with open(self.marker) as handle:
-            self.assertIn("launched", handle.read())
+            self.assertEqual(handle.read().strip(), "launched argument with spaces")
 
     def test_without_launch_arguments_the_update_still_installs(self):
         result = self.run_script(with_arguments=False)
@@ -126,7 +152,7 @@ class InstallerScriptTests(unittest.TestCase):
         process = subprocess.Popen(
             [self.app, "/c", "ping -n 4 127.0.0.1 > nul"], creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        self.addCleanup(process.kill)
+        self.addCleanup(process.wait, timeout=10)
         started = time.time()
         result = self.run_script(pid=str(process.pid))
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -126,6 +126,7 @@ class RealShortcutTests(unittest.TestCase):
                  "(New-Object -ComObject WScript.Shell).CreateShortcut($env:RAM_SHORTCUT).TargetPath"],
                 env={**os.environ, "RAM_SHORTCUT": shortcut},
                 capture_output=True, text=True, timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self.assertEqual(read_back.returncode, 0, read_back.stderr)
             self.assertTrue(

@@ -24,6 +24,7 @@ avatars._EXECUTOR.shutdown(wait=True)
                 [sys.executable, "-c", script], cwd=root,
                 env=dict(os.environ, QT_QPA_PLATFORM="offscreen", RAM_DATA_DIR=profile),
                 capture_output=True, text=True, timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

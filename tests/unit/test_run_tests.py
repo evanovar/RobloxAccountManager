@@ -19,6 +19,7 @@ class TestRunnerTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(RUNNER), *args],
             cwd=cwd, capture_output=True, text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
     def test_individual_test_can_run_outside_the_project_directory(self):

@@ -31,5 +31,6 @@ class UpdaterPowerShellTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 timeout=15,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
