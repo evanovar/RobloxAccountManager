@@ -1506,6 +1506,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._ar_configs: dict = ar.load_configs() # {username: config_dict}
         self._ar_workers: dict[str, ar.AutoRejoinWorker] = {} # {username: worker}
+        self._ar_statuses: dict[str, str] = {}
         self._ar_list: QListWidget | None = None
         self._headless_manager: headless_manager_mod.HeadlessManager | None = None
         self._headless_latest_rows: list[dict] = []
@@ -6330,14 +6331,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
             status_str = "active"   if active else "inactive"
             status_color = self._AR_ACTIVE_COLOR if active else self._AR_INACTIVE_COLOR
+            status_detail = self._ar_statuses.get(account, "")
+            if active and status_detail.startswith("Waiting:"):
+                status_str, status_color = "waiting", NOTE
+            elif active and status_detail.startswith(("Launching", "Rejoining")):
+                status_str, status_color = "launching", NOTE
             status_lbl = QLabel(status_str)
+            status_lbl.setToolTip(status_detail)
             status_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
             status_lbl.setStyleSheet(f"color: {status_color}; font-size: 10px;")
             row_lay.addWidget(status_lbl)
 
             row_lay.addStretch(1)
 
-            pid_lbl = QLabel(f"Place: {cfg.get('place_id', '?')}")
+            destination = (
+                f"User: {cfg.get('target_user', '?')}"
+                if cfg.get("join_mode") == "user"
+                else f"Place: {cfg.get('place_id', '?')}"
+            )
+            pid_lbl = QLabel(destination)
+            pid_lbl.setToolTip(destination)
             pid_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
             pid_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
             row_lay.addWidget(pid_lbl)
@@ -6373,6 +6386,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
 
     def _on_rejoin_status(self, account: str, status: str) -> None:
+        self._ar_statuses[account] = status
         self._ar_refresh_list()
 
     def _ar_selected_account(self) -> str | None: # get selected account
@@ -6387,6 +6401,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         cfg = self._ar_configs.get(account)
         if not cfg:
             return
+        self._ar_statuses[account] = "Launching..."
         worker = ar.AutoRejoinWorker(
             account, cfg, self.manager,
             on_status=lambda u, s: self._bridge.rejoin_status.emit(u, s),
@@ -9109,11 +9124,9 @@ class _AutoRejoinAddWindow(QDialog):
         self._validation_rows: dict[str, tuple[QWidget, QLabel, QLabel]] = {}
 
         self.setWindowTitle("Edit Auto-Rejoin" if self._edit_mode else "Add Account to Auto-Rejoin")
-        # Size to tweak i keep forgetting
-        # the 225 one is for edit
-        # the other one is for add
-        self.setFixedSize(225 if self._edit_mode else 550, 420)
-        self.setSizeGripEnabled(False)
+        self.setMinimumSize(420 if self._edit_mode else 740, 480)
+        self.resize(440 if self._edit_mode else 800, 600)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet(_DLG_STYLE + f"""
             QListWidget {{
                 background: {INPUT}; border: 1px solid {LINE};
@@ -9133,8 +9146,8 @@ class _AutoRejoinAddWindow(QDialog):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(14)
 
         # Title bar row
         title_row = QHBoxLayout()
@@ -9155,18 +9168,21 @@ class _AutoRejoinAddWindow(QDialog):
 
         # Sub-title hint directly below the title
         self._hint_label = QLabel("Ctrl / Shift to select multiple accounts")
-        self._hint_label.setStyleSheet(f"color: {MUTED}; font-size: 9px;")
-        root.addWidget(self._hint_label)
+        self._hint_label.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(10)
+        body.setSpacing(16)
 
         # Left side
         self._left_widget = QWidget()
         left = QVBoxLayout(self._left_widget)
         left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(4)
+        left.setSpacing(8)
+        accounts_title = QLabel("Accounts")
+        accounts_title.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: 600;")
+        left.addWidget(accounts_title)
+        left.addWidget(self._hint_label)
 
         self._current_group: str | None = None
 
@@ -9193,57 +9209,102 @@ class _AutoRejoinAddWindow(QDialog):
         body.addWidget(self._left_widget, 1)
 
         # Right side
-        right = QVBoxLayout()
+        form = QWidget()
+        right = QVBoxLayout(form)
         right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(6)
+        right.setSpacing(10)
         right.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        _LBL = f"color: {MUTED}; font-size: 10px;"
+        _LBL = f"color: {MUTED}; font-size: 11px;"
         _INP = (
             f"QLineEdit {{ background: {INPUT}; border: 1px solid {LINE};"
-            f" color: {TEXT}; padding: 3px 5px; font-size: 11px; }}"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; font-size: 11px; }}"
         )
         _SPN = (
             f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
-            f" color: {TEXT}; padding: 2px 4px; font-size: 11px; }}"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; font-size: 11px; }}"
         )
         _CHK = (
             f"QCheckBox {{ color: {TEXT}; font-size: 11px; }}"
             f"QCheckBox::indicator {{ width: 13px; height: 13px; }}"
         )
 
-        cfg_hdr = QLabel("Configuration")
-        cfg_hdr.setStyleSheet(f"color: {TEXT}; font-size: 11px; font-weight: bold;")
-        right.addWidget(cfg_hdr)
-
         # Account label for edit mode
-        self._account_lbl = QLabel()
-        self._account_lbl.setStyleSheet(f"color: {TEXT}; font-size: 11px; font-weight: bold;")
+        self._account_lbl = QLabel(f"Account: {edit_account}" if self._edit_mode else "")
+        self._account_lbl.setWordWrap(True)
+        self._account_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        self._account_lbl.setVisible(self._edit_mode)
         right.addWidget(self._account_lbl)
 
-        right.addWidget(QLabel("Place ID:", styleSheet=_LBL))
+        cfg_hdr = QLabel("Destination")
+        cfg_hdr.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: 600;")
+        right.addWidget(cfg_hdr)
+        self._join_mode = QComboBox()
+        self._join_mode.addItem("Join a place", "place")
+        self._join_mode.addItem("Join a user", "user")
+        self._join_mode.setAccessibleName("Auto-Rejoin destination type")
+        self._join_mode.setStyleSheet(
+            f"QComboBox {{ background: {INPUT}; border: 1px solid {LINE};"
+            f" color: {TEXT}; padding: 4px 6px; min-height: 24px; font-size: 11px; }}"
+        )
+        right.addWidget(self._join_mode)
+
+        self._place_fields = QWidget()
+        place_fields = QVBoxLayout(self._place_fields)
+        place_fields.setContentsMargins(0, 0, 0, 0)
+        place_fields.setSpacing(6)
+        place_label = QLabel("Place ID", styleSheet=_LBL)
+        place_fields.addWidget(place_label)
         self._place = QLineEdit()
         self._place.setPlaceholderText("e.g. 8562822414")
         self._place.setStyleSheet(_INP)
-        self._place.setFixedWidth(200)
-        right.addWidget(self._place)
+        place_label.setBuddy(self._place)
+        place_fields.addWidget(self._place)
 
-        right.addWidget(QLabel("Private Server ID:", styleSheet=_LBL))
+        private_label = QLabel("Private server link or code (optional)", styleSheet=_LBL)
+        place_fields.addWidget(private_label)
         self._ps = QLineEdit()
         self._ps.setPlaceholderText("optional")
         self._ps.setStyleSheet(_INP)
-        self._ps.setFixedWidth(200)
-        right.addWidget(self._ps)
+        private_label.setBuddy(self._ps)
+        place_fields.addWidget(self._ps)
 
-        right.addWidget(QLabel("Job ID:", styleSheet=_LBL))
+        job_label = QLabel("Job ID (optional)", styleSheet=_LBL)
+        place_fields.addWidget(job_label)
         self._job = QLineEdit()
         self._job.setPlaceholderText("optional")
         self._job.setStyleSheet(_INP)
-        self._job.setFixedWidth(200)
-        right.addWidget(self._job)
+        job_label.setBuddy(self._job)
+        place_fields.addWidget(self._job)
+        right.addWidget(self._place_fields)
+
+        self._user_fields = QWidget()
+        user_fields = QVBoxLayout(self._user_fields)
+        user_fields.setContentsMargins(0, 0, 0, 0)
+        user_fields.setSpacing(6)
+        user_label = QLabel("Roblox username or user ID", styleSheet=_LBL)
+        user_fields.addWidget(user_label)
+        self._target_user = QLineEdit()
+        self._target_user.setMaxLength(20)
+        self._target_user.setPlaceholderText("Username or numeric user ID")
+        self._target_user.setStyleSheet(_INP)
+        user_label.setBuddy(self._target_user)
+        user_fields.addWidget(self._target_user)
+        right.addWidget(self._user_fields)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(f"background: {LINE}; border: none;")
+        right.addWidget(divider)
+        monitoring_title = QLabel("Monitoring")
+        monitoring_title.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: 600;")
+        right.addWidget(monitoring_title)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Interval:", styleSheet=_LBL))
+        row1.setSpacing(12)
+        interval_column = QVBoxLayout()
+        interval_label = QLabel("Check every", styleSheet=_LBL)
+        interval_column.addWidget(interval_label)
         self._interval = QSpinBox()
         self._interval.setRange(5, 300)
         self._interval.setValue(10)
@@ -9251,26 +9312,31 @@ class _AutoRejoinAddWindow(QDialog):
         self._interval.setSuffix(" s")
         self._interval.setStyleSheet(_SPN)
         self._interval.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        row1.addWidget(self._interval)
-        right.addLayout(row1)
+        interval_label.setBuddy(self._interval)
+        interval_column.addWidget(self._interval)
+        row1.addLayout(interval_column, 1)
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Retries:", styleSheet=_LBL))
+        retries_column = QVBoxLayout()
+        retries_label = QLabel("Maximum retries", styleSheet=_LBL)
+        retries_column.addWidget(retries_label)
         self._retries = QSpinBox()
         self._retries.setRange(1, 50)
         self._retries.setValue(5)
         self._retries.setStyleSheet(_SPN)
         self._retries.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        row2.addWidget(self._retries)
-        right.addLayout(row2)
+        retries_label.setBuddy(self._retries)
+        retries_column.addWidget(self._retries)
+        row1.addLayout(retries_column, 1)
+        right.addLayout(row1)
 
-        self._presence_chk = QCheckBox("Check player presence")
+        self._presence_chk = QCheckBox("Check account presence")
         self._presence_chk.setChecked(True)
         self._presence_chk.setStyleSheet(_CHK)
         self._presence_chk.toggled.connect(self._update_presence_place_controls)
         right.addWidget(self._presence_chk)
 
-        self._presence_place_chk = QCheckBox("Check if player is in PlaceID")
+        self._presence_place_chk = QCheckBox("Also check the joined game")
+        self._presence_place_chk.setToolTip("Check whether the account is still in the game it last joined.")
         self._presence_place_chk.setChecked(True)
         self._presence_place_chk.setStyleSheet(_CHK)
         right.addWidget(self._presence_place_chk)
@@ -9283,11 +9349,26 @@ class _AutoRejoinAddWindow(QDialog):
 
         right.addStretch(1)
 
+        self._join_mode.currentIndexChanged.connect(self._update_join_mode)
+        self._update_join_mode()
+        self._form_scroll = QScrollArea()
+        self._form_scroll.setWidgetResizable(True)
+        self._form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._form_scroll.setWidget(form)
+        body.addWidget(self._form_scroll, 1)
+        root.addLayout(body, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        footer.addWidget(cancel_btn)
+
         # Save changes if edit mode
         # Add account if add mode
         self._add_btn = QPushButton("Save Changes" if self._edit_mode else "Add Account")
-        self._add_btn.setFixedHeight(30)
-        self._add_btn.setFixedWidth(200)
+        self._add_btn.setDefault(True)
         self._add_btn.setStyleSheet(
             f"QPushButton {{ background: {SELECT}; border: 1px solid {LINE};"
             f"  min-height: 30px; font-weight: 700; text-align: center; color: {TEXT}; }}"
@@ -9295,10 +9376,8 @@ class _AutoRejoinAddWindow(QDialog):
             f"QPushButton:pressed {{ background: {PRESSED}; }}"
         )
         self._add_btn.clicked.connect(self._on_add)
-        right.addWidget(self._add_btn)
-
-        body.addLayout(right)
-        root.addLayout(body, 1)
+        footer.addWidget(self._add_btn)
+        root.addLayout(footer)
 
         if self._edit_mode:
             self._apply_edit_mode()
@@ -9317,13 +9396,14 @@ class _AutoRejoinAddWindow(QDialog):
         # Hide left panel for single account editing
         self._left_widget.hide()
         self._hint_label.hide()
-        self._account_lbl.hide()
 
         # Pre-fill config values for the account being edited
         cfg = self._edit_config
         self._place.setText(cfg.get("place_id", ""))
         self._ps.setText(cfg.get("private_server", ""))
         self._job.setText(cfg.get("job_id", ""))
+        self._target_user.setText(str(cfg.get("target_user", "")))
+        self._join_mode.setCurrentIndex(1 if cfg.get("join_mode") == "user" else 0)
         self._interval.setValue(int(cfg.get("check_interval", 10)))
         self._retries.setValue(int(cfg.get("max_retries", 5)))
         self._presence_chk.setChecked(bool(cfg.get("check_presence", True)))
@@ -9333,6 +9413,11 @@ class _AutoRejoinAddWindow(QDialog):
 
     def _update_presence_place_controls(self):
         self._presence_place_chk.setEnabled(self._presence_chk.isChecked())
+
+    def _update_join_mode(self):
+        join_user = self._join_mode.currentData() == "user"
+        self._place_fields.setVisible(not join_user)
+        self._user_fields.setVisible(join_user)
 
     def _rebuild_group_bar(self):
         while self._gbar_lay.count():
@@ -9437,18 +9522,30 @@ class _AutoRejoinAddWindow(QDialog):
         )
 
     def _on_add(self):
+        join_user = self._join_mode.currentData() == "user"
+        target_user = self._target_user.text().strip()
         place_id = self._place.text().strip()
-        if not place_id:
+        if join_user and not re.fullmatch(r"[A-Za-z0-9_]{1,20}", target_user):
+            QMessageBox.warning(self, "Invalid User", "Enter a Roblox username or user ID.")
+            self._target_user.setFocus()
+            return
+        if join_user and target_user.isdigit() and int(target_user) <= 0:
+            QMessageBox.warning(self, "Invalid User ID", "User ID must be a positive number.")
+            self._target_user.setFocus()
+            return
+        if not join_user and not place_id:
             QMessageBox.warning(self, "Missing Place ID", "Enter a Place ID to monitor.")
             return
-        if not place_id.isdigit():
+        if not join_user and (not place_id.isdigit() or int(place_id) <= 0):
             QMessageBox.critical(self, "Invalid Place ID", "Place ID must be a number.")
             return
 
         cfg = {
-            "place_id": place_id,
-            "private_server": self._ps.text().strip(),
-            "job_id": self._job.text().strip(),
+            "join_mode": "user" if join_user else "place",
+            "target_user": target_user if join_user else "",
+            "place_id": "" if join_user else place_id,
+            "private_server": "" if join_user else self._ps.text().strip(),
+            "job_id": "" if join_user else self._job.text().strip(),
             "check_interval": self._interval.value(),
             "max_retries": self._retries.value(),
             "check_presence": self._presence_chk.isChecked(),

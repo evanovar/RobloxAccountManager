@@ -279,6 +279,7 @@ class AutoRejoinWorker:
         self._thread: Optional[threading.Thread] = None
         self._process_identity: RobloxProcessIdentity | None = None
         self._owned_processes: set[RobloxProcessIdentity] = set()
+        self._target_user_id: int | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -314,6 +315,41 @@ class AutoRejoinWorker:
         if not self.config.get("check_internet", True):
             return True
         return _has_internet()
+
+    def _resolve_destination(self, cookie: str, previous_job_id: str = "") -> tuple[str, str, str] | None:
+        if self.config.get("join_mode", "place") != "user":
+            return (
+                str(self.config.get("place_id", "")),
+                self.config.get("private_server", ""),
+                self.config.get("job_id", "") or previous_job_id,
+            )
+
+        target = str(self.config.get("target_user", "")).strip()
+        if self._target_user_id is None:
+            self._target_user_id = (
+                int(target) if target.isdigit()
+                else RobloxAPI.get_user_id_from_username(target, max_retries=1)
+            )
+        if not self._target_user_id:
+            self._emit(f"Waiting: could not find user {target}")
+            return None
+        if not _wait_presence_slot(self._stop):
+            return None
+        presence = RobloxAPI.get_player_presence(self._target_user_id, cookie)
+        if self._stop.is_set():
+            return None
+        if not presence:
+            self._emit(f"Waiting: could not check {target}'s game")
+            return None
+        if not presence.get("in_game"):
+            self._emit(f"Waiting: {target} is not in a game")
+            return None
+        place_id = str(presence.get("place_id") or "")
+        job_id = str(presence.get("game_id") or "")
+        if not place_id.isdigit() or int(place_id) <= 0 or not job_id:
+            self._emit(f"Waiting: {target}'s server is hidden")
+            return None
+        return place_id, "", job_id
 
     def _launch_and_track(
         self,
@@ -412,6 +448,7 @@ class AutoRejoinWorker:
         cookie: str,
         place_id: str,
         check_place_id: bool = True,
+        expected_job_id: str = "",
     ) -> tuple[str, str]:
         if not self._process_identity or not _identity_matches(self._process_identity):
             return "disconnected", ""
@@ -433,6 +470,8 @@ class AutoRejoinWorker:
             if in_game:
                 try:
                     if int(cur_pid) == int(place_id):
+                        if expected_job_id and game_id and game_id != expected_job_id:
+                            return "disconnected", game_id
                         return "in_game", game_id
                 except (TypeError, ValueError):
                     pass
@@ -443,6 +482,8 @@ class AutoRejoinWorker:
 
     def _run(self) -> None:
         cfg = self.config
+        join_user = cfg.get("join_mode", "place") == "user"
+        target_user = str(cfg.get("target_user", "")).strip()
         place_id = str(cfg.get("place_id", ""))
         private_server = cfg.get("private_server", "")
         job_id = cfg.get("job_id", "")
@@ -451,7 +492,10 @@ class AutoRejoinWorker:
         check_presence = bool(cfg.get("check_presence", True))
         check_place_id = bool(cfg.get("check_place_id", True))
 
-        if not place_id:
+        if join_user and (not target_user or (target_user.isdigit() and int(target_user) <= 0)):
+            self._emit("ERROR: no target user")
+            return
+        if not join_user and not place_id:
             self._emit("ERROR: no place_id")
             return
         if self.account not in self.manager.accounts:
@@ -460,6 +504,9 @@ class AutoRejoinWorker:
 
         acc_data = self.manager.accounts[self.account]
         cookie = acc_data.get("cookie", "")
+        if join_user and not cookie:
+            self._emit("ERROR: account cookie is missing")
+            return
         user_id = acc_data.get("user_id")
         if not user_id:
             user_id = RobloxAPI.get_user_id_from_username(self.account)
@@ -480,9 +527,22 @@ class AutoRejoinWorker:
 
         retry_count = 0
         consec_fails = 0
+        destination_label = f"User {target_user}" if join_user else f"Place {place_id}"
 
         if not self._process_identity or not _identity_matches(self._process_identity):
             while not self._stop.is_set():
+                if join_user:
+                    if not self._can_launch():
+                        self._emit("Waiting: no internet connection")
+                        if self._wait(check_interval):
+                            return
+                        continue
+                    destination = self._resolve_destination(cookie)
+                    if destination is None:
+                        if self._wait(check_interval):
+                            return
+                        continue
+                    place_id, private_server, job_id = destination
                 existing_processes = find_running_processes_for_user(
                     self.manager,
                     str(user_id),
@@ -497,10 +557,10 @@ class AutoRejoinWorker:
                         f"[Auto-Rejoin] [{self.account}] Adopted existing PID "
                         f"{self._process_identity[0]} for user {user_id}"
                     )
-                    self._emit(f"ACTIVE - Place {place_id} (existing client)")
+                    self._emit(f"ACTIVE - {destination_label} (existing client)")
                     break
 
-                self._emit(f"Launching... (Place {place_id})")
+                self._emit(f"Launching... ({destination_label})")
                 while not self._stop.is_set() and not self._can_launch():
                     if self._wait(check_interval):
                         return
@@ -514,7 +574,7 @@ class AutoRejoinWorker:
                     job_id,
                 )
                 if ok:
-                    self._emit(f"ACTIVE - Place {place_id}")
+                    self._emit(f"ACTIVE - {destination_label}")
                     break
 
                 retry_count += 1
@@ -525,7 +585,7 @@ class AutoRejoinWorker:
                 if self._wait(check_interval):
                     return
 
-        self._emit(f"ACTIVE - Place {place_id}")
+        self._emit(f"ACTIVE - {destination_label}")
 
         while not self._stop.is_set():
             try:
@@ -538,6 +598,7 @@ class AutoRejoinWorker:
                         cookie,
                         place_id,
                         check_place_id,
+                        job_id if join_user else "",
                     )
                     game_id = gid or ""
                     if presence_state == "in_game":
@@ -570,6 +631,17 @@ class AutoRejoinWorker:
                         consec_fails = 0
 
                 if disconnected:
+                    if join_user and not self._can_launch():
+                        self._emit("Waiting: no internet connection")
+                        if self._wait(check_interval):
+                            break
+                        continue
+                    destination = self._resolve_destination(cookie, game_id)
+                    if destination is None:
+                        if self._wait(check_interval):
+                            break
+                        continue
+                    place_id, private_server, rejoin_jid = destination
                     retry_count  += 1
                     consec_fails = 0
                     print(f"[Auto-Rejoin] [{self.account}] Disconnect detected, attempt {retry_count}/{max_retries}")
@@ -618,7 +690,6 @@ class AutoRejoinWorker:
                     if self._stop.is_set():
                         break
 
-                    rejoin_jid = job_id if job_id else game_id
                     existing_processes = find_running_processes_for_user(
                         self.manager,
                         str(user_id),
@@ -643,9 +714,11 @@ class AutoRejoinWorker:
                         )
 
                     if ok:
+                        if join_user:
+                            job_id = rejoin_jid
                         print(f"[Auto-Rejoin] [{self.account}] Rejoin successful")
                         retry_count = 0
-                        self._emit(f"ACTIVE - Place {place_id}")
+                        self._emit(f"ACTIVE - {destination_label}")
                         if self._stop.wait(10):
                             break
                     else:
