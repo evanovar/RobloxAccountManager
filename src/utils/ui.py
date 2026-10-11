@@ -9106,6 +9106,7 @@ class _AutoRejoinAddWindow(QDialog):
         self._edit_mode = edit_account is not None
         self._edit_account = edit_account
         self._edit_config = edit_config or {}
+        self._validation_rows: dict[str, tuple[QWidget, QLabel, QLabel]] = {}
 
         self.setWindowTitle("Edit Auto-Rejoin" if self._edit_mode else "Add Account to Auto-Rejoin")
         # Size to tweak i keep forgetting
@@ -9119,6 +9120,9 @@ class _AutoRejoinAddWindow(QDialog):
                 font-size: 11px; color: {TEXT};
             }}
             QListWidget::item:selected {{ background: {SELECT}; }}
+            QLabel#accountName {{ color: {TEXT}; font-size: 11px; }}
+            QLabel#noteSep {{ color: #7A7A7A; font-size: 11px; }}
+            QLabel#noteText {{ color: {NOTE}; font-size: 11px; font-weight: 600; }}
             QPushButton#groupTab {{
                 background: transparent; border: 1px solid {LINE};
                 color: {MUTED}; font-size: 10px; padding: 2px 8px;
@@ -9302,6 +9306,13 @@ class _AutoRejoinAddWindow(QDialog):
             self._rebuild_group_bar()
             self._populate_list()
 
+        bridge = getattr(parent, "_bridge", None)
+        if bridge is not None:
+            bridge.cookie_validated.connect(self._on_cookie_validated)
+            self.finished.connect(
+                lambda _result: bridge.cookie_validated.disconnect(self._on_cookie_validated)
+            )
+
     def _apply_edit_mode(self):
         # Hide left panel for single account editing
         self._left_widget.hide()
@@ -9345,6 +9356,7 @@ class _AutoRejoinAddWindow(QDialog):
     # Account list population
     def _populate_list(self):
         self._acc_list.clear()
+        self._validation_rows.clear()
         AV = avatars.AVATAR_SIZE
         ITEM_H = AV + 6
 
@@ -9364,7 +9376,9 @@ class _AutoRejoinAddWindow(QDialog):
             rl.setSpacing(6)
 
             # Avatar
-            av = QLabel()
+            av_container = QWidget()
+            av_container.setFixedSize(AV, AV)
+            av = QLabel(av_container)
             av.setFixedSize(AV, AV)
             av.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
 
@@ -9380,7 +9394,8 @@ class _AutoRejoinAddWindow(QDialog):
             else:
                 if par and hasattr(par, "_make_placeholder_pixmap"):
                     av.setPixmap(par._make_placeholder_pixmap(AV))
-            rl.addWidget(av)
+            rl.addWidget(av_container)
+            badge = AccountManagerUIQt._create_invalid_badge(av_container)
 
             name_lbl = QLabel(username)
             name_lbl.setObjectName("accountName")
@@ -9402,6 +9417,24 @@ class _AutoRejoinAddWindow(QDialog):
 
             self._acc_list.addItem(item)
             self._acc_list.setItemWidget(item, row)
+            self._validation_rows[username] = (row, name_lbl, badge)
+            flagged = cookie_validator_mod.is_flagged(data) if isinstance(data, dict) else False
+            self._apply_cookie_status_to_row(username, flagged)
+
+    def _on_cookie_validated(self, username: str, status: str) -> None:
+        self._apply_cookie_status_to_row(username, status == cookie_validator_mod.INVALID)
+
+    def _apply_cookie_status_to_row(self, username: str, flagged: bool) -> None:
+        widgets = self._validation_rows.get(username)
+        if widgets is None:
+            return
+        row, name_label, badge = widgets
+        badge.setVisible(flagged)
+        name_label.setStyleSheet("color: #E8A020; font-style: italic;" if flagged else "")
+        name_label.setToolTip(badge.toolTip() if flagged else "")
+        row.setStyleSheet(
+            "QWidget { background: rgba(200, 50, 50, 0.06); }" if flagged else ""
+        )
 
     def _on_add(self):
         place_id = self._place.text().strip()
