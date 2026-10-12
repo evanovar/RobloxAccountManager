@@ -155,6 +155,32 @@ class RecentGamesAndAutoRejoinTests(unittest.TestCase):
         close.assert_not_called()
         self.assertEqual([g["place_id"] for g in account_actions.load_recent_games()], ["1"])
 
+    def test_deleting_a_recent_game_preserves_other_servers_and_order(self):
+        account_actions.save_recent_game("1", "Public")
+        account_actions.save_recent_game("1", "Private A", "server-a")
+        account_actions.save_recent_game("1", "Private B", "server-b")
+        account_actions.save_recent_game("2", "Other Game")
+        account_actions.remove_recent_game("1", "server-a")
+        games = account_actions.load_recent_games()
+        self.assertEqual([(g["place_id"], g["private_server"]) for g in games],
+                         [("2", ""), ("1", "server-b"), ("1", "")])
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), games)
+
+    def test_deleting_the_last_recent_game_saves_empty_history(self):
+        account_actions.save_recent_game("1", "One")
+        account_actions.remove_recent_game("1")
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), [])
+
+    def test_failed_recent_game_deletion_keeps_the_previous_file(self):
+        account_actions.save_recent_game("1", "One")
+        with mock.patch("json.dump", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                account_actions.remove_recent_game("1")
+        self.assertEqual([g["place_id"] for g in account_actions.load_recent_games()], ["1"])
+        self.assertEqual([n for n in os.listdir(self.folder.name) if n.endswith(".tmp")], [])
+
     def test_unreadable_recent_games_file_is_kept_aside(self):
         with open(self.recent, "w", encoding="utf-8") as handle:
             handle.write("[{")

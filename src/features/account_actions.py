@@ -95,6 +95,18 @@ def save_recent_game(place_id: str, name: str, private_server: str = "") -> None
         })
         write_json_atomic(_RECENT_GAMES_FILE, games[:get_recent_games_limit()], prefix=".recent_games.")
 
+
+def remove_recent_game(place_id: str, private_server: str = "") -> None:
+    with _RECENT_GAMES_LOCK:
+        games = _load_recent_games_unlocked()
+        remaining = [
+            game for game in games
+            if not (str(game.get("place_id")) == str(place_id)
+                    and str(game.get("private_server", "")) == str(private_server))
+        ]
+        if len(remaining) != len(games):
+            write_json_atomic(_RECENT_GAMES_FILE, remaining[:get_recent_games_limit()], prefix=".recent_games.")
+
 # UI settings persistence
 
 def load_ui_settings() -> dict:

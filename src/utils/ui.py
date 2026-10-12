@@ -6932,6 +6932,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._recent_list = QListWidget()
         self._recent_list.setFixedHeight(90)
         self._recent_list.itemDoubleClicked.connect(self._on_recent_game_double_click)
+        self._recent_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._recent_list.customContextMenuRequested.connect(self._on_recent_game_context_menu)
         lay.addWidget(self._recent_list)
 
         # Quick action buttons
@@ -7425,6 +7427,29 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, {"place_id": pid, "private_server": private_server})
             self._recent_list.addItem(item)
+
+    def _on_recent_game_context_menu(self, pos):
+        item = self._recent_list.itemAt(pos)
+        if item is None:
+            return
+        data = item.data(Qt.ItemDataRole.UserRole) or {}
+        place_id = data.get("place_id", "")
+        private_server = data.get("private_server", "")
+        if not place_id:
+            return
+        self._recent_list.setCurrentItem(item)
+        menu = QMenu(self)
+        delete_action = menu.addAction("Delete")
+        chosen = menu.exec(self._recent_list.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+        if chosen != delete_action:
+            return
+        try:
+            actions.remove_recent_game(place_id, private_server)
+        except OSError as exc:
+            _show_error(self, "Delete Recent Game", f"The recent game could not be deleted:\n{exc}")
+            return
+        self._refresh_recent_games()
 
     def _on_recent_game_double_click(self, item: QListWidgetItem):
         data = item.data(Qt.ItemDataRole.UserRole) or {}
