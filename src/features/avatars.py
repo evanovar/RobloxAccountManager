@@ -26,7 +26,7 @@ _EXECUTOR = ThreadPoolExecutor(
 _LOCK = threading.RLock()
 _THREAD_LOCAL = threading.local()
 _INFLIGHT: dict[str, list[tuple[str, Callable[[str, bytes], None]]]] = {}
-_MEMORY_CACHE: collections.OrderedDict[str, bytes] = collections.OrderedDict()
+_MEMORY_CACHE: collections.OrderedDict[str, tuple[bytes, float]] = collections.OrderedDict()
 _MEMORY_CACHE_LIMIT = 128
 _SYNC_RUNNING = False
 
@@ -42,12 +42,14 @@ def get_cache_days() -> int:
         return DEFAULT_CACHE_DAYS
 
 
+def _is_expired(cached_at: float, days: int) -> bool:
+    return days > 0 and time.time() - cached_at > days * 86400
+
+
 def _is_stale(path: str, days: int | None = None) -> bool:
     days = get_cache_days() if days is None else days
-    if days <= 0:
-        return False
     try:
-        return time.time() - os.path.getmtime(path) > days * 86400
+        return _is_expired(os.path.getmtime(path), days)
     except OSError:
         return False
 
@@ -65,9 +67,9 @@ def _cache_path(user_id: str) -> str:
     return os.path.join(_CACHE_DIR, f"{user_id}.png")
 
 
-def _remember(user_id: str, data: bytes) -> None:
+def _remember(user_id: str, data: bytes, cached_at: float) -> None:
     with _LOCK:
-        _MEMORY_CACHE[user_id] = data
+        _MEMORY_CACHE[user_id] = (data, cached_at)
         _MEMORY_CACHE.move_to_end(user_id)
         while len(_MEMORY_CACHE) > _MEMORY_CACHE_LIMIT:
             _MEMORY_CACHE.popitem(last=False)
@@ -75,20 +77,26 @@ def _remember(user_id: str, data: bytes) -> None:
 
 def load_cached_bytes(user_id: str, allow_stale: bool = False) -> Optional[bytes]:
     uid = str(user_id)
+    days = get_cache_days()
     with _LOCK:
         cached = _MEMORY_CACHE.get(uid)
         if cached is not None:
+            data, cached_at = cached
+            if not allow_stale and _is_expired(cached_at, days):
+                return None
             _MEMORY_CACHE.move_to_end(uid)
-            return cached
+            return data
 
     path = _cache_path(uid)
-    if not allow_stale and _is_stale(path):
-        return None
     try:
         with open(path, "rb") as f:
+            cached_at = os.fstat(f.fileno()).st_mtime
+            if not allow_stale and _is_expired(cached_at, days):
+                return None
             data = f.read()
         if data:
-            _remember(uid, data)
+            # Preserve the file's age, including when showing an expired fallback.
+            _remember(uid, data, cached_at)
             return data
     except FileNotFoundError:
         pass
@@ -98,7 +106,7 @@ def load_cached_bytes(user_id: str, allow_stale: bool = False) -> Optional[bytes
 
 
 def _save_to_cache(user_id: str, data: bytes) -> None:
-    _remember(user_id, data)
+    _remember(user_id, data, time.time())
     try:
         with open(_cache_path(user_id), "wb") as f:
             f.write(data)

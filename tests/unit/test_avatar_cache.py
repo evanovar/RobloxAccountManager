@@ -41,6 +41,47 @@ class AvatarCacheTests(unittest.TestCase):
         self.write("1", b"old", age_days=8)
         self.assertEqual(avatars.load_cached_bytes("1", allow_stale=True), b"old")
 
+    def test_expired_fallback_is_not_treated_as_fresh_in_memory(self):
+        self.write("1", b"old", age_days=8)
+        self.assertEqual(avatars.load_cached_bytes("1", allow_stale=True), b"old")
+        self.assertIsNone(avatars.load_cached_bytes("1"))
+        self.assertEqual(avatars.load_cached_bytes("1", allow_stale=True), b"old")
+
+    def test_memory_entry_expires_while_the_application_stays_open(self):
+        now = time.time()
+        with patch.object(avatars.time, "time", return_value=now):
+            self.write("1", b"fresh", age_days=1)
+            self.assertEqual(avatars.load_cached_bytes("1"), b"fresh")
+        with patch.object(avatars.time, "time", return_value=now + 7 * DAY):
+            self.assertIsNone(avatars.load_cached_bytes("1"))
+
+    def test_changing_refresh_age_applies_to_existing_memory_entries(self):
+        self.write("1", b"cached", age_days=3)
+        self.assertEqual(avatars.load_cached_bytes("1"), b"cached")
+        self.days = 1
+        self.assertIsNone(avatars.load_cached_bytes("1"))
+        self.days = 0
+        self.assertEqual(avatars.load_cached_bytes("1"), b"cached")
+        self.days = 1
+        self.assertIsNone(avatars.load_cached_bytes("1"))
+
+    def test_fresh_memory_hits_do_not_read_or_stat_the_disk(self):
+        self.write("1", b"fresh", age_days=1)
+        self.assertEqual(avatars.load_cached_bytes("1"), b"fresh")
+        with patch("builtins.open", side_effect=AssertionError("unexpected disk read")), \
+                patch.object(avatars.os, "stat", side_effect=AssertionError("unexpected disk stat")):
+            self.assertEqual(avatars.load_cached_bytes("1"), b"fresh")
+
+    def test_downloaded_avatar_expires_even_if_saving_to_disk_failed(self):
+        now = time.time()
+        with patch.object(avatars.time, "time", return_value=now), \
+                patch("builtins.open", side_effect=OSError("disk unavailable")):
+            avatars._save_to_cache("1", b"downloaded")
+        self.assertEqual(avatars.load_cached_bytes("1"), b"downloaded")
+        with patch.object(avatars.time, "time", return_value=now + 8 * DAY):
+            self.assertIsNone(avatars.load_cached_bytes("1"))
+            self.assertEqual(avatars.load_cached_bytes("1", allow_stale=True), b"downloaded")
+
     def test_zero_days_means_never_expire(self):
         self.days = 0
         self.write("1", b"ancient", age_days=3000)
@@ -102,6 +143,23 @@ class FetchWorkerTests(unittest.TestCase):
         with patch.object(avatars, "_get_session", return_value=session):
             avatars._fetch_worker("1", "https://example.invalid/a.png")
         self.assertEqual(self.received, [("alice", b"old")])
+
+    def test_failed_refresh_is_retried_on_the_next_request(self):
+        path = self.write(b"old", age_days=9)
+        session = self.session_returning(error=requests.ConnectionError("offline"))
+        with patch.object(avatars, "_get_session", return_value=session):
+            avatars._fetch_worker("1", "https://example.invalid/a.png")
+        self.assertEqual(self.received, [("alice", b"old")])
+        self.assertIsNone(avatars.load_cached_bytes("1"))
+        avatars._INFLIGHT["1"] = [("alice", lambda name, data: self.received.append((name, data)))]
+        session = self.session_returning(b"new")
+        with patch.object(avatars, "_get_session", return_value=session):
+            avatars._fetch_worker("1", "https://example.invalid/a.png")
+        session.get.assert_called_once()
+        self.assertEqual(self.received, [("alice", b"old"), ("alice", b"new")])
+        self.assertEqual(avatars.load_cached_bytes("1"), b"new")
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"new")
 
     def test_bad_response_falls_back_to_the_expired_avatar(self):
         self.write(b"old", age_days=9)
