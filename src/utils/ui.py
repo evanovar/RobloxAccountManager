@@ -9147,7 +9147,6 @@ class _AutoRejoinAddWindow(QDialog):
         self.setWindowTitle("Edit Auto-Rejoin" if self._edit_mode else "Add Account to Auto-Rejoin")
         self.setMinimumSize(420 if self._edit_mode else 740, 480)
         self.resize(440 if self._edit_mode else 800, 600)
-        self.setSizeGripEnabled(True)
         self.setStyleSheet(_DLG_STYLE + f"""
             QListWidget {{
                 background: {INPUT}; border: 1px solid {LINE};
@@ -9307,7 +9306,7 @@ class _AutoRejoinAddWindow(QDialog):
         user_fields.addWidget(user_label)
         self._target_user = QLineEdit()
         self._target_user.setMaxLength(20)
-        self._target_user.setPlaceholderText("Username or numeric user ID")
+        self._target_user.setPlaceholderText("Username or user ID")
         self._target_user.setStyleSheet(_INP)
         user_label.setBuddy(self._target_user)
         user_fields.addWidget(self._target_user)
@@ -9412,6 +9411,19 @@ class _AutoRejoinAddWindow(QDialog):
             self.finished.connect(
                 lambda _result: bridge.cookie_validated.disconnect(self._on_cookie_validated)
             )
+
+        self._resize_handle = _ResizeHandle(self)
+        self._position_resize_handle()
+
+    def _position_resize_handle(self) -> None:
+        handle = getattr(self, "_resize_handle", None)
+        if handle is not None:
+            handle.move(self.width() - handle.width(), self.height() - handle.height())
+            handle.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_resize_handle()
 
     def _apply_edit_mode(self):
         # Hide left panel for single account editing
