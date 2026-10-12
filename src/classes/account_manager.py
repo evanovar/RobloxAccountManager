@@ -12,6 +12,7 @@ import shutil
 import traceback
 import threading
 import requests
+from dataclasses import replace
 
 from .encryption import (
     EncryptedDataError,
@@ -1132,6 +1133,8 @@ class RobloxAccountManager:
         with launch_monitor.LAUNCH_LOCK:
             session = account_actions._mr_handle if account_actions.is_multi_roblox_running() else None
             if session is not None:
+                if session.get("launch_blocked") is not None:
+                    return session["launch_blocked"]
                 ready = launch_monitor.wait_for_launch_slot(session)
                 if not ready:
                     return ready
@@ -1141,7 +1144,16 @@ class RobloxAccountManager:
                 job_id, custom_launcher_path,
             )
             if result and session is not None:
-                return launch_monitor.confirm_launch(result, session, before, username)
+                confirmed = launch_monitor.confirm_launch(result, session, before, username)
+                if not confirmed and confirmed.code in (
+                    "ROBLOX_SECURITY_CHALLENGE", "ROBLOX_ACCOUNT_MISMATCH",
+                    "ROBLOX_LAUNCH_UNCONFIRMED", "LAUNCH_IDENTITY_AMBIGUOUS",
+                    "LAUNCH_EVIDENCE_MISSING", "LAUNCH_ACCOUNT_ID_MISSING",
+                ):
+                    # Batch, WebSocket and Auto-Rejoin must not send more tickets
+                    # while authentication remains unresolved in this session.
+                    session["launch_blocked"] = confirmed
+                return confirmed
             return result
 
     def _launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
@@ -1196,6 +1208,10 @@ class RobloxAccountManager:
             launch_time = launched.data.get('launch_time')
             with self._accounts_lock:
                 user_id = str(self.accounts.get(username, {}).get('user_id', '') or '')
+                launched = replace(launched, data={
+                    **launched.data, "expected_user_id": user_id,
+                    "requires_game_join": bool(game_id or private_server_id),
+                })
                 if tracker and launch_time is not None and user_id and user_id != '0':
                     self._launch_records[tracker] = (user_id, launch_time)
                     # Bound pending evidence even if the renamer is disabled.

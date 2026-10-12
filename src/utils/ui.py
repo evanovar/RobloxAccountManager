@@ -3325,6 +3325,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     "Multi Roblox",
                     "Handle64 was not found. Download Handle64 before enabling this mode.",
                 )
+            elif msg == "ROBLOX_COOKIES_LOCK_FAILED":
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "The shared Roblox login data could not be protected. "
+                    "Close all Roblox clients and try again. See the Console for details.",
+                )
             elif msg == "HANDLE64_UNVERIFIED":
                 QMessageBox.critical(
                     self,

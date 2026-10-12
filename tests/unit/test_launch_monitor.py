@@ -1,5 +1,7 @@
 import threading
 import unittest
+import os
+import tempfile
 from unittest.mock import Mock, patch
 
 import psutil
@@ -17,12 +19,13 @@ class LaunchConfirmationTests(unittest.TestCase):
         self.process.cmdline.return_value = ["RobloxPlayerBeta.exe", "roblox-player:1+browsertrackerid:987+"]
         self.process.is_running.return_value = True
         self.key = (123, 100.0)
-        self.result = OperationResult.success(data={"browser_tracker_id": "987", "launch_time": 99.0})
+        self.result = OperationResult.success(data={"browser_tracker_id": "987", "launch_time": 99.0, "expected_user_id": "42"})
         self.enterContext(patch.object(actions, "_mr_handle", self.session))
         self.active = self.enterContext(patch.object(actions, "is_multi_roblox_running", return_value=True))
         self.handles = self.enterContext(patch.object(actions, "singleton_handles_ready", return_value=True))
         self.snapshot = self.enterContext(patch.object(monitor, "_snapshot", return_value={self.key: self.process}))
         self.window = self.enterContext(patch.object(monitor, "_has_main_window", return_value=True))
+        self.auth = self.enterContext(patch.object(monitor, "_read_launch_state", return_value=("42", False)))
         self.enterContext(patch.object(monitor, "_TIMEOUT", 5.0))
         self.enterContext(patch.object(monitor.time, "monotonic", side_effect=lambda: self.now))
         self.enterContext(patch.object(monitor.time, "sleep", side_effect=self.sleep))
@@ -49,6 +52,31 @@ class LaunchConfirmationTests(unittest.TestCase):
     def test_matching_process_without_window_is_not_success(self):
         self.window.return_value = False
         self.assertFalse(self.confirm())
+
+    def test_captcha_window_is_not_a_successful_join(self):
+        self.auth.return_value = ("", True)
+        result = self.confirm()
+        self.assertEqual(result.code, "ROBLOX_SECURITY_CHALLENGE")
+        self.assertFalse(result.retryable)
+
+    def test_window_without_authenticated_join_remains_unconfirmed(self):
+        self.auth.return_value = ("", False)
+        self.assertEqual(self.confirm().code, "ROBLOX_LAUNCH_UNCONFIRMED")
+
+    def test_different_game_account_is_rejected(self):
+        self.result.data["expected_user_id"] = "99"
+        self.assertEqual(self.confirm().code, "ROBLOX_ACCOUNT_MISMATCH")
+
+    def test_missing_saved_identity_cannot_confirm_a_game_account(self):
+        self.result.data.pop("expected_user_id")
+        self.assertEqual(self.confirm().code, "LAUNCH_ACCOUNT_ID_MISSING")
+
+    def test_home_still_requires_only_a_window_but_rejects_challenges(self):
+        self.result.data["requires_game_join"] = False
+        self.auth.return_value = ("", False)
+        self.assertTrue(self.confirm())
+        self.auth.return_value = ("", True)
+        self.assertEqual(self.confirm().code, "ROBLOX_SECURITY_CHALLENGE")
 
     def test_unrelated_or_preexisting_client_cannot_confirm_launch(self):
         self.assertFalse(self.confirm(before=[self.key]))
@@ -114,7 +142,7 @@ class LaunchConfirmationTests(unittest.TestCase):
             key = (3000 + index, 100.0 + index)
             live[key] = process
             result = monitor.confirm_launch(OperationResult.success(data={
-                "browser_tracker_id": tracker}), self.session, before, f"Account{index}")
+                "browser_tracker_id": tracker, "expected_user_id": "42"}), self.session, before, f"Account{index}")
             self.assertTrue(result)
             confirmed.append(result.data["process_identity"])
         self.assertEqual(len(set(confirmed)), 13)
@@ -130,6 +158,23 @@ class LaunchGateTests(unittest.TestCase):
         self.slot = self.enterContext(patch.object(monitor, "wait_for_launch_slot", return_value=OperationResult.success()))
         self.enterContext(patch.object(monitor, "_snapshot", return_value={}))
         self.confirm = self.enterContext(patch.object(monitor, "confirm_launch", return_value=OperationResult.success()))
+
+    def test_challenge_or_unverified_authentication_blocks_all_further_dispatches(self):
+        for code in ("ROBLOX_SECURITY_CHALLENGE", "ROBLOX_ACCOUNT_MISMATCH", "ROBLOX_LAUNCH_UNCONFIRMED"):
+            with self.subTest(code=code):
+                self.session.pop("launch_blocked", None)
+                self.manager._launch_roblox.reset_mock()
+                failure = OperationResult.failure(code, "Paused", "Verification needed")
+                self.confirm.return_value = failure
+                self.assertIs(self.manager.launch_roblox("alice"), failure)
+                self.assertIs(self.manager.launch_roblox("bob"), failure)
+                self.manager._launch_roblox.assert_called_once()
+
+    def test_fresh_multi_roblox_session_clears_the_authentication_block(self):
+        self.session["launch_blocked"] = OperationResult.failure("ROBLOX_SECURITY_CHALLENGE", "Paused", "Verify")
+        actions._mr_handle = {"mode": "handle64"}
+        self.assertTrue(self.manager.launch_roblox("alice"))
+        self.manager._launch_roblox.assert_called_once()
 
     def test_unready_handles_prevent_another_url(self):
         failure = OperationResult.failure("MULTI_ROBLOX_NOT_READY", "Failed", "Busy")
@@ -187,6 +232,42 @@ class LaunchGateTests(unittest.TestCase):
         self.assertFalse(other.is_alive())
         self.assertFalse(failures)
         self.assertEqual(self.manager._launch_roblox.call_count, 2)
+
+
+class StartupLogTests(unittest.TestCase):
+    def setUp(self):
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {"LOCALAPPDATA": folder}))
+        self.logs = os.path.join(folder, "Roblox", "logs")
+        os.makedirs(self.logs)
+
+    def write_log(self, body, suffix="ABC", timestamp="19700101T000140Z"):
+        path = os.path.join(self.logs, f"0.742_{timestamp}_Player_{suffix}_last.log")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+
+    def test_incident_sequence_detects_challenge_without_game_user_id(self):
+        self.write_log("[FLog::LogWin32BTId] cookie Native => Engine rbxuid=99&browserid=123\n"
+                       "[FLog::LogWin32BTId] web launch, websiteBTId is 987\n"
+                       "[DFLog::HttpTraceError] status:403 challengedByGcs\n"
+                       "[FLog::NewWebView2Browser] challengeDisplayed\n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0), ("", True))
+
+    def test_game_identity_is_used_instead_of_shared_native_cookie_identity(self):
+        self.write_log("[FLog::LogWin32BTId] web launch, websiteBTId is 987\n"
+                       "[FLog::LogWin32BTId] cookie Native => Engine rbxuid=99&browserid=123\n"
+                       "[FLog::GameJoinLoadTime] Report game_join_loadtime: userid:42, \n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0), ("42", False))
+
+    def test_unrelated_and_old_logs_cannot_establish_authentication(self):
+        self.write_log("web launch, websiteBTId is 123\n[FLog::GameJoinLoadTime] userid:42, challengedByGcs")
+        self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,", "OLD", "19700101T000000Z")
+        self.assertEqual(monitor._read_launch_state("987", 100.0), ("", False))
+
+    def test_duplicate_tracker_logs_remain_unverified(self):
+        for suffix in ("A", "B"):
+            self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,", suffix)
+        self.assertEqual(monitor._read_launch_state("987", 100.0), ("", False))
 
 
 class BatchSurvivalTests(unittest.TestCase):
