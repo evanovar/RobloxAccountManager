@@ -19,6 +19,7 @@ import subprocess
 import win32api
 import win32con
 import win32gui
+import win32file
 import msvcrt
 import requests
 from ctypes import wintypes
@@ -1909,8 +1910,26 @@ def _lock_roblox_cookies() -> dict:
         raise OSError("LOCALAPPDATA could not be located")
     cookies_path = os.path.join(local_appdata, "Roblox", "LocalStorage", "RobloxCookies.dat")
     os.makedirs(os.path.dirname(cookies_path), exist_ok=True)
-    # Create an absent store without truncating an existing user's cookies.
-    cookie_file = open(cookies_path, "a+b")
+    # Byte locks alone do not prevent another process from truncating a file.
+    # Deny other opens, including CREATE_ALWAYS, while preserving existing data.
+    try:
+        native_handle = win32file.CreateFile(
+            cookies_path, win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+            0, None, win32con.OPEN_ALWAYS, win32con.FILE_ATTRIBUTE_NORMAL, None,
+        )
+    except win32file.error as exc:
+        raise OSError(str(exc)) from exc
+    try:
+        descriptor = msvcrt.open_osfhandle(int(native_handle), os.O_RDWR | os.O_BINARY)
+    except OSError:
+        native_handle.Close()
+        raise
+    native_handle.Detach()  # The descriptor now owns the Windows handle.
+    try:
+        cookie_file = os.fdopen(descriptor, "r+b", buffering=0)
+    except OSError:
+        os.close(descriptor)
+        raise
     try:
         cookie_file.seek(0)
         # Cover growth as well as the current contents, including an empty file.

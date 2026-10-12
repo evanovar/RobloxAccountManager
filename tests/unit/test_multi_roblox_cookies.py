@@ -3,7 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 from features import account_actions as actions
 
@@ -22,7 +22,10 @@ class SharedCookieProtectionTests(unittest.TestCase):
             handle.write(b"existing session")
         lock = actions._lock_roblox_cookies()
         actions._mr_handle = {"file": lock["file"], "cookie_lock": lock}
-        for mode, operation in (("rb", "f.read()"), ("r+b", "f.write(b'other account')")):
+        for mode, operation in (
+            ("rb", "f.read()"), ("r+b", "f.write(b'other account')"),
+            ("wb", "f.write(b'other account')"), ("w+b", "f.write(b'other account')"),
+        ):
             with self.subTest(mode=mode):
                 result = subprocess.run(
                     [sys.executable, "-c", f"import sys\nwith open(sys.argv[1], {mode!r}, buffering=0) as f:\n {operation}", self.path],
@@ -44,12 +47,33 @@ class SharedCookieProtectionTests(unittest.TestCase):
             handle.write(b"x")
 
     def test_lock_failure_closes_the_file(self):
-        handle = Mock()
-        with patch("builtins.open", return_value=handle), \
+        opened = []
+        real_fdopen = os.fdopen
+
+        def fdopen(*args, **kwargs):
+            handle = real_fdopen(*args, **kwargs)
+            opened.append(handle)
+            return handle
+
+        with patch.object(actions.os, "fdopen", side_effect=fdopen), \
                 patch.object(actions.msvcrt, "locking", side_effect=OSError("busy")):
             with self.assertRaises(OSError):
                 actions._lock_roblox_cookies()
-        handle.close.assert_called_once()
+        self.assertTrue(opened[0].closed)
+
+    def test_competing_open_failure_does_not_truncate_existing_data(self):
+        lock = actions._lock_roblox_cookies()
+        actions._mr_handle = {"file": lock["file"], "cookie_lock": lock}
+        with self.assertRaises(OSError):
+            actions._lock_roblox_cookies()
+        self.assertFalse(lock["file"].closed)
+
+    def test_handle_conversion_failure_releases_exclusive_access(self):
+        with patch.object(actions.msvcrt, "open_osfhandle", side_effect=OSError("conversion failed")):
+            with self.assertRaises(OSError):
+                actions._lock_roblox_cookies()
+        with open(self.path, "wb") as handle:
+            handle.write(b"available again")
 
     def start_handle64(self):
         self.enterContext(patch.object(actions.ctypes.windll.shell32, "IsUserAnAdmin", return_value=True))
