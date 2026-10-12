@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -76,19 +77,75 @@ class RecentGamesAndAutoRejoinTests(unittest.TestCase):
         patches = [
             mock.patch.object(account_actions, "_DATA_DIR", path),
             mock.patch.object(account_actions, "_RECENT_GAMES_FILE", self.recent),
+            mock.patch.object(settings_store, "_SETTINGS_PATH", os.path.join(path, "ui_settings.json")),
             mock.patch.object(auto_rejoin, "_CONFIG_FILE", self.configs),
             mock.patch.object(auto_rejoin, "_CONFIG_CACHE", None),
         ]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
+        settings_store.invalidate()
+        self.addCleanup(settings_store.invalidate)
 
     def test_recent_games_round_trip_and_limit(self):
         for number in range(25):
             account_actions.save_recent_game(str(number), f"Game {number}")
         games = account_actions.load_recent_games()
-        self.assertEqual(len(games), 20)
+        self.assertEqual(len(games), 10)
         self.assertEqual(games[0]["place_id"], "24")
+        self.assertEqual(games[-1]["place_id"], "15")
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), games)
+
+    def test_recent_games_use_the_configured_limit_instead_of_twenty(self):
+        settings_store.save("max_recent_games", 30)
+        for number in range(35):
+            account_actions.save_recent_game(str(number), f"Game {number}")
+        games = account_actions.load_recent_games()
+        self.assertEqual([game["place_id"] for game in games], [str(n) for n in range(34, 4, -1)])
+
+    def test_loading_oversized_history_removes_the_oldest_entries_from_disk(self):
+        history = [{"place_id": str(n), "name": f"Game {n}"} for n in range(19, -1, -1)]
+        with open(self.recent, "w", encoding="utf-8") as handle:
+            json.dump(history, handle)
+        games = account_actions.load_recent_games()
+        self.assertEqual(games, history[:10])
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), history[:10])
+
+    def test_lowering_the_limit_keeps_the_most_recent_entries(self):
+        settings_store.save("max_recent_games", 20)
+        for number in range(20):
+            account_actions.save_recent_game(str(number), f"Game {number}")
+        settings_store.save("max_recent_games", 5)
+        self.assertEqual([game["place_id"] for game in account_actions.load_recent_games()],
+                         ["19", "18", "17", "16", "15"])
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(len(json.load(handle)), 5)
+
+    def test_replaying_a_game_moves_it_to_the_front_without_duplicating_it(self):
+        settings_store.save("max_recent_games", 5)
+        for number in range(5):
+            account_actions.save_recent_game(str(number), f"Game {number}")
+        account_actions.save_recent_game("1", "Played Again")
+        account_actions.save_recent_game("5", "New Game")
+        self.assertEqual([game["place_id"] for game in account_actions.load_recent_games()],
+                         ["5", "1", "4", "3", "2"])
+
+    def test_failed_history_trim_keeps_the_existing_file(self):
+        history = [{"place_id": str(n)} for n in range(19, -1, -1)]
+        with open(self.recent, "w", encoding="utf-8") as handle:
+            json.dump(history, handle)
+        with mock.patch("json.dump", side_effect=OSError("disk full")):
+            self.assertEqual(account_actions.load_recent_games(), history[:10])
+        with open(self.recent, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), history)
+
+    def test_recent_games_limit_validation_matches_the_setting_range(self):
+        for value, expected in ((None, 10), ("bad", 10), ("15", 15), (1, 5), (100, 50),
+                                (float("inf"), 10)):
+            with self.subTest(value=value):
+                self.assertEqual(account_actions.get_recent_games_limit({"max_recent_games": value}), expected)
 
     def test_recent_games_failed_write_keeps_the_previous_file(self):
         account_actions.save_recent_game("1", "One")

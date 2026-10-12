@@ -41,7 +41,17 @@ _RECENT_GAMES_FILE = os.path.join(_DATA_DIR, "recent_games.json")
 _RECENT_GAMES_LOCK = threading.RLock()
 
 # Recent games
-def load_recent_games() -> list[dict]:
+def get_recent_games_limit(settings: dict | None = None) -> int:
+    if settings is None:
+        settings = load_ui_settings()
+    try:
+        limit = int(settings.get("max_recent_games", 10))
+    except (TypeError, ValueError, OverflowError):
+        return 10
+    return max(5, min(50, limit))
+
+
+def _load_recent_games_unlocked() -> list[dict]:
     try:
         if os.path.exists(_RECENT_GAMES_FILE):
             with open(_RECENT_GAMES_FILE, "r", encoding="utf-8") as f:
@@ -56,12 +66,24 @@ def load_recent_games() -> list[dict]:
     return []
 
 
+def load_recent_games() -> list[dict]:
+    with _RECENT_GAMES_LOCK:
+        games = _load_recent_games_unlocked()
+        limited = games[:get_recent_games_limit()]
+        if len(limited) < len(games):
+            try:
+                write_json_atomic(_RECENT_GAMES_FILE, limited, prefix=".recent_games.")
+            except OSError as exc:
+                print(f"[WARNING] Recent games history could not be trimmed: {exc}")
+        return limited
+
+
 def save_recent_game(place_id: str, name: str, private_server: str = "") -> None:
     if not place_id:
         return
     with _RECENT_GAMES_LOCK:
         games = [
-            g for g in load_recent_games()
+            g for g in _load_recent_games_unlocked()
             if not (str(g.get("place_id")) == str(place_id)
                     and str(g.get("private_server", "")) == str(private_server))
         ]
@@ -71,7 +93,7 @@ def save_recent_game(place_id: str, name: str, private_server: str = "") -> None
             "private_server": private_server,
             "private": bool(private_server),
         })
-        write_json_atomic(_RECENT_GAMES_FILE, games[:20], prefix=".recent_games.")
+        write_json_atomic(_RECENT_GAMES_FILE, games[:get_recent_games_limit()], prefix=".recent_games.")
 
 # UI settings persistence
 

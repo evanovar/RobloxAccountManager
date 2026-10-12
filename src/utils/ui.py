@@ -3744,11 +3744,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         mg_row.addStretch(1)
         self._sett_mg_spin = QSpinBox()
         self._sett_mg_spin.setRange(5, 50)
-        self._sett_mg_spin.setValue(int(S.get("max_recent_games", 10)))
+        self._sett_mg_spin.setValue(actions.get_recent_games_limit(S))
         self._sett_mg_spin.setFixedWidth(64)
         self._sett_mg_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._sett_mg_spin.valueChanged.connect(
-            lambda v: actions.save_ui_setting("max_recent_games", v)
+            self._on_sett_max_recent_games
         )
         mg_row.addWidget(self._sett_mg_spin)
         f.addLayout(mg_row)
@@ -7405,6 +7405,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             dialog.deleteLater()
 
     # Recent games
+    def _on_sett_max_recent_games(self, value: int) -> None:
+        actions.save_ui_setting("max_recent_games", value)
+        self._refresh_recent_games()
+
     def _refresh_recent_games(self):
         self._recent_list.clear()
         for entry in actions.load_recent_games():
