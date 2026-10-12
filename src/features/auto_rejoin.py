@@ -358,7 +358,17 @@ class AutoRejoinWorker:
         private_server: str,
         job_id: str,
     ) -> bool:
-        with _LAUNCH_LOCK:
+        # Another account may hold this lock while its client starts. Stop must
+        # cancel our queued launch without waiting for that client's startup.
+        while not self._stop.is_set():
+            if _LAUNCH_LOCK.acquire(timeout=0.1):
+                break
+        else:
+            return False
+
+        try:
+            if self._stop.is_set():
+                return False
             processes_before = _get_roblox_processes(force=True)
             identities_before = {
                 (pid, process_data[0])
@@ -366,6 +376,8 @@ class AutoRejoinWorker:
             }
 
             settings = settings_store.load()
+            if self._stop.is_set():
+                return False
             ok = self.manager.launch_roblox(
                 self.account, place_id, private_server,
                 launcher_preference=settings.get("roblox_launcher", "default"),
@@ -441,6 +453,8 @@ class AutoRejoinWorker:
                 "new Roblox process to the account."
             )
             return False
+        finally:
+            _LAUNCH_LOCK.release()
 
     def _is_in_game(
         self,
@@ -573,6 +587,8 @@ class AutoRejoinWorker:
                     private_server,
                     job_id,
                 )
+                if self._stop.is_set():
+                    return
                 if ok:
                     self._emit(f"ACTIVE - {destination_label}")
                     break
@@ -713,6 +729,8 @@ class AutoRejoinWorker:
                             rejoin_jid,
                         )
 
+                    if self._stop.is_set():
+                        break
                     if ok:
                         if join_user:
                             job_id = rejoin_jid

@@ -1,3 +1,4 @@
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -80,6 +81,103 @@ class AutoRejoinTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(worker._process_identity, (303, 30.0))
+
+    def test_stop_cancels_a_queued_launch_without_waiting_for_the_other_account(self):
+        gate = threading.Lock()
+        waiting = threading.Event()
+
+        class ObservedLock:
+            def acquire(self, *args, **kwargs):
+                waiting.set()
+                return gate.acquire(*args, **kwargs)
+
+            def release(self):
+                gate.release()
+
+            def __enter__(self):
+                self.acquire()
+
+            def __exit__(self, *_args):
+                self.release()
+
+        manager = SimpleNamespace(launch_roblox=Mock(return_value=False))
+        worker = auto_rejoin.AutoRejoinWorker("test", {}, manager, Mock())
+        results = []
+        thread = threading.Thread(
+            target=lambda: results.append(worker._launch_and_track("333", "123", "", "")),
+            daemon=True,
+        )
+        worker._thread = thread
+        with patch.object(auto_rejoin, "_LAUNCH_LOCK", ObservedLock()), \
+                patch.object(auto_rejoin, "_get_roblox_processes", return_value={}), \
+                patch.object(auto_rejoin.settings_store, "load", return_value={}):
+            gate.acquire()
+            thread.start()
+            try:
+                self.assertTrue(waiting.wait(2), "worker did not reach the launch queue")
+                worker.stop(join_timeout=1)
+                self.assertFalse(thread.is_alive(), "Stop still waits for the other account's launch")
+            finally:
+                gate.release()
+                thread.join(timeout=2)
+            self.assertEqual(results, [False])
+            manager.launch_roblox.assert_not_called()
+
+    def test_stop_as_the_launch_lock_is_acquired_prevents_a_launch(self):
+        manager = SimpleNamespace(launch_roblox=Mock(return_value=False))
+        worker = auto_rejoin.AutoRejoinWorker("test", {}, manager, Mock())
+        lock = Mock()
+
+        def acquire(**_kwargs):
+            worker.stop(join_timeout=0)
+            return True
+
+        lock.acquire.side_effect = acquire
+        with patch.object(auto_rejoin, "_LAUNCH_LOCK", lock), \
+                patch.object(auto_rejoin, "_get_roblox_processes") as scan:
+            self.assertFalse(worker._launch_and_track("333", "123", "", ""))
+        scan.assert_not_called()
+        manager.launch_roblox.assert_not_called()
+        lock.release.assert_called_once_with()
+
+    def test_already_stopped_worker_does_not_enter_the_launch_queue(self):
+        manager = SimpleNamespace(launch_roblox=Mock())
+        worker = auto_rejoin.AutoRejoinWorker("test", {}, manager, Mock())
+        worker.stop(join_timeout=0)
+        with patch.object(auto_rejoin, "_LAUNCH_LOCK") as lock:
+            self.assertFalse(worker._launch_and_track("333", "123", "", ""))
+        lock.acquire.assert_not_called()
+        lock.release.assert_not_called()
+        manager.launch_roblox.assert_not_called()
+
+    def test_stop_during_launch_preparation_prevents_a_launch(self):
+        manager = SimpleNamespace(launch_roblox=Mock(return_value=False))
+        worker = auto_rejoin.AutoRejoinWorker("test", {}, manager, Mock())
+        lock = threading.Lock()
+
+        def settings():
+            worker.stop(join_timeout=0)
+            return {}
+
+        with patch.object(auto_rejoin, "_LAUNCH_LOCK", lock), \
+                patch.object(auto_rejoin, "_get_roblox_processes", return_value={}), \
+                patch.object(auto_rejoin.settings_store, "load", side_effect=settings):
+            self.assertFalse(worker._launch_and_track("333", "123", "", ""))
+        manager.launch_roblox.assert_not_called()
+        self.assertTrue(lock.acquire(blocking=False), "cancelled worker retained the launch lock")
+        lock.release()
+
+    def test_launch_exception_releases_the_lock_for_other_accounts(self):
+        manager = SimpleNamespace(launch_roblox=Mock(side_effect=RuntimeError("launch failed")))
+        worker = auto_rejoin.AutoRejoinWorker("test", {}, manager, Mock())
+        lock = threading.Lock()
+        with patch.object(auto_rejoin, "_LAUNCH_LOCK", lock), \
+                patch.object(auto_rejoin, "_get_roblox_processes", return_value={}), \
+                patch.object(auto_rejoin.settings_store, "load", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "launch failed"):
+                worker._launch_and_track("333", "123", "", "")
+        self.assertTrue(lock.acquire(blocking=False), "failed worker retained the launch lock")
+        lock.release()
 
     def test_presence_states_distinguish_unavailable_and_disconnect(self):
         worker = auto_rejoin.AutoRejoinWorker(
@@ -281,6 +379,31 @@ class AutoRejoinTests(unittest.TestCase):
             worker._run()
         launch.assert_called_once_with("333", "10", "", "server")
         self.assertFalse(any("STOPPED" in call.args[1] for call in worker.on_status.call_args_list))
+
+    def test_cancelled_initial_launch_and_rejoin_are_not_reported_as_failures(self):
+        for cancel_rejoin in (False, True):
+            with self.subTest(cancel_rejoin=cancel_rejoin):
+                worker = self.user_worker("123")
+                worker._stop.wait = lambda _: False
+                launches = []
+
+                def launch(*args):
+                    launches.append(args)
+                    if cancel_rejoin and len(launches) == 1:
+                        return True
+                    worker.stop(join_timeout=0)
+                    return False
+
+                with patch.object(worker, "_can_launch", return_value=True), \
+                        patch.object(worker, "_wait", return_value=False), \
+                        patch.object(worker, "_resolve_destination", return_value=("10", "", "server")), \
+                        patch.object(worker, "_launch_and_track", side_effect=launch), \
+                        patch.object(worker, "_is_in_game", return_value=("disconnected", "server")), \
+                        patch.object(auto_rejoin, "find_running_processes_for_user", return_value=set()):
+                    worker._run()
+                self.assertEqual(len(launches), 2 if cancel_rejoin else 1)
+                statuses = [call.args[1] for call in worker.on_status.call_args_list]
+                self.assertFalse(any(status.startswith(("Launch failed", "STOPPED: max")) for status in statuses))
 
 
 if __name__ == "__main__":
