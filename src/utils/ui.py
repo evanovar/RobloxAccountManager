@@ -3584,14 +3584,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         launch_delay_row.addWidget(self._sett_launch_delay_spin)
         f.addLayout(launch_delay_row)
 
-        f.addWidget(_sec("ROBLOX"))
-        kill_roblox_button = QPushButton("Kill All Roblox Process")
-        kill_roblox_button.setToolTip(
-            "Force close every detected Roblox game client."
-        )
-        kill_roblox_button.clicked.connect(self._on_kill_all_roblox)
-        f.addWidget(kill_roblox_button)
-
         f.addWidget(_sec("ACCOUNTS LIST"))
         self._sett_multisel_chk = _chk(
             "enable_multi_select", "Multi-Select (Ctrl / Shift + Click)",
