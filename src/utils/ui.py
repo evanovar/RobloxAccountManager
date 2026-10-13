@@ -3317,7 +3317,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 QMessageBox.critical(
                     self,
                     "Multi Roblox",
-                    "Roblox is still running. Close Roblox before enabling Default mode.",
+                    "Roblox is still running. Close all Roblox clients before enabling Multi Roblox.",
                 )
             elif msg == "HANDLE64_NOT_FOUND":
                 QMessageBox.critical(

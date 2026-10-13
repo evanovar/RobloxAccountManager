@@ -1903,18 +1903,18 @@ def _mr_h64_close_handles(
             closed_pids.add(pid)
     return closed_pids
 
-def _lock_roblox_cookies() -> dict:
-    """Prevent clients from reading or overwriting another account's native session."""
+def _lock_roblox_storage_file(filename: str) -> dict:
+    """Prevent clients from sharing persisted native account context."""
     local_appdata = os.getenv("LOCALAPPDATA", "")
     if not local_appdata:
         raise OSError("LOCALAPPDATA could not be located")
-    cookies_path = os.path.join(local_appdata, "Roblox", "LocalStorage", "RobloxCookies.dat")
-    os.makedirs(os.path.dirname(cookies_path), exist_ok=True)
+    storage_path = os.path.join(local_appdata, "Roblox", "LocalStorage", filename)
+    os.makedirs(os.path.dirname(storage_path), exist_ok=True)
     # Byte locks alone do not prevent another process from truncating a file.
     # Deny other opens, including CREATE_ALWAYS, while preserving existing data.
     try:
         native_handle = win32file.CreateFile(
-            cookies_path, win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+            storage_path, win32con.GENERIC_READ | win32con.GENERIC_WRITE,
             0, None, win32con.OPEN_ALWAYS, win32con.FILE_ATTRIBUTE_NORMAL, None,
         )
     except win32file.error as exc:
@@ -1938,7 +1938,10 @@ def _lock_roblox_cookies() -> dict:
     except OSError:
         cookie_file.close()
         raise
-    print("[Multi Roblox] Shared Roblox cookie store protected.")
+    if filename == "RobloxCookies.dat":
+        print("[Multi Roblox] Shared Roblox cookie store protected.")
+    else:
+        print("[Multi Roblox] Shared Roblox account context protected.")
     return {"file": cookie_file, "acquired": True, "offset": 0, "length": lock_length}
 
 
@@ -1970,10 +1973,19 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
             print(f"[Multi Roblox] {h64} is not signed by Microsoft, so it will not be run with administrator rights.")
             return False, "HANDLE64_UNVERIFIED"
 
+        if is_roblox_running():
+            print("[Multi Roblox] Close Roblox before protecting shared account context.")
+            handle64_trust.release_trusted_copies()
+            return False, "ROBLOX_RUNNING"
+
+        cookie_lock = None
         try:
-            cookie_lock = _lock_roblox_cookies()
+            cookie_lock = _lock_roblox_storage_file("RobloxCookies.dat")
+            app_storage_lock = _lock_roblox_storage_file("appStorage.json")
         except OSError as exc:
-            print(f"[Multi Roblox] Could not protect the shared cookie store: {exc}")
+            if cookie_lock:
+                cookie_lock["file"].close()
+            print(f"[Multi Roblox] Could not protect the shared login data: {exc}")
             handle64_trust.release_trusted_copies()
             return False, "ROBLOX_COOKIES_LOCK_FAILED"
 
@@ -1992,6 +2004,7 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
             "mutex": None,
             "file": cookie_lock["file"],
             "cookie_lock": cookie_lock,
+            "app_storage_lock": app_storage_lock,
             "session_id": session_id,
         }
         _mr_h64_thread.start()
@@ -2066,12 +2079,13 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         "mutexes": mutexes,
     }
     try:
-        cookie_lock = _lock_roblox_cookies()
+        cookie_lock = _lock_roblox_storage_file("RobloxCookies.dat")
+        _mr_handle.update(file=cookie_lock["file"], cookie_lock=cookie_lock)
+        _mr_handle["app_storage_lock"] = _lock_roblox_storage_file("appStorage.json")
     except OSError as exc:
-        print(f"[Multi Roblox] Could not protect the shared cookie store: {exc}")
+        print(f"[Multi Roblox] Could not protect the shared login data: {exc}")
         disable_multi_roblox()
         return False, "ROBLOX_COOKIES_LOCK_FAILED"
-    _mr_handle.update(file=cookie_lock["file"], cookie_lock=cookie_lock)
     print("[Multi Roblox] Started (default mode)")
     return True, ""
 
@@ -2209,23 +2223,24 @@ def disable_multi_roblox():
 
     if _mr_handle:
         state = _mr_handle
-        cookie_lock = state.get("cookie_lock") or {}
-        f = state.get("file")
-        if f and cookie_lock.get("acquired"):
-            try:
-                f.seek(cookie_lock.get("offset", 0))
-                msvcrt.locking(
-                    f.fileno(),
-                    msvcrt.LK_UNLCK,
-                    cookie_lock.get("length", 1),
-                )
-            except Exception as e:
-                print(f"[Multi Roblox] Failed to unlock cookie file: {e}")
-        if f:
-            try:
-                f.close()
-            except Exception:
-                pass
+        for lock_name, fallback_file in (("cookie_lock", state.get("file")), ("app_storage_lock", None)):
+            storage_lock = state.get(lock_name) or {}
+            f = storage_lock.get("file") or fallback_file
+            if f and storage_lock.get("acquired"):
+                try:
+                    f.seek(storage_lock.get("offset", 0))
+                    msvcrt.locking(
+                        f.fileno(),
+                        msvcrt.LK_UNLCK,
+                        storage_lock.get("length", 1),
+                    )
+                except Exception as e:
+                    print(f"[Multi Roblox] Failed to unlock native storage file: {e}")
+            if f:
+                try:
+                    f.close()
+                except Exception:
+                    pass
 
         mutexes = list(state.get("mutexes") or [])
         if not mutexes and state.get("mutex"):
