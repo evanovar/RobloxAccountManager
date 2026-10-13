@@ -24,6 +24,7 @@ from .encryption import (
 )
 from .operation_result import OperationResult, unexpected_result
 from .roblox_api import RobloxAPI
+lazy from features import account_actions, launch_monitor
 from utils.app_paths import get_data_dir
 
 class AccountManagerStartupError(Exception):
@@ -1128,8 +1129,6 @@ class RobloxAccountManager:
     
     def launch_roblox(self, username, game_id="", private_server_id="", launcher_preference="default", job_id="", custom_launcher_path=""):
         # All entry points (batch, Auto-Rejoin and WebSocket) share this gate.
-        from features import account_actions, launch_monitor
-
         with launch_monitor.LAUNCH_LOCK:
             session = account_actions._mr_handle if account_actions.is_multi_roblox_running() else None
             if session is not None:

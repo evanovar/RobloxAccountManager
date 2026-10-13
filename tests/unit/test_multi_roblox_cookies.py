@@ -1,11 +1,14 @@
 import os
+import threading
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from features import account_actions as actions
+from classes.account_manager import RobloxAccountManager
+from classes.operation_result import OperationResult
+from features import account_actions as actions, launch_monitor
 
 
 class SharedCookieProtectionTests(unittest.TestCase):
@@ -173,6 +176,76 @@ class SharedCookieProtectionTests(unittest.TestCase):
         for path in (self.path, self.app_storage_path):
             with open(path, "wb") as handle:
                 handle.write(b"available again")
+
+    def test_default_mode_is_not_published_before_both_guards_are_acquired(self):
+        kernel = MagicMock()
+        kernel.CreateMutexW.return_value = 101
+        protect = actions._lock_roblox_storage_file
+
+        def acquire(filename):
+            self.assertIsNone(actions._mr_handle)
+            self.assertFalse(actions.is_multi_roblox_running())
+            return protect(filename)
+
+        with patch.object(actions, "is_roblox_running", return_value=False), \
+                patch.object(actions.ctypes, "WinDLL", return_value=kernel), \
+                patch.object(actions, "_lock_roblox_storage_file", side_effect=acquire):
+            self.assertEqual(actions.enable_multi_roblox(), (True, ""))
+            self.assertTrue(actions.is_multi_roblox_running())
+            actions.disable_multi_roblox()
+
+    def test_startup_does_not_interrupt_an_in_progress_launch(self):
+        with launch_monitor.LAUNCH_LOCK:
+            with patch.object(actions, "disable_multi_roblox") as disable:
+                self.assertEqual(actions.enable_multi_roblox(), (False, "ROBLOX_LAUNCH_IN_PROGRESS"))
+        disable.assert_not_called()
+
+    def test_concurrent_ticket_dispatch_waits_until_both_guards_are_ready(self):
+        kernel = MagicMock()
+        kernel.CreateMutexW.return_value = 101
+        manager = RobloxAccountManager.__new__(RobloxAccountManager)
+        entered = threading.Event()
+        completed = threading.Event()
+        observations = []
+
+        def dispatch(*_args):
+            state = actions._mr_handle
+            observations.append(bool(state and state.get("cookie_lock") and state.get("app_storage_lock")))
+            return OperationResult.success()
+
+        manager._launch_roblox = MagicMock(side_effect=dispatch)
+
+        def launch():
+            entered.set()
+            try:
+                manager.launch_roblox("synthetic-account", "123")
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=launch, daemon=True)
+        protect = actions._lock_roblox_storage_file
+
+        def acquire(filename):
+            if filename == "RobloxCookies.dat":
+                thread.start()
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(completed.wait(0.1), "ticket dispatched before native protection")
+            return protect(filename)
+
+        with patch.object(actions, "is_roblox_running", return_value=False), \
+                patch.object(actions.ctypes, "WinDLL", return_value=kernel), \
+                patch.object(actions, "_lock_roblox_storage_file", side_effect=acquire), \
+                patch.object(launch_monitor, "wait_for_launch_slot", return_value=OperationResult.success()), \
+                patch.object(launch_monitor, "_snapshot", return_value={}), \
+                patch.object(launch_monitor, "confirm_launch", return_value=OperationResult.success()):
+            try:
+                self.assertEqual(actions.enable_multi_roblox(), (True, ""))
+            finally:
+                if thread.ident is not None:
+                    thread.join(2)
+                actions.disable_multi_roblox()
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(observations, [True])
 
     def test_default_mode_releases_mutexes_when_cookie_protection_fails(self):
         kernel = MagicMock()

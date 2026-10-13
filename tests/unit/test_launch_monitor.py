@@ -269,6 +269,48 @@ class StartupLogTests(unittest.TestCase):
             self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,", suffix)
         self.assertEqual(monitor._read_launch_state("987", 100.0), ("", False))
 
+    def test_join_and_challenge_markers_after_the_old_prefix_limit_are_read(self):
+        prefix = "web launch, websiteBTId is 987\n" + "startup details\n" * 7000
+        for ending, expected in (("[FLog::GameJoinLoadTime] userid:42,\n", ("42", False)),
+                                 ("status:403 challengedByGcs\n", ("", True))):
+            with self.subTest(expected=expected):
+                self.write_log(prefix + ending)
+                self.assertEqual(monitor._read_launch_state("987", 100.0), expected)
+
+    def test_incremental_reader_detects_appended_join_evidence(self):
+        self.write_log("web launch, websiteBTId is 987\n")
+        cache = {}
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("", False))
+        path = os.path.join(self.logs, "0.742_19700101T000140Z_Player_ABC_last.log")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("[FLog::GameJoinLoadTime] userid:42,\n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", False))
+
+    def test_partial_user_id_is_not_mistaken_for_a_different_account(self):
+        self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:4")
+        cache = {}
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("", False))
+        path = os.path.join(self.logs, "0.742_19700101T000140Z_Player_ABC_last.log")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("2,\n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", False))
+
+    def test_truncated_log_does_not_reuse_previous_join_evidence(self):
+        self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n")
+        cache = {}
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", False))
+        self.write_log("web launch, websiteBTId is 987\n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("", False))
+
+    def test_appended_challenge_is_detected_after_a_cached_join(self):
+        self.write_log("web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n")
+        cache = {}
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", False))
+        path = os.path.join(self.logs, "0.742_19700101T000140Z_Player_ABC_last.log")
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("status:403 challengedByGcs\n")
+        self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", True))
+
 
 class BatchSurvivalTests(unittest.TestCase):
     def test_exited_client_or_reused_pid_reduces_final_batch_count(self):

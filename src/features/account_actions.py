@@ -33,6 +33,7 @@ import features.handle64_trust as handle64_trust
 import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.settings_store as settings_store_mod
+lazy from features import launch_monitor
 from utils.app_paths import get_app_dir, get_data_dir
 from utils.atomic_io import quarantine_corrupt, write_json_atomic
 
@@ -141,11 +142,9 @@ def _batch_launch_result(
     failures: list[tuple[str, OperationResult]],
     successful_launches: list[tuple[str, OperationResult]] = (),
 ) -> OperationResult:
-    from features.launch_monitor import check_launched_client
-
     failures = list(failures)
     for username, launch in successful_launches:
-        checked = check_launched_client(launch, username)
+        checked = launch_monitor.check_launched_client(launch, username)
         if not checked:
             success_count -= 1
             failures.append((username, checked))
@@ -1946,6 +1945,17 @@ def _lock_roblox_storage_file(filename: str) -> dict:
 
 
 def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
+    # Startup changes the native context used by every launch entry point.
+    # Do not block the UI while an existing launch is being confirmed.
+    if not launch_monitor.LAUNCH_LOCK.acquire(blocking=False):
+        return False, "ROBLOX_LAUNCH_IN_PROGRESS"
+    try:
+        return _enable_multi_roblox(method)
+    finally:
+        launch_monitor.LAUNCH_LOCK.release()
+
+
+def _enable_multi_roblox(method: str) -> tuple[bool, str]:
     global _mr_handle
     global _mr_h64_monitoring, _mr_h64_thread, _mr_h64_path
     global _mr_h64_stop_event, _mr_h64_session_id
@@ -2074,18 +2084,19 @@ def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
         print(f"[Multi Roblox] Mutex setup error: {e}")
         return False, f"MUTEX_CREATE_ERROR: {e}"
 
-    _mr_handle = {
+    state = {
         "mode": "default",
         "mutexes": mutexes,
     }
     try:
         cookie_lock = _lock_roblox_storage_file("RobloxCookies.dat")
-        _mr_handle.update(file=cookie_lock["file"], cookie_lock=cookie_lock)
-        _mr_handle["app_storage_lock"] = _lock_roblox_storage_file("appStorage.json")
+        state.update(file=cookie_lock["file"], cookie_lock=cookie_lock)
+        state["app_storage_lock"] = _lock_roblox_storage_file("appStorage.json")
     except OSError as exc:
         print(f"[Multi Roblox] Could not protect the shared login data: {exc}")
-        disable_multi_roblox()
+        _release_multi_roblox_resources(state)
         return False, "ROBLOX_COOKIES_LOCK_FAILED"
+    _mr_handle = state
     print("[Multi Roblox] Started (default mode)")
     return True, ""
 
@@ -2223,71 +2234,74 @@ def disable_multi_roblox():
 
     if _mr_handle:
         state = _mr_handle
-        for lock_name, fallback_file in (("cookie_lock", state.get("file")), ("app_storage_lock", None)):
-            storage_lock = state.get(lock_name) or {}
-            f = storage_lock.get("file") or fallback_file
-            if f and storage_lock.get("acquired"):
-                try:
-                    f.seek(storage_lock.get("offset", 0))
-                    msvcrt.locking(
-                        f.fileno(),
-                        msvcrt.LK_UNLCK,
-                        storage_lock.get("length", 1),
-                    )
-                except Exception as e:
-                    print(f"[Multi Roblox] Failed to unlock native storage file: {e}")
-            if f:
-                try:
-                    f.close()
-                except Exception:
-                    pass
-
-        mutexes = list(state.get("mutexes") or [])
-        if not mutexes and state.get("mutex"):
-            mutexes = [{
-                "name": "ROBLOX_singletonEvent",
-                "handle": state.get("mutex"),
-                "owned": bool(state.get("mutex_owned")),
-            }]
-        if mutexes:
-            try:
-                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                kernel32.ReleaseMutex.restype = wintypes.BOOL
-                kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
-                kernel32.CloseHandle.restype = wintypes.BOOL
-                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-                for mutex_state in mutexes:
-                    mutex_name = mutex_state.get("name", "unknown")
-                    mutex_handle = mutex_state.get("handle")
-                    if not mutex_handle:
-                        continue
-                    mutex_owned = bool(mutex_state.get("owned"))
-                    if mutex_owned:
-                        ctypes.set_last_error(0)
-                        if not kernel32.ReleaseMutex(mutex_handle):
-                            print(
-                                f"[Multi Roblox] ReleaseMutex failed for "
-                                f"{mutex_name}. Error: "
-                                f"{ctypes.get_last_error()}"
-                            )
-                        else:
-                            print(
-                                f"[Multi Roblox] Mutex released: {mutex_name}"
-                            )
-
-                    ctypes.set_last_error(0)
-                    if not kernel32.CloseHandle(mutex_handle):
-                        print(
-                            f"[Multi Roblox] CloseHandle failed for "
-                            f"{mutex_name}. Error: {ctypes.get_last_error()}"
-                        )
-                    elif not mutex_owned:
-                        print(
-                            f"[Multi Roblox] Mutex handle closed without "
-                            f"releasing ownership: {mutex_name}"
-                        )
-            except Exception as e:
-                print(f"[Multi Roblox] Failed to close mutex handles: {e}")
-
         _mr_handle = None
+        _release_multi_roblox_resources(state)
         print("[Multi Roblox] Stopped.")
+
+
+def _release_multi_roblox_resources(state: dict) -> None:
+    for lock_name, fallback_file in (("cookie_lock", state.get("file")), ("app_storage_lock", None)):
+        storage_lock = state.get(lock_name) or {}
+        f = storage_lock.get("file") or fallback_file
+        if f and storage_lock.get("acquired"):
+            try:
+                f.seek(storage_lock.get("offset", 0))
+                msvcrt.locking(
+                    f.fileno(),
+                    msvcrt.LK_UNLCK,
+                    storage_lock.get("length", 1),
+                )
+            except Exception as e:
+                print(f"[Multi Roblox] Failed to unlock native storage file: {e}")
+        if f:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+    mutexes = list(state.get("mutexes") or [])
+    if not mutexes and state.get("mutex"):
+        mutexes = [{
+            "name": "ROBLOX_singletonEvent",
+            "handle": state.get("mutex"),
+            "owned": bool(state.get("mutex_owned")),
+        }]
+    if mutexes:
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.ReleaseMutex.restype = wintypes.BOOL
+            kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            for mutex_state in mutexes:
+                mutex_name = mutex_state.get("name", "unknown")
+                mutex_handle = mutex_state.get("handle")
+                if not mutex_handle:
+                    continue
+                mutex_owned = bool(mutex_state.get("owned"))
+                if mutex_owned:
+                    ctypes.set_last_error(0)
+                    if not kernel32.ReleaseMutex(mutex_handle):
+                        print(
+                            f"[Multi Roblox] ReleaseMutex failed for "
+                            f"{mutex_name}. Error: "
+                            f"{ctypes.get_last_error()}"
+                        )
+                    else:
+                        print(
+                            f"[Multi Roblox] Mutex released: {mutex_name}"
+                        )
+
+                ctypes.set_last_error(0)
+                if not kernel32.CloseHandle(mutex_handle):
+                    print(
+                        f"[Multi Roblox] CloseHandle failed for "
+                        f"{mutex_name}. Error: {ctypes.get_last_error()}"
+                    )
+                elif not mutex_owned:
+                    print(
+                        f"[Multi Roblox] Mutex handle closed without "
+                        f"releasing ownership: {mutex_name}"
+                    )
+        except Exception as e:
+            print(f"[Multi Roblox] Failed to close mutex handles: {e}")

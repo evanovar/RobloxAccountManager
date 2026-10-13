@@ -4,7 +4,7 @@ import re
 import os
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import psutil
@@ -20,11 +20,60 @@ _STABLE_SECONDS = 2.0
 _POLL_SECONDS = 0.2
 _TRACKER = re.compile(r"browsertrackerid[^0-9]{0,32}(\d+)", re.IGNORECASE)
 _WEB_TRACKER = re.compile(r"web launch, websiteBTId is (\d+)", re.IGNORECASE)
-_GAME_USER = re.compile(r"\[FLog::GameJoinLoadTime\].*\buserid:(\d+)", re.IGNORECASE)
+_GAME_USER = re.compile(r"\[FLog::GameJoinLoadTime\].*\buserid:(\d+)(?=[,\s])", re.IGNORECASE)
 
 
-def _read_launch_state(tracker, created):
+@dataclass
+class _StartupLogState:
+    identity: tuple[int, int] | None = None
+    mtime_ns: int = 0
+    offset: int = 0
+    partial: bytes = b""
+    matched: bool = False
+    user_id: str = ""
+    challenged: bool = False
+
+    def _evidence(self, line: bytes, tracker: str, complete: bool = True):
+        content = line.decode("utf-8", errors="replace")
+        matched = any(
+            match[1] == tracker and (complete or match.end() < len(content))
+            for match in _WEB_TRACKER.finditer(content)
+        )
+        user = _GAME_USER.search(content)
+        return matched, user[1] if user else "", "challengedByGcs" in content
+
+    def read(self, path: str, tracker: str):
+        with open(path, "rb") as handle:
+            stat = os.fstat(handle.fileno())
+            identity = (stat.st_dev, stat.st_ino)
+            if (identity != self.identity or stat.st_size < self.offset
+                    or (stat.st_size == self.offset and stat.st_mtime_ns != self.mtime_ns)):
+                self.identity = identity
+                self.offset = 0
+                self.partial = b""
+                self.matched = False
+                self.user_id = ""
+                self.challenged = False
+            handle.seek(self.offset)
+            while chunk := handle.read(64 * 1024):
+                self.offset += len(chunk)
+                lines = (self.partial + chunk).split(b"\n")
+                self.partial = lines.pop()
+                for line in lines:
+                    matched, user_id, challenged = self._evidence(line, tracker)
+                    self.matched |= matched
+                    self.user_id = self.user_id or user_id
+                    self.challenged |= challenged
+            self.mtime_ns = stat.st_mtime_ns
+        # A complete marker may be visible before its final newline is written.
+        # Keep that line pending so a split marker can be finished on the next poll.
+        matched, user_id, challenged = self._evidence(self.partial, tracker, complete=False)
+        return self.matched or matched, self.user_id or user_id, self.challenged or challenged
+
+
+def _read_launch_state(tracker, created, cache=None):
     """Read only the startup log carrying the exact tracker sent to this client."""
+    cache = {} if cache is None else cache
     logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
     matches = []
     try:
@@ -41,14 +90,14 @@ def _read_launch_state(tracker, created):
             started = datetime.strptime(timestamp[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
             if not -2 <= started - created <= 60:
                 continue
-            with open(os.path.join(logs_dir, filename), encoding="utf-8", errors="replace") as handle:
-                content = handle.read(100_000)
+            path = os.path.join(logs_dir, filename)
+            state = cache.setdefault((path, tracker), _StartupLogState())
+            matched, user_id, challenged = state.read(path, tracker)
         except (OSError, ValueError):
             continue
-        if tracker not in _WEB_TRACKER.findall(content):
+        if not matched:
             continue
-        user = _GAME_USER.search(content)
-        matches.append((user[1] if user else "", "challengedByGcs" in content))
+        matches.append((user_id, challenged))
     # Unknown/ambiguous evidence must never establish an authenticated join.
     return matches[0] if len(matches) == 1 else ("", False)
 
@@ -136,6 +185,7 @@ def confirm_launch(result, session, before, username):
     identity = None
     process = None
     ready_since = None
+    log_cache = {}
     while _session_active(session):
         current = _snapshot()
         matches = []
@@ -158,7 +208,7 @@ def confirm_launch(result, session, before, username):
             if identity is not None and identity != key:
                 ready_since = None
             identity, process = key, candidate
-            user_id, challenged = _read_launch_state(tracker, key[1])
+            user_id, challenged = _read_launch_state(tracker, key[1], log_cache)
             if challenged:
                 return OperationResult.failure(
                     "ROBLOX_SECURITY_CHALLENGE", "Roblox Verification Required",

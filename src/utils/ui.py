@@ -3319,6 +3319,13 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                     "Multi Roblox",
                     "Roblox is still running. Close all Roblox clients before enabling Multi Roblox.",
                 )
+            elif msg == "ROBLOX_LAUNCH_IN_PROGRESS":
+                QMessageBox.critical(
+                    self,
+                    "Multi Roblox",
+                    "A Roblox launch is still in progress. Wait for it to finish, "
+                    "then try enabling Multi Roblox again.",
+                )
             elif msg == "HANDLE64_NOT_FOUND":
                 QMessageBox.critical(
                     self,
