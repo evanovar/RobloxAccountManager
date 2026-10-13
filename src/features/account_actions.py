@@ -1913,19 +1913,19 @@ def _lock_roblox_storage_file(filename: str) -> dict:
     # Deny other opens, including CREATE_ALWAYS, while preserving existing data.
     try:
         native_handle = win32file.CreateFile(
-            storage_path, win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+            storage_path, win32con.GENERIC_READ,
             0, None, win32con.OPEN_ALWAYS, win32con.FILE_ATTRIBUTE_NORMAL, None,
         )
     except win32file.error as exc:
-        raise OSError(str(exc)) from exc
+        raise OSError(f"{filename}: {exc}") from exc
     try:
-        descriptor = msvcrt.open_osfhandle(int(native_handle), os.O_RDWR | os.O_BINARY)
+        descriptor = msvcrt.open_osfhandle(int(native_handle), os.O_RDONLY | os.O_BINARY)
     except OSError:
         native_handle.Close()
         raise
     native_handle.Detach()  # The descriptor now owns the Windows handle.
     try:
-        cookie_file = os.fdopen(descriptor, "r+b", buffering=0)
+        cookie_file = os.fdopen(descriptor, "rb", buffering=0)
     except OSError:
         os.close(descriptor)
         raise

@@ -40,6 +40,34 @@ class SharedCookieProtectionTests(unittest.TestCase):
         with open(self.path, "rb") as handle:
             self.assertEqual(handle.read(), b"existing session")
 
+    def test_readonly_stores_can_be_protected_without_changing_data_or_attributes(self):
+        os.makedirs(os.path.dirname(self.path))
+        for filename, path, lock_name in (
+            ("RobloxCookies.dat", self.path, "cookie_lock"),
+            ("appStorage.json", self.app_storage_path, "app_storage_lock"),
+        ):
+            with self.subTest(filename=filename):
+                with open(path, "wb") as handle:
+                    handle.write(b"existing readonly data")
+                actions.win32file.SetFileAttributes(path, actions.win32con.FILE_ATTRIBUTE_READONLY)
+                try:
+                    lock = actions._lock_roblox_storage_file(filename)
+                    actions._mr_handle = {lock_name: lock}
+                    with self.assertRaises(OSError), open(path, "rb"):
+                        pass
+                    actions.disable_multi_roblox()
+                    self.assertTrue(actions.win32file.GetFileAttributes(path) & actions.win32con.FILE_ATTRIBUTE_READONLY)
+                    with open(path, "rb") as handle:
+                        self.assertEqual(handle.read(), b"existing readonly data")
+                finally:
+                    actions.disable_multi_roblox()
+                    actions.win32file.SetFileAttributes(path, actions.win32con.FILE_ATTRIBUTE_NORMAL)
+
+    def test_protection_errors_identify_the_storage_file(self):
+        with patch.object(actions.win32file, "CreateFile", side_effect=actions.win32file.error(5, "CreateFile", "Access is denied.")):
+            with self.assertRaisesRegex(OSError, "RobloxCookies.dat"):
+                actions._lock_roblox_storage_file("RobloxCookies.dat")
+
     def test_missing_store_is_created_and_locked_before_first_launch(self):
         lock = actions._lock_roblox_storage_file("RobloxCookies.dat")
         actions._mr_handle = {"file": lock["file"], "cookie_lock": lock}
