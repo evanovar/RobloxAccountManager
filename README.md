@@ -103,19 +103,23 @@ uv run python src/main.py
 | Launch delay | Add a configurable delay between accounts during bulk launches. |
 | Launcher selection | Use Automatic, Bloxstrap, Fishstrap, Froststrap, Roblox Client, or a custom executable. |
 
+With Multi Roblox active, a game launch is confirmed only when the matching client log reports a join as the selected account. A verification challenge, account mismatch, or unconfirmed launch pauses further launches for that Multi Roblox session, including Auto-Rejoin. Close the affected clients, address any account verification on roblox.com, then restart Multi Roblox before launching again. Roblox Home launches confirm the client window rather than a game join.
+
 ### Multi Roblox and window management
 
 | Feature | Description |
 | :--- | :--- |
 | Default Multi Roblox | Pre-create the Roblox singleton mutex before clients launch. Existing Roblox clients must be closed before enabling this mode. |
-| Handle64 mode | Detect validated Roblox game processes and close their singleton handles with retry handling. Administrator access is required. |
-| Error 773 protection | Lock `RobloxCookies.dat` when possible while Multi Roblox is active. |
+| Handle64 mode | Detect validated Roblox game processes and close their singleton handles with retry handling. Administrator access is required, and existing Roblox clients must be closed before enabling this mode. |
+| Shared login protection | Lock `RobloxCookies.dat` and `appStorage.json` in both default and Handle64 modes to prevent clients from reading or overwriting another account's cached native context. Existing contents are preserved. Multi Roblox will not start if either file cannot be protected. |
 | Rename Roblox windows | Continuously map Roblox processes to accounts and rename windows to the account username or note. |
 | Window Grid | Arrange visible Roblox windows into an equal grid with a customizable global keyboard shortcut. |
 | Headless Manager | List running Roblox clients and hide or show selected windows. Hidden windows are restored when the application exits. The scan interval (3 to 60 seconds, 10 by default) can be changed under Settings > Roblox. |
 | Kill all Roblox processes | Close every validated Roblox game client from General settings. |
 | Roblox Installer Fix | Temporarily quarantine Roblox installer executables to prevent installer popups, then restore them on exit. |
 | RAM optimization | Optionally trim the working set of detected Roblox clients to a configured target. |
+
+While Multi Roblox protects the native files, Roblox cannot persist shared app configuration or account-picker state in `appStorage.json`. Protection lasts until Multi Roblox is disabled or RAM exits; close clients before starting another session. This prevents reuse of cached native account context, but does not establish which account an embedded CAPTCHA authenticates or prevent Roblox from requesting verification or locking an account.
 
 ### Auto-Rejoin and Anti-AFK
 

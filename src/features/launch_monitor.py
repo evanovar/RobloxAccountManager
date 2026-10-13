@@ -1,9 +1,11 @@
 """Serialize Multi Roblox launches until each matching client is ready."""
 
 import re
+import os
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 
 import psutil
 import win32con
@@ -17,6 +19,38 @@ _TIMEOUT = 120.0
 _STABLE_SECONDS = 2.0
 _POLL_SECONDS = 0.2
 _TRACKER = re.compile(r"browsertrackerid[^0-9]{0,32}(\d+)", re.IGNORECASE)
+_WEB_TRACKER = re.compile(r"web launch, websiteBTId is (\d+)", re.IGNORECASE)
+_GAME_USER = re.compile(r"\[FLog::GameJoinLoadTime\].*\buserid:(\d+)", re.IGNORECASE)
+
+
+def _read_launch_state(tracker, created):
+    """Read only the startup log carrying the exact tracker sent to this client."""
+    logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
+    matches = []
+    try:
+        filenames = os.listdir(logs_dir)
+    except OSError:
+        return "", False
+    for filename in filenames:
+        if not filename.endswith("_last.log") or "CrashHandler" in filename:
+            continue
+        timestamp = re.search(r"(\d{8}T\d{6}Z)_Player_", filename)
+        if not timestamp:
+            continue
+        try:
+            started = datetime.strptime(timestamp[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+            if not -2 <= started - created <= 60:
+                continue
+            with open(os.path.join(logs_dir, filename), encoding="utf-8", errors="replace") as handle:
+                content = handle.read(100_000)
+        except (OSError, ValueError):
+            continue
+        if tracker not in _WEB_TRACKER.findall(content):
+            continue
+        user = _GAME_USER.search(content)
+        matches.append((user[1] if user else "", "challengedByGcs" in content))
+    # Unknown/ambiguous evidence must never establish an authenticated join.
+    return matches[0] if len(matches) == 1 else ("", False)
 
 
 def _failure(code, message):
@@ -88,8 +122,16 @@ def confirm_launch(result, session, before, username):
     """A URL handoff is not success: require its exact tracker, window and readiness."""
     data = result.data if isinstance(result.data, dict) else {}
     tracker = str(data.get("browser_tracker_id", ""))
+    expected_user = str(data.get("expected_user_id", ""))
+    requires_join = data.get("requires_game_join", True)
     if not tracker:
         return _failure("LAUNCH_EVIDENCE_MISSING", "The launcher did not supply a launch tracker.")
+    if requires_join and expected_user in ("", "0"):
+        return OperationResult.failure(
+            "LAUNCH_ACCOUNT_ID_MISSING", "Account Identity Missing",
+            f"The saved user ID for {username} is missing. Further launches are paused. "
+            "Re-add the account before restarting Multi Roblox.",
+        )
     deadline = time.monotonic() + _TIMEOUT
     identity = None
     process = None
@@ -116,15 +158,30 @@ def confirm_launch(result, session, before, username):
             if identity is not None and identity != key:
                 ready_since = None
             identity, process = key, candidate
+            user_id, challenged = _read_launch_state(tracker, key[1])
+            if challenged:
+                return OperationResult.failure(
+                    "ROBLOX_SECURITY_CHALLENGE", "Roblox Verification Required",
+                    f"Roblox requested verification while launching {username}. "
+                    "Further launches are paused. Close the challenged client and verify "
+                    "the account on roblox.com before restarting Multi Roblox.",
+                )
+            if user_id and expected_user and user_id != expected_user:
+                return OperationResult.failure(
+                    "ROBLOX_ACCOUNT_MISMATCH", "Roblox Account Mismatch",
+                    f"The client launched for {username} joined as a different account. "
+                    "Further launches are paused. Close all Roblox clients before restarting Multi Roblox.",
+                    detail=f"Expected user ID {expected_user}; joined user ID {user_id}; PID {key[0]}.",
+                )
             handles_ready = (
                 session.get("mode") != "handle64"
                 or actions.singleton_handles_ready(set(current))
             )
-            if _has_main_window(key[0]) and handles_ready:
+            if _has_main_window(key[0]) and handles_ready and (not requires_join or user_id == expected_user):
                 if ready_since is None:
                     ready_since = time.monotonic()
                 if time.monotonic() - ready_since >= _STABLE_SECONDS:
-                    print(f"[SUCCESS] Confirmed Roblox client for {username}: PID {key[0]}")
+                    print(f"[SUCCESS] Confirmed Roblox {'game join' if requires_join else 'client window'} for {username}: PID {key[0]}")
                     return replace(result, data={**data, "process_identity": key})
             else:
                 ready_since = None
@@ -139,8 +196,8 @@ def confirm_launch(result, session, before, username):
         if time.monotonic() >= deadline:
             return _failure(
                 "ROBLOX_LAUNCH_UNCONFIRMED",
-                f"The Roblox client for {username} did not become ready within {_TIMEOUT:g} seconds. "
-                "Check open clients and the Console before retrying.",
+                f"The Roblox launch for {username} could not be verified within {_TIMEOUT:g} seconds. "
+                "Further launches are paused. Check open clients and the Console before restarting Multi Roblox.",
             )
         time.sleep(_POLL_SECONDS)
     return _failure("MULTI_ROBLOX_STOPPED", "Multi Roblox stopped while the client was starting.")
