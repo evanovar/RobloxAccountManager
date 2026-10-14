@@ -18,6 +18,8 @@ Evanovar RAM is an open source Windows desktop application for organizing Roblox
 
 [Download the latest release](https://github.com/evanovar/RobloxAccountManager/releases/latest) | [Documentation](https://www.evanovarram.com/documentation/developer) | [Discord](https://discord.gg/SZaZU8zwZA) | [Website](https://www.evanovarram.com/)
 
+[Developer Architecture](docs/architecture.md) — Internal organization, components, and major workflows for contributors.
+
 ![Evanovar RAM account manager interface](https://github.com/user-attachments/assets/6dab4d69-11fd-47d0-9348-db2aef5211fb)
 
 ## Table of contents
