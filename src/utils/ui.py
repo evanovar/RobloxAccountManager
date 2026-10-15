@@ -2732,10 +2732,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_press_spin.setRange(1, 10)
         self._afk_press_spin.setValue(1)
         self._afk_press_spin.setFixedWidth(60)
-        self._afk_press_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._afk_press_spin.setStyleSheet(
             f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
             f" color: {TEXT}; padding: 4px; border-radius: 3px; }}"
+            "QSpinBox::up-button, QSpinBox::down-button { width: 0; height: 0; border: 0; }"
         )
         self._afk_press_spin.valueChanged.connect(self._on_afk_setting_changed)
         row_press.addWidget(self._afk_press_spin)
@@ -2752,10 +2752,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_interval_spin.setRange(1, 120)
         self._afk_interval_spin.setValue(10)
         self._afk_interval_spin.setFixedWidth(60)
-        self._afk_interval_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._afk_interval_spin.setStyleSheet(
             f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
             f" color: {TEXT}; padding: 4px; border-radius: 3px; }}"
+            "QSpinBox::up-button, QSpinBox::down-button { width: 0; height: 0; border: 0; }"
         )
         self._afk_interval_spin.valueChanged.connect(self._on_afk_setting_changed)
         row_interval.addWidget(self._afk_interval_spin)
@@ -2797,12 +2797,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._afk_tooltip_size_spin.setSingleStep(10)
         self._afk_tooltip_size_spin.setValue(100)
         self._afk_tooltip_size_spin.setFixedWidth(60)
-        self._afk_tooltip_size_spin.setButtonSymbols(
-            QSpinBox.ButtonSymbols.NoButtons
-        )
         self._afk_tooltip_size_spin.setStyleSheet(
             f"QSpinBox {{ background: {INPUT}; border: 1px solid {LINE};"
             f" color: {TEXT}; padding: 4px; border-radius: 0; }}"
+            "QSpinBox::up-button, QSpinBox::down-button { width: 0; height: 0; border: 0; }"
         )
         self._afk_tooltip_size_spin.valueChanged.connect(
             self._on_afk_tooltip_size_changed
