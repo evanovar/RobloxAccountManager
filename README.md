@@ -10,7 +10,7 @@
 > Before you see this as a **"Virus"** or **"Unofficial,"** please read:
 > - **Project Status:** This project was inspired by the original Roblox Account Manager by ic3w0lf22. I recreated it in Python as a personal project because I thought it would be fun to build and learn from. It is not intended to be an official continuation of the original project.<br><br>
 > - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
-> - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
+> - **Release builds:** The repository's release workflow builds the executable from the source at the release tag.
 
 # Evanovar RAM
 
@@ -22,6 +22,7 @@ Evanovar RAM is an open source Windows desktop application for organizing Roblox
 
 ## Table of contents
 
+- [Highlights](#highlights)
 - [Installation](#installation)
 - [Features](#features)
 - [Data and privacy](#data-and-privacy)
@@ -38,10 +39,12 @@ Evanovar RAM is an open source Windows desktop application for organizing Roblox
 - Launch one or many accounts into public games, private servers, specific jobs, or small servers.
 - Run multiple Roblox clients using the default mutex method or Handle64 mode.
 - Monitor and recover sessions with Auto-Rejoin, Anti-AFK, activity data, and structured diagnostics.
-- Manage Roblox windows with custom titles, headless mode, global grid tiling, and process controls.
-- Edit Roblox settings through basic presets or a searchable advanced settings editor.
-- Protect saved account data with hardware encryption or password encryption.
+- Find games with the Games Selector and retrieve owned private server links with the Private Server Manager.
+- Manage Roblox windows with custom titles, hide/show controls, global grid tiling, and process controls.
+- Search and edit Roblox settings through a saved local profile with optional Auto Apply.
+- Protect saved account data with hardware encryption or password encryption, and export password-protected account backups.
 - Use Chrome, Firefox, Edge, or the optional portable Chromium browser for account login flows.
+- Customize the interface with color themes, image/GIF/video backgrounds, and detachable pages.
 
 ## Installation
 
@@ -62,7 +65,7 @@ Requirements:
 - Python 3.15 (uv installs the required version automatically)
 - [uv](https://docs.astral.sh/uv/) 0.13.0 or newer
 - Git
-- Chrome, Firefox, or Edge for browser login, unless portable Chromium is installed from the application
+- Chrome, Firefox, or Edge for browser login, unless portable Chromium is downloaded from the application. Cookie import does not require a browser.
 
 ```powershell
 git clone https://github.com/evanovar/RobloxAccountManager.git
@@ -77,30 +80,34 @@ uv run python src/main.py
 
 | Feature | Description |
 | :--- | :--- |
-| Browser login | Add an account through a supported browser and save it to the local account list. |
+| Browser login | Open the selected supported browser, sign in to Roblox, and save the authenticated account to the local list. |
 | Cookie import | Import one or multiple `.ROBLOSECURITY` cookies. |
 | User and password import | Import credentials manually or from a `User:Pass` text file. Login sessions run in batches of up to five browsers, which can be lowered to as few as one under Settings > General. |
-| Account Creator | Create up to 100 accounts in one operation with up to five browser sessions, an optional custom prefix, and an optional shared password. |
-| JavaScript login | Open multiple browser sessions and run custom JavaScript for advanced login workflows. |
+| Account Creator | Prepare signup details for 1 to 100 accounts with up to five browser sessions. Choose generated passwords or a shared password, and optionally add a username prefix. Any CAPTCHA must be completed manually in the browser. |
+| JavaScript login | Open one login browser and optionally run supplied JavaScript after the page loads. |
 | Account search | Filter the list by username, note, group or user ID with the search box above the list (Ctrl+F focuses it, Esc clears it). Every word has to match. |
-| Groups and notes | Organize accounts into groups and assign notes to one or multiple selected accounts. |
-| Account list controls | Use avatars, drag-and-drop ordering, multi-select actions, refresh, deletion, and controlled password or cookie copying. |
-| Cookie status | Detect unauthorized cookies while keeping rate limits and temporary validation failures separate from invalid accounts. The startup check and the delay between accounts can be changed under Settings > General. |
+| Groups and notes | Create, rename, or delete groups, move accounts between them, filter by group, and assign notes to one or multiple selected accounts. |
+| Account list controls | Use avatars, drag-and-drop ordering, list refresh, and account removal. Enable Ctrl/Shift multi-select under Settings > General for batch actions. |
+| Copy and text export | Copy a selected account's username, saved password, or `User:Pass`, with multiple accounts selected, save the chosen contents to a text file. Cookie copying/export must be enabled under Settings > Developer. Passwords are available only when saved with the account. |
+| Cookie status | Check saved cookies on startup and flag repeated unauthorized responses. Temporary failures remain unknown, and rate limiting pauses the check. Startup checking and the delay between accounts are configurable under Settings > General. |
 | Avatar cache | Avatars are saved locally and downloaded again once they are 7 days old (change it under Settings > General, 0 keeps them forever). If a refresh fails the older copy is still shown, and copies for accounts that no longer exist are cleaned up. |
-| Activity data | Display online status, Roblox memory usage, and CPU usage beside saved accounts. |
+| Account Activity Monitor | Optionally show detected local Roblox clients and their combined RAM and CPU usage beside saved accounts. It scans local processes every 5 seconds, it does not report the account's presence on other devices. |
 
 ### Game launching
 
 | Feature | Description |
 | :--- | :--- |
 | Place launch | Launch one or multiple selected accounts into a Place ID. |
+| Roblox Home | Launch the Roblox application for one or multiple selected accounts without specifying a game. |
+| Games Selector | Use the search icon beside Place ID to browse popular games or search by name. Switch between thumbnail grid and list views, page through results, and apply a game's Place ID to the launch field. |
 | Private servers | Resolve current and legacy private server links. A Place ID inside the link is used when the Place ID field is empty. |
-| Join User | Resolve a username or user ID and join the user's current game when permitted. |
+| Private Server Manager | Open it from the Private Server Link dropdown to list a saved account's owned private servers, optionally filtered by Place ID. View active/inactive status, copy a join link, or apply it to the launch fields. If a link is missing, the app can request a new join code after confirmation, this replaces the current code on Roblox. |
+| Join User | Enter a Roblox username and join the user's current game when Roblox returns joinable game information. |
 | Job ID | Join a specific running server by Place ID and Job ID. |
 | Small Server | Find and join a server with a low player count. |
 | Game favorites | Save a Place ID with its optional private server link, select it from the Place ID list, or remove it from the context menu. |
-| Recent games | Save recent public and private server launches. Private entries are marked with `[P]`. |
-| Launch delay | Add a configurable delay between accounts during bulk launches. |
+| Recent games | Keep recent public and private server launches, marked with `[P]` for private entries. Double-click to fill the launch fields or remove an entry from the context menu. The history limit is configurable under Settings > General. |
+| Launch controls | Optionally confirm UI launch actions and set an additional delay between accounts during bulk launches under Settings > General. |
 | Launcher selection | Use Automatic, Bloxstrap, Fishstrap, Froststrap, Roblox Client, or a custom executable. |
 
 With Multi Roblox active, a game launch is confirmed only when the matching client log reports a join as the selected account. A verification challenge, account mismatch, or unconfirmed launch pauses further launches for that Multi Roblox session, including Auto-Rejoin. Close the affected clients, address any account verification on roblox.com, then restart Multi Roblox before launching again. Roblox Home launches confirm the client window rather than a game join.
@@ -110,16 +117,16 @@ With Multi Roblox active, a game launch is confirmed only when the matching clie
 | Feature | Description |
 | :--- | :--- |
 | Default Multi Roblox | Pre-create the Roblox singleton mutex before clients launch. Existing Roblox clients must be closed before enabling this mode. |
-| Handle64 mode | Detect validated Roblox game processes and close their singleton handles with retry handling. Administrator access is required, and existing Roblox clients must be closed before enabling this mode. |
-| Shared login protection | Lock `RobloxCookies.dat` and `appStorage.json` in both default and Handle64 modes to prevent clients from reading or overwriting another account's cached native context. Existing contents are preserved. Multi Roblox will not start if either file cannot be protected. |
+| Handle64 mode | Detect validated Roblox game processes and close their singleton handles with retry handling. Administrator access and a Microsoft-signed Handle64 executable are required, the app includes a download button. Existing Roblox clients must be closed before enabling this mode. |
+| Shared login protection | Block access to the shared `RobloxCookies.dat` and `appStorage.json` files while either Multi Roblox mode is active. Existing contents are preserved. Multi Roblox will not start if either file cannot be protected. |
 | Rename Roblox windows | Continuously map Roblox processes to accounts and rename windows to the account username or note. |
-| Window Grid | Arrange visible Roblox windows into an equal grid with a customizable global keyboard shortcut. |
-| Headless Manager | List running Roblox clients and hide or show selected windows. Hidden windows are restored when the application exits. The scan interval (3 to 60 seconds, 10 by default) can be changed under Settings > Roblox. |
-| Kill all Roblox processes | Close every validated Roblox game client from General settings. |
+| Window Grid | Arrange visible Roblox windows into an equal grid on the monitor under the cursor. Enable the global shortcut under Settings > Roblox, its default is Ctrl+Shift+A and it can be changed. |
+| Headless Manager | List identified running Roblox clients and hide or show selected windows while the clients keep running. Hidden windows are restored on normal application exit. The scan interval (3 to 60 seconds, 10 by default) is configurable under Settings > Roblox. |
+| Kill All Roblox | Use the navigation-panel button to close validated Roblox game clients after confirmation. |
 | Roblox Installer Fix | Temporarily quarantine Roblox installer executables to prevent installer popups, then restore them on exit. |
-| RAM optimization | Optionally trim the working set of detected Roblox clients to a configured target. |
+| RAM working-set trimming | The optional RAM Boost worker checks clients every 15 seconds and requests working-set trimming when usage reaches the configured threshold. The value is a trigger, not an enforced memory cap. The UI marks this option as potentially causing crashes. |
 
-While Multi Roblox protects the native files, Roblox cannot persist shared app configuration or account-picker state in `appStorage.json`. Protection lasts until Multi Roblox is disabled or RAM exits; close clients before starting another session. This prevents reuse of cached native account context, but does not establish which account an embedded CAPTCHA authenticates or prevent Roblox from requesting verification or locking an account.
+While Multi Roblox protects the native files, Roblox cannot persist shared app configuration or account-picker state in `appStorage.json`. Protection lasts until Multi Roblox is disabled or RAM exits, close clients before starting another session. This protection does not bypass Roblox verification or establish which account an embedded CAPTCHA authenticates.
 
 ### Auto-Rejoin and Anti-AFK
 
@@ -127,19 +134,22 @@ While Multi Roblox protects the native files, Roblox cannot persist shared app c
 | :--- | :--- |
 | Per-account Auto-Rejoin | Monitor configured accounts and relaunch them after a client exits or disconnects. |
 | Flexible destinations | Configure a Place ID, private server, or Job ID for each Auto-Rejoin entry. |
+| Join a user automatically | Configure a target username or user ID. Auto-Rejoin resolves that user's current server when launching or rejoining, and waits if the user is offline or Roblox does not expose the server. |
+| Monitoring controls | Choose the check interval, maximum retries, internet checking, and whether to check account presence and the joined game. Add multiple accounts with the same configuration, edit individual entries, and start or stop one or all workers. |
 | Process cleanup | Track account processes and close stale disconnected clients before relaunching. |
-| Network handling | Wait for connectivity and stagger relaunch attempts to reduce duplicate clients. |
-| Anti-AFK actions | Record a keyboard or mouse action, press count, and maintenance interval. |
+| Network handling | Optionally wait for connectivity and stagger presence checks and launches. Unavailable presence responses are kept separate from confirmed disconnects. |
+| Anti-AFK actions | Record a keyboard or mouse action, choose the press count and interval, and send it to detected Roblox windows. Maintenance temporarily focuses each window and then attempts to restore the previous window state and focus. |
+| Anti-AFK controls | Trigger maintenance immediately, enable or disable the countdown tooltip, preview it, and adjust its size. |
 | Headless support | Temporarily restore hidden Roblox windows for Anti-AFK maintenance, then return them to their previous state. |
 
 ### Roblox tools and settings
 
 | Feature | Description |
 | :--- | :--- |
-| Basic Roblox settings | Enable presets for Framerate Cap, Master Volume, and Start Quality. Enabled presets apply before Roblox launches. |
-| Advanced settings editor | Search and edit values from `GlobalBasicSettings_13.xml` through a local settings profile. |
-| Advanced Auto Apply | Apply the saved advanced profile on application startup and before Roblox launches, with basic presets taking priority. |
-| Roblox Downloader | Download the latest LIVE Windows Roblox Player deployment or a specific version hash to a chosen folder. |
+| Roblox settings editor | Search settings from `GlobalBasicSettings_13.xml`, inspect their types, and edit supported values through a saved local profile. Changes are marked pending until applied. Reload from Roblox or use Apply to Roblox, close Roblox before applying changes. |
+| Settings file location | Use the default Roblox settings XML file or browse for a custom file. The editor shows the active path. |
+| Auto Apply Settings | Apply the saved profile on application startup and before launches. While enabled, the app marks the settings XML read-only and releases its own read-only lock on normal exit. |
+| Roblox Downloader | Download and extract the latest LIVE Windows Roblox Player deployment to Roblox's default Versions folder. Enable Customizations to choose a version hash or destination folder. |
 | Portable Chromium | Download or reinstall the latest supported Chromium build and its matching driver. |
 | Browser selection | Choose Chrome, Firefox, Edge, or portable Chromium for automated browser flows. Brave and Opera GX users can use portable Chromium. |
 
@@ -150,14 +160,16 @@ While Multi Roblox protects the native files, Roblox cannot persist shared app c
 | Smooth animations | Buttons light up when you point at or click them and pages fade in. This can be turned off under Settings > General, and it is off automatically when Windows animations are off. |
 | Loading screen | A small window with the version and a progress bar shows while the app starts and fades into the main window. It can be turned off under Settings > General. |
 | Color themes | Pick one of eight color presets (Default, Midnight, AMOLED Black, Nord, Dracula, Solarized Dark, Forest, Rose) and optionally your own accent color under Settings > Themes, with a live preview. The choice is applied the next time the application starts. |
+| Custom backgrounds | Choose a local image, animated GIF, or video under Settings > Themes, adjust the Opacity Blur slider, and customize text, muted text, outlines, and surface tint. Background changes apply immediately, Reset Theme restores the background defaults. |
+| Detachable pages | Right-click a navigation page and choose Open in New Window. Show or reattach it from the same menu, closing the detached window also reattaches it. |
+| Window preferences | Resize the main window, keep its saved size between runs, or enable Always on Top under Settings > General. |
 | System tray | Hide the main window to the system tray, restore it from the tray icon, or exit from the tray menu. |
 | Windows startup | Optionally start Evanovar RAM with Windows and add a Start Menu shortcut. |
-| Update manager | Check GitHub releases on startup or with Check for Updates Now, read the release notes, and skip a version you do not want. Downloads are verified, installed with a backup that is restored if anything fails, and the application starts again by itself. |
-| Discord webhooks | Send selected log levels, Auto-Rejoin events, optional mentions, and periodic screenshots to a configured webhook. |
-| WebSocket server | Run an optional local command server with a configurable port and encrypted password storage. Password-protected commands use `AUTH <password> | <command>`. Connections from web pages are refused unless the page origin is listed under `websocket_allowed_origins` in `AccountManagerData/ui_settings.json`. After 10 wrong passwords within a minute, further attempts are refused for a while, and `websocket_max_auth_failures` in the same file changes that limit (0 turns it off). |
-| Console | Review timestamped, color-coded application output and copy or clear the current console view. |
+| Update manager | Check GitHub releases on startup or manually, read release notes, skip a version, or open Manual Download. Compiled builds can download and install an update automatically, with a backup during executable replacement and an application restart. Source runs use Manual Download. |
+| WebSocket server | Enable Developer Mode and the optional local command server under Settings > Developer. Configure its port and optional password to query accounts, import cookies, launch games, and control configured Auto-Rejoin workers. |
+| Console | Review color-coded application output and copy or clear the current console view. |
 | Structured errors | Show specific error codes and technical details instead of generic failure messages. |
-| Crash diagnostics | Save timestamped session and crash logs under `AccountManagerData/logs`. Error dialogs can copy the message or the full log. Only the newest 20 logs of each kind are kept by default, which can be changed under Settings > General. |
+| Crash and hang diagnostics | Save session, UI-hang, and update logs under `AccountManagerData/logs`, and exception reports under `AccountManagerData/crash_logs`. Error dialogs can copy the message or session log. Startup keeps the newest 20 files of each kind by default, change Log Files to Keep under Settings > General (0 keeps everything). |
 
 ### Security and local data
 
@@ -168,22 +180,27 @@ While Multi Roblox protects the native files, Roblox cannot persist shared app c
 | No encryption | Store account data without encryption when explicitly selected. |
 | Encryption switching | Re-encrypt saved accounts and secure settings when changing encryption methods. |
 | Encryption status | Display the active hardware, password, or unencrypted state beside the account list. |
+| Local account recovery | Save accounts atomically and keep `saved_accounts.json.bak`. If the main file cannot be read, the app attempts to load a compatible backup and warns that recent changes may be missing. |
 | Account backup | Export all accounts to a file protected by a password you choose and import them again from Settings > Misc, for example to move them to another computer. Existing accounts are kept unless you choose to replace them. |
 | Data removal | Wipe local application data from Settings > Misc. |
 
 ## Data and privacy
 
-Evanovar RAM stores its persistent data in `AccountManagerData`. This includes saved accounts, settings, groups, recent games, local Roblox settings, avatar cache, and diagnostic logs.
+Evanovar RAM stores its application data in `AccountManagerData`. This includes saved accounts and their backup, encryption configuration, groups, favorites, recent games, Auto-Rejoin configurations, UI preferences, the local `RobloxSettings.json` profile, avatar cache, and diagnostic logs. Downloaded portable Chromium is also kept there. Custom background media is read from the path you choose.
 
 By default this folder is created next to the application. To keep the data somewhere else, or to run separate profiles side by side, start the application with `--data-dir "D:/Profiles/Alt"` or set the `RAM_DATA_DIR` environment variable. The option wins over the variable, and relative paths, `~` and `%VARIABLES%` are expanded.
 
-The application does not include hidden telemetry, advertising SDKs, or analytics tracking. Network communication is limited to enabled or requested functionality:
+The application does not include a telemetry or advertising integration. Network requests support account operations and enabled or requested features:
 
-- Roblox API requests for account, game, presence, authentication, and download features.
+- Roblox APIs and content servers for login/signup, cookie validation, account details, avatars, game search, presence, private server links, authentication, and client downloads.
 - GitHub requests for release and update checks.
+- Google's Chromium snapshot storage for the optional portable browser and matching driver. Selenium can also obtain drivers for installed browsers.
+- Microsoft Sysinternals for the optional Handle64 download.
 - Connectivity checks used by Auto-Rejoin. They use Google and Cloudflare by default, and `connectivity_check_urls` in `AccountManagerData/ui_settings.json` can replace them with your own list of addresses.
 
-Account cookies and stored WebSocket passwords remain local unless the user explicitly enables a feature that sends related data elsewhere.
+Saved cookies are sent to Roblox to authenticate account operations, including the default startup cookie check. Local account data and the WebSocket password use the selected encryption method, choosing No Encryption stores them as plaintext. Ordinary settings, groups, favorites, recent-game entries, and Auto-Rejoin configurations are not covered by account encryption and can include private server links.
+
+Account backups made with Export Accounts use their own password. Copy Contents exports are plain text. Diagnostics redact recognized cookie, password, authentication-ticket, and private-link patterns before writing application logs.
 
 ## Build from source
 
@@ -206,15 +223,17 @@ Depending on enabled features, Evanovar RAM can:
 - Create and update files under `AccountManagerData`.
 - Register or remove Windows startup and Start Menu entries.
 - Download portable Chromium, Handle64, or Roblox deployment files when requested.
-- Temporarily mark Roblox settings as read-only when Advanced Auto Apply is enabled.
+- Temporarily mark Roblox settings as read-only when Auto Apply Settings is enabled.
+- Write changes to the selected Roblox settings XML file and keep a `.ram.bak` backup beside it.
+- Hold exclusive locks on Roblox's shared native login files while Multi Roblox is active.
 - Temporarily move Roblox installer files into the application quarantine folder.
 
 To uninstall:
 
-1. Exit the application from the window or system tray.
-2. Delete the application folder or executable.
-3. Delete `AccountManagerData` to remove saved accounts, settings, and logs.
-4. Remove any startup or Start Menu entry that was enabled in the application.
+1. Disable Roblox Installer Fix if enabled, then exit the application normally from the window or system tray so temporary resources can be released.
+2. Remove any startup or Start Menu entry that was enabled in the application.
+3. Delete the application folder or executable.
+4. Delete `AccountManagerData`, or the custom data directory you selected, to remove saved accounts, settings, downloads, and logs. Separately remove any exported backups, text exports, or Roblox deployments you saved elsewhere if they are no longer needed.
 
 ## Disclaimer
 
