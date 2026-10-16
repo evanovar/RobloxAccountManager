@@ -126,11 +126,18 @@ def probe_open_log_paths(
     try:
         with tempfile.TemporaryDirectory(prefix="ram-window-probe-") as folder:
             result_path = os.path.join(folder, "result.json")
+            startupinfo = None
+            if os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
+                # A frozen helper is a GUI executable; suppress Windows' startup
+                # feedback cursor as well as hiding its console window.
+                startupinfo.dwFlags |= subprocess.STARTF_FORCEOFFFEEDBACK
             process = subprocess.Popen(
                 _helper_command(key, result_path),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                startupinfo=startupinfo,
             )
             try:
                 deadline = time.monotonic() + max(0.0, timeout)
