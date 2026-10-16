@@ -467,17 +467,6 @@ class PresenceScanner:
                 )
                 snapshot[username] = entry
 
-            if len(clients) < len(current_processes):
-                # An unidentified local client could belong to any otherwise
-                # unmatched account. Do not claim those accounts are stopped.
-                for username in uid_map.values():
-                    snapshot.setdefault(username, {
-                        "clients": [], "pids": [], "state": "unknown", "hollow": False,
-                        "tooltip": "State unknown: a local Roblox client could not be matched to an account.\n"
-                                   "It may belong to this account or another account.",
-                        "ram_available": False, "cpu_available": False,
-                    })
-
             if self._stop_evt.is_set():
                 return
             self.latest_snapshot = snapshot
@@ -490,24 +479,11 @@ class PresenceScanner:
                 f"[ERROR] Account Activity Monitor scan failed: "
                 f"{type(exc).__name__}: {exc}"
             )
-            # A failed observation is not an empty scan or proof of disconnection.
-            snapshot = {}
-            for username, metrics in self.latest_snapshot.items():
-                entry = dict(metrics)
-                entry["clients"] = [
-                    {**client, "client_state": "unknown", "window_visible": None,
-                     "place_id": "", "job_id": "", "reason": "Status scan failed; waiting for a fresh observation."}
-                    for client in metrics.get("clients", [])
-                ]
-                entry.update(state="unknown", tooltip="Status scan failed; waiting for a fresh observation.",
-                             ram_available=False, cpu_available=False)
-                snapshot[username] = entry
+            # Process/window observation failures do not change dot colors.
+            snapshot = {
+                username: {**metrics, "ram_available": False, "cpu_available": False}
+                for username, metrics in self.latest_snapshot.items()
+            }
             if not self._stop_evt.is_set():
-                for username in _build_uid_map(self._manager).values():
-                    snapshot.setdefault(username, {
-                        "clients": [], "pids": [], "state": "unknown", "hollow": False,
-                        "tooltip": "Status scan failed; waiting for a fresh observation.",
-                        "ram_available": False, "cpu_available": False,
-                    })
                 self.latest_snapshot = snapshot
                 self._on_update(snapshot)

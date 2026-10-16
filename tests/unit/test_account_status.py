@@ -30,20 +30,20 @@ class ClientLogTests(unittest.TestCase):
         self.assertEqual(self.log.state, "game")
         self.assertEqual((self.log.place_id, self.log.job_id), ("", ""))
         self.append("[FLog::Network] Time to disconnect replication data: 1\n")
-        self.assertEqual(self.log.state, "unknown")
+        self.assertEqual(self.log.state, "error")
 
     def test_home_requires_signed_in_desktop_evidence(self):
         self.append("[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
-        self.assertEqual(self.log.state, "unknown")
+        self.assertIsNone(self.log.state)
         self.append("[FLog::SingleSurfaceApp] userDidLogin\n")
         self.assertEqual(self.log.state, "home")
         self.append("[FLog::SingleSurfaceApp] launchUGCGameInternal\n")
-        self.assertEqual(self.log.state, "unknown")
+        self.assertEqual(self.log.state, "home")
         self.append("[FLog::Network] Replicator created: server\n")
         self.append("[FLog::SingleSurfaceApp] userDidLogin\n")
         self.assertEqual(self.log.state, "game")
         self.append("[FLog::SingleSurfaceApp] returnToLuaApp: (stage:UGCGame).\n")
-        self.assertEqual(self.log.state, "unknown")
+        self.assertEqual(self.log.state, "game")
         self.append("[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
         self.assertEqual(self.log.state, "home")
 
@@ -52,13 +52,14 @@ class ClientLogTests(unittest.TestCase):
                     "[FLog::Network] Replicator created: server\n")
         self.assertEqual((self.log.state, self.log.place_id, self.log.job_id), ("game", "42", "first-job"))
         self.append("[FLog::UgcExperienceController] doTeleport: joinScriptUrl\n")
-        self.assertEqual((self.log.state, self.log.place_id), ("unknown", ""))
+        self.assertEqual((self.log.state, self.log.place_id), ("game", ""))
         self.append("[FLog::Network] Replicator created: server\n")
         self.assertEqual(self.log.state, "game")
 
     def test_partial_line_is_not_used_before_it_is_complete(self):
         self.append("[FLog::Network] Replicator crea")
-        self.assertEqual(self.log.state, "unknown")
+        self.assertIsNone(self.log.state)
+        self.assertFalse(self.log.available)
         self.append("ted: server\n")
         self.assertEqual(self.log.state, "game")
 
@@ -66,13 +67,13 @@ class ClientLogTests(unittest.TestCase):
         self.append("[FLog::Network] Replicator created: server\n")
         self.path.write_text("reset\n")
         self.log.read(str(self.path))
-        self.assertEqual(self.log.state, "unknown")
+        self.assertEqual(self.log.state, "error")
         self.append("[FLog::Network] Replicator created: server\n")
         replacement = self.path.with_suffix(".new")
         replacement.write_text("new log without connection evidence\n")
         replacement.replace(self.path)
         self.log.read(str(self.path))
-        self.assertEqual(self.log.state, "unknown")
+        self.assertEqual(self.log.state, "error")
 
     def test_unreadable_log_invalidates_connection_evidence(self):
         self.append("[FLog::Network] Replicator created: server\n")
@@ -80,12 +81,23 @@ class ClientLogTests(unittest.TestCase):
         self.log.read(str(self.path))
         self.assertFalse(self.log.available)
 
-    def test_signout_or_challenge_is_unknown(self):
-        for marker in ("[FLog::SingleSurfaceApp] userDidLogout", "challengedByGcs"):
+    def test_ignored_transitions_preserve_last_color(self):
+        for marker in ("[FLog::SingleSurfaceApp] userDidLogout", "challengedByGcs",
+                       "[FLog::SingleSurfaceApp] shutDown: (stage:LuaApp).",
+                       "[FLog::SingleSurfaceApp] destroyLuaApp:",
+                       "[FLog::SingleSurfaceApp] launchUGCGameInternal",
+                       "[FLog::SingleSurfaceApp] returnToLuaApp:"):
             self.append("[FLog::SingleSurfaceApp] initializeLuaAppWithLoggedInUser:\n"
                         "[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
             self.append(marker + "\n")
-            self.assertEqual(self.log.state, "unknown")
+            self.assertEqual(self.log.state, "home")
+
+    def test_joining_does_not_clear_red_until_a_confirmed_state_arrives(self):
+        self.append("[FLog::Network] Time to disconnect replication data: 1\n")
+        self.append("[FLog::Output] ! Joining game 'next' place 42 at server\n")
+        self.assertEqual(self.log.state, "error")
+        self.append("[FLog::Network] Replicator created: server\n")
+        self.assertEqual(self.log.state, "game")
 
 
 class StatusAggregationTests(unittest.TestCase):
@@ -97,13 +109,13 @@ class StatusAggregationTests(unittest.TestCase):
         self.assertIn("Connected to a game server", result["tooltip"])
 
     def test_headless_home_and_game_keep_their_color_and_outline(self):
-        for state in ("home", "game", "unknown"):
+        for state in ("home", "game", "error"):
             result = status.summarize_processes([client(state, visible=False)], {(123, 100.0)})
             self.assertEqual(result["state"], state)
             self.assertTrue(result["hollow"])
 
     def test_multiple_clients_follow_priority_and_mixed_mode_is_solid(self):
-        rows = [client("home", pid=1), client("unknown", pid=2), client("game", pid=3, visible=False)]
+        rows = [client("home", pid=1), client("error", pid=2), client("game", pid=3, visible=False)]
         result = status.summarize_processes(rows, {(1, 100.0)})
         self.assertEqual(result["state"], "home")
         self.assertFalse(result["hollow"])
@@ -115,8 +127,8 @@ class StatusAggregationTests(unittest.TestCase):
         result = status.summarize_processes([client()], {(123, 99.0)})
         self.assertFalse(result["hollow"])
 
-    def test_window_inspection_failure_is_unknown_even_with_old_connection(self):
-        self.assertEqual(status.summarize_processes([client(visible=None)], set())["state"], "unknown")
+    def test_window_inspection_failure_does_not_override_last_connection(self):
+        self.assertEqual(status.summarize_processes([client(visible=None)], set())["state"], "game")
 
 
 class StatusTrackerTests(unittest.TestCase):
@@ -179,10 +191,10 @@ class StatusTrackerTests(unittest.TestCase):
         self.processes[124] = (100.0, self.process)
         self.assertEqual(self.scan(), {})
 
-    def test_missing_log_keeps_known_process_grey_and_exit_removes_it(self):
+    def test_missing_log_makes_known_process_red_and_exit_removes_it(self):
         self.scan()
         self.path.unlink()
-        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "unknown")
+        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
         self.processes.clear()
         self.assertEqual(self.scan(), {})
         self.assertFalse(self.tracker._bindings)
@@ -196,7 +208,26 @@ class StatusTrackerTests(unittest.TestCase):
     def test_read_failure_does_not_inherit_blue(self):
         self.scan()
         with patch("builtins.open", side_effect=PermissionError):
-            self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "unknown")
+            self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
+
+    def test_incomplete_log_turns_red_and_recovers_when_completed(self):
+        self.scan()
+        with self.path.open("a") as handle:
+            handle.write("[FLog::Network] Replicator crea")
+        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
+        with self.path.open("a") as handle:
+            handle.write("ted: server\n")
+        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "game")
+
+    def test_failed_window_observation_keeps_previous_background_state(self):
+        with patch.object(status, "client_window_visible", return_value=False), \
+                patch.object(status.time, "monotonic", return_value=10):
+            self.scan()
+        with patch.object(status, "client_window_visible", return_value=False), \
+                patch.object(status.time, "monotonic", return_value=12):
+            self.scan()
+        with patch.object(status, "client_window_visible", return_value=None):
+            self.assertFalse(self.scan()[(123, 100.0)]["window_visible"])
 
     def test_background_requires_a_stable_missing_window(self):
         with patch.object(status, "client_window_visible", return_value=False), \
@@ -247,14 +278,14 @@ class HeadlessIntentTests(unittest.TestCase):
 
 
 class ActivityScannerTests(unittest.TestCase):
-    def test_failed_first_scan_is_unknown_rather_than_stopped(self):
+    def test_failed_first_scan_does_not_add_a_dot_state(self):
         updates = []
         scanner = presence.PresenceScanner(SimpleNamespace(accounts={"Account": {"user_id": "42"}}), updates.append)
         with patch.object(presence, "get_roblox_processes", side_effect=PermissionError):
             scanner._do_scan()
-        self.assertEqual(updates[-1]["Account"]["state"], "unknown")
+        self.assertEqual(updates[-1], {})
 
-    def test_unidentified_client_does_not_claim_unmatched_accounts_are_stopped(self):
+    def test_unidentified_client_does_not_add_dot_states_to_unmatched_accounts(self):
         updates = []
         scanner = presence.PresenceScanner(SimpleNamespace(accounts={"Account": {"user_id": "42"}}), updates.append)
         with patch.object(presence, "get_roblox_processes", return_value={123: (100.0, MagicMock())}), \
@@ -262,17 +293,16 @@ class ActivityScannerTests(unittest.TestCase):
                 patch.object(scanner._status_tracker, "scan", return_value={}), \
                 patch.object(hm, "get_active_manager", return_value=None):
             scanner._do_scan()
-        self.assertEqual(updates[-1]["Account"]["state"], "unknown")
-        self.assertEqual(updates[-1]["Account"]["pids"], [])
+        self.assertEqual(updates[-1], {})
 
-    def test_failure_turns_previous_game_unknown_instead_of_offline(self):
+    def test_scan_failure_keeps_previous_color(self):
         updates = []
         scanner = presence.PresenceScanner(SimpleNamespace(accounts={}), updates.append)
         scanner.latest_snapshot = {"Account": {"clients": [client()], "state": "game"}}
         with patch.object(presence, "get_roblox_processes", side_effect=PermissionError):
             scanner._do_scan()
-        self.assertEqual(updates[-1]["Account"]["state"], "unknown")
-        self.assertIsNone(updates[-1]["Account"]["clients"][0]["window_visible"])
+        self.assertEqual(updates[-1]["Account"]["state"], "game")
+        self.assertTrue(updates[-1]["Account"]["clients"][0]["window_visible"])
 
     def test_metrics_aggregate_while_status_prefers_connected_client(self):
         updates = []

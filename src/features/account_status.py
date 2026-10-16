@@ -17,9 +17,8 @@ import win32gui
 from features.window_log_probe import probe_open_log_paths
 
 
-COLORS = {"home": "#7DD3FC", "game": "#2ECC71",
-          "background": "#F4C542", "unknown": "#9CA3AF"}
-_PRIORITY = {"game": 3, "home": 2, "unknown": 1, "background": 0}
+COLORS = {"game": "#2ECC71", "background": "#F4C542", "error": "#E74C3C"}
+_PRIORITY = {"game": 3, "home": 2, "error": 1, "background": 0, None: -1}
 _TRACKER = re.compile(r"browsertrackerid[^0-9]{0,32}(\d+)", re.I)
 _WEB_TRACKER = re.compile(r"web launch, websiteBTId is (\d+)", re.I)
 _USER = re.compile(r"\[FLog::GameJoinLoadTime\].*\buserid:(\d+)(?=[,\s])", re.I)
@@ -41,8 +40,8 @@ class ClientLog:
     user_id: str = ""
     signed_in: bool = False
     desktop: bool = False
-    state: str = "unknown"
-    reason: str = "Loading or client state not yet known."
+    state: str | None = None
+    reason: str = ""
     place_id: str = ""
     job_id: str = ""
     available: bool = False
@@ -61,23 +60,18 @@ class ClientLog:
                     self.state, self.reason = "home", "Signed in to the Roblox desktop app; outside a game."
             elif message.startswith("setStage: (stage:LuaApp)"):
                 self.desktop = True
-                self.state = "home" if self.signed_in else "unknown"
-                self.reason = ("Signed in to the Roblox desktop app; outside a game."
-                               if self.signed_in else "Desktop app is open; sign-in is not confirmed.")
-                self.place_id = self.job_id = ""
+                if self.signed_in:
+                    self.state, self.reason = "home", "Signed in to the Roblox desktop app; outside a game."
+                    self.place_id = self.job_id = ""
             elif message.startswith(("launchUGCGame", "setStage: (stage:UGCGame)")):
                 self.desktop = False
-                self.state, self.reason = "unknown", "Joining or loading a game."
                 self.place_id = self.job_id = ""
             elif message.startswith(("returnToLuaApp", "leaveUGCGameInternal")):
                 self.desktop = False
-                self.state, self.reason = "unknown", "Returning to the Roblox desktop app."
             elif message.startswith(("userDidLogout", "userDidLogOut", "shutDown:", "destroyLuaApp:")):
                 self.signed_in = self.desktop = False
-                self.state, self.reason = "unknown", "Client is signing out or shutting down."
         if "[FLog::Output] ! Joining game" in line:
             self.desktop = False
-            self.state, self.reason = "unknown", "Joining or loading a game."
             self.place_id = self.job_id = ""
             match = _JOIN.search(line)
             if match:
@@ -88,15 +82,13 @@ class ClientLog:
             self.state, self.reason = "game", "Connected to a game server."
         elif "[FLog::Network] Time to disconnect replication data:" in line:
             self.desktop = False
-            self.state, self.reason = "unknown", "Disconnected from the game; waiting for the next client state."
+            self.state, self.reason = "error", "Disconnected from the game; waiting for the next confirmed client state."
             self.place_id = self.job_id = ""
         elif "[FLog::UgcExperienceController]" in line and "doTeleport:" in line:
             self.desktop = False
-            self.state, self.reason = "unknown", "Teleporting or joining another server."
             self.place_id = self.job_id = ""
         elif "challengedByGcs" in line:
             self.desktop = False
-            self.state, self.reason = "unknown", "Roblox verification is required."
 
     def read(self, path: str) -> None:
         self.available = False
@@ -106,9 +98,12 @@ class ClientLog:
                 identity = (stat.st_dev, stat.st_ino)
                 if (identity != self.identity or stat.st_size < self.offset
                         or (stat.st_size == self.offset and stat.st_mtime_ns != self.mtime)):
+                    replaced = self.identity is not None
                     fresh = ClientLog(self.created)
                     self.__dict__.update(fresh.__dict__)
                     self.identity = identity
+                    if replaced:
+                        self.state, self.reason = "error", "Client log was replaced or truncated; waiting for complete status evidence."
                 handle.seek(self.offset)
                 # Bound catch-up work so a large old log cannot monopolize a scan.
                 for _ in range(16):
@@ -123,7 +118,7 @@ class ClientLog:
                     if len(self.partial) > 256 * 1024:
                         self.partial = b""
                 self.mtime = stat.st_mtime_ns
-                self.available = self.offset >= stat.st_size
+                self.available = self.offset >= stat.st_size and stat.st_size > 0 and not self.partial
         except OSError:
             pass
 
@@ -151,27 +146,23 @@ def summarize_processes(processes: list[dict], headless: set[tuple[int, float]])
     for process in processes:
         row = dict(process)
         row["headless"] = (row["pid"], row["created"]) in headless
-        state = row.get("client_state", "unknown")
+        state = row.get("client_state")
         if not row["headless"] and row.get("window_visible") is False:
             if time.time() - row["created"] >= 5:
                 state = "background"
-        if row.get("window_visible") is None and not row["headless"]:
-            state = "unknown"
         row["state"] = state
         rows.append(row)
     state = max(rows, key=lambda row: _PRIORITY[row["state"]])["state"]
     hollow = all(row["headless"] for row in rows)
-    names = {"game": "In game", "home": "Roblox desktop app", "unknown": "State unknown",
-             "background": "Running in background"}
+    names = {"game": "In game", "home": "Roblox desktop app", "error": "Disconnected or log unavailable",
+             "background": "Running in background", None: "No confirmed status yet"}
     lines = [names[state] + (" — headless" if hollow else "")]
     if len(rows) > 1:
-        lines.append(f"{len(rows)} local clients; showing in-game before desktop, unknown, then background.")
+        lines.append(f"{len(rows)} local clients; showing in-game before desktop, red status, then background.")
         if any(row["headless"] for row in rows) and not hollow:
             lines.append("Mixed headless and shown clients; the dot is solid.")
     for row in rows:
-        text = row.get("reason", "Client state could not be determined.")
-        if row.get("window_visible") is None and not row["headless"]:
-            text += " Client window state has not been confirmed."
+        text = row.get("reason") or "No confirmed status yet."
         if row["state"] == "background":
             text = "Process is running without a displayed client window. " + text
         if row["headless"]:
@@ -193,6 +184,7 @@ class ClientStatusTracker:
         self._bindings: dict[tuple[int, float], tuple[str, str]] = {}
         self._probe_retry: dict[tuple[int, float], float] = {}
         self._missing_since: dict[tuple[int, float], float] = {}
+        self._last_windows: dict[tuple[int, float], bool] = {}
         self._probe_thread: threading.Thread | None = None
         self._probe_results = queue.SimpleQueue()
         self._open_paths: dict[tuple[int, float], set[str]] = {}
@@ -213,6 +205,7 @@ class ClientStatusTracker:
                 if probe.status == "ok":
                     self._open_paths[key] = set(probe.paths)
         self._missing_since = {key: value for key, value in self._missing_since.items() if key in live}
+        self._last_windows = {key: value for key, value in self._last_windows.items() if key in live}
         if not live:
             self._logs.clear()
             return {}
@@ -290,11 +283,15 @@ class ClientStatusTracker:
                     visible = None
             else:
                 self._missing_since.pop(key, None)
+            if visible is None:
+                visible = self._last_windows.get(key)
+            else:
+                self._last_windows[key] = visible
             available = bool(log and log.available)
             result[key] = {
                 "pid": key[0], "created": key[1], "username": uid_map[user_id],
-                "client_state": log.state if available else "unknown",
-                "reason": log.reason if available else "Client log is unavailable or still being read; state is unknown.",
+                "client_state": log.state if available else "error",
+                "reason": log.reason if available else "Client log is missing, unreadable, or incomplete.",
                 "window_visible": visible,
                 "place_id": log.place_id if available else "",
                 "job_id": log.job_id if available else "",

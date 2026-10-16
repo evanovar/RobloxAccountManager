@@ -3881,7 +3881,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "presence_indicator", "Account Activity Monitor",
             "Show local client status and Roblox RAM and CPU usage.\n"
             "Updates about every 2 seconds using local processes and logs.\n"
-            "Blue: desktop app; green: in game; yellow: background; grey: unknown.\n"
+            "Blue: desktop app; green: in game; yellow: background; red: disconnected or log unavailable.\n"
             "An outlined dot means headless. Hover a dot for details.",
             on_change=self._on_sett_presence_indicator,
         )
@@ -5650,11 +5650,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if generation != self._presence_generation or self._presence_scanner is None:
             return
         if isinstance(snapshot, dict):
-            self._activity_snapshot = {
+            updated = {
                 str(username): dict(metrics)
                 for username, metrics in snapshot.items()
                 if isinstance(metrics, dict)
             }
+            for username, metrics in updated.items():
+                if metrics.get("state") is None:
+                    previous = self._activity_snapshot.get(username, {})
+                    metrics.update(state=previous.get("state"), tooltip=previous.get("tooltip", ""))
+            self._activity_snapshot = updated
         else:
             self._activity_snapshot = {}
         self._online_usernames = set(self._activity_snapshot)
@@ -5675,7 +5680,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 continue
             status = (account_status_mod.summarize_processes(metrics["clients"], headless)
                       if metrics.get("clients") else metrics)
-            color = account_status_mod.COLORS[status["state"]]
+            if status["state"] is None:
+                status.update(state=metrics.get("state"), tooltip=metrics.get("tooltip", ""))
+            if status["state"] is None:
+                dot.setVisible(False)
+                continue
+            color = ACCENT_TEXT if status["state"] == "home" else account_status_mod.COLORS[status["state"]]
             fill = "transparent" if status["hollow"] else color
             dot.setStyleSheet(
                 f"QLabel {{ background: {fill}; border: 2px solid {color}; border-radius: 4px; }}"
@@ -7162,11 +7172,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
             row = QWidget()
             row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(4, 0, 6, 0)
+            row_lay.setContentsMargins(2, 0, 6, 0)
             row_lay.setSpacing(6)
 
+            leading_lay = QHBoxLayout()
+            leading_lay.setContentsMargins(0, 0, 0, 0)
+            leading_lay.setSpacing(2)
+            row_lay.addLayout(leading_lay)
             dot_slot = QWidget(row)
-            dot_slot.setFixedWidth(10)
+            dot_slot.setFixedWidth(8)
             dot_lay = QHBoxLayout(dot_slot)
             dot_lay.setContentsMargins(0, 0, 0, 0)
             dot_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -7176,7 +7190,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             dot_lay.addWidget(dot_lbl)
             dot_slot.setVisible(activity_enabled)
             self._presence_dots[username] = dot_lbl
-            row_lay.addWidget(dot_slot)
+            leading_lay.addWidget(dot_slot)
 
             av_container = QWidget()
             av_container.setFixedSize(AV, AV)
@@ -7188,7 +7202,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             av_lbl.setPixmap(self._make_placeholder_pixmap(AV))
 
-            row_lay.addWidget(av_container)
+            leading_lay.addWidget(av_container)
             self._avatar_labels[username] = av_lbl
             self._account_avatar_containers[username] = av_container
 

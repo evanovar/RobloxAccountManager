@@ -41,6 +41,7 @@ class AccountStatusUITests(unittest.TestCase):
             "pid": 123, "created": 100.0, "client_state": state,
             "window_visible": visible, "reason": "Connected to a game server." if state == "game" else state,
         }]}}
+        snapshot["Account"].update(account_status.summarize_processes(snapshot["Account"]["clients"], self.headless))
         ui.AccountManagerUIQt._on_presence_update(self.window, (1, snapshot))
 
     def test_dot_is_left_of_avatar_and_reserves_space_when_absent(self):
@@ -48,8 +49,12 @@ class AccountStatusUITests(unittest.TestCase):
         self.update()
         row = self.window._account_rows["Account"]
         dot = self.window._presence_dots["Account"]
-        self.assertIs(row.layout().itemAt(0).widget(), dot.parentWidget())
-        self.assertIs(row.layout().itemAt(1).widget(), self.window._account_avatar_containers["Account"])
+        leading = row.layout().itemAt(0).layout()
+        self.assertIs(leading.itemAt(0).widget(), dot.parentWidget())
+        self.assertIs(leading.itemAt(1).widget(), self.window._account_avatar_containers["Account"])
+        self.assertEqual(leading.spacing(), 2)
+        self.assertEqual(row.layout().contentsMargins().left(), 2)
+        self.assertEqual(dot.parentWidget().width(), 8)
         self.assertIsNot(dot.parentWidget(), self.window._account_avatar_containers["Account"])
         other = self.window._presence_dots["Other"]
         self.assertTrue(other.isHidden())
@@ -58,11 +63,12 @@ class AccountStatusUITests(unittest.TestCase):
 
     def test_all_color_states_have_explanatory_tooltips(self):
         self.window._refresh_account_list()
-        for state, visible in (("home", True), ("game", True), ("unknown", True), ("game", False)):
+        for state, visible in (("home", True), ("game", True), ("error", True), ("game", False)):
             self.update(state, visible)
             dot = self.window._presence_dots["Account"]
             expected = "background" if not visible else state
-            self.assertIn(account_status.COLORS[expected], dot.styleSheet())
+            color = ui.ACCENT_TEXT if expected == "home" else account_status.COLORS[expected]
+            self.assertIn(color, dot.styleSheet())
             self.assertTrue(dot.toolTip())
             self.assertFalse(dot.isHidden())
 
@@ -84,7 +90,7 @@ class AccountStatusUITests(unittest.TestCase):
         self.list.setCurrentRow(1)
         self.window._refresh_account_list()
         self.assertEqual(self.list.currentItem().data(Qt.ItemDataRole.UserRole), "Other")
-        self.assertIn(account_status.COLORS["home"], self.window._presence_dots["Account"].styleSheet())
+        self.assertIn(ui.ACCENT_TEXT, self.window._presence_dots["Account"].styleSheet())
 
     def test_disabled_monitor_hides_dots_and_metrics(self):
         self.window._refresh_account_list()
@@ -102,13 +108,20 @@ class AccountStatusUITests(unittest.TestCase):
         self.assertEqual(self.window._activity_snapshot, {})
         self.assertTrue(self.window._presence_dots["Account"].isHidden())
 
-    def test_unidentified_client_is_grey_without_attributing_its_metrics(self):
+    def test_ignored_state_keeps_color_across_refresh(self):
         self.window._refresh_account_list()
-        self.window._activity_snapshot = {"Account": {
-            "clients": [], "pids": [], "state": "unknown", "hollow": False,
-            "tooltip": "A local client could not be matched to an account.",
-        }}
-        self.window._update_presence_dots()
-        self.window._update_activity_rows()
-        self.assertIn(account_status.COLORS["unknown"], self.window._presence_dots["Account"].styleSheet())
-        self.assertTrue(self.window._activity_widgets["Account"].isHidden())
+        self.update("home")
+        self.update(None)
+        self.window._refresh_account_list()
+        self.assertIn(ui.ACCENT_TEXT, self.window._presence_dots["Account"].styleSheet())
+
+    def test_no_dot_before_first_supported_state(self):
+        self.window._refresh_account_list()
+        self.update(None)
+        self.assertTrue(self.window._presence_dots["Account"].isHidden())
+
+    def test_home_color_uses_memory_text_theme_color(self):
+        self.window._refresh_account_list()
+        with patch.object(ui, "ACCENT_TEXT", "#123ABC"):
+            self.update("home")
+        self.assertIn("#123ABC", self.window._presence_dots["Account"].styleSheet())
