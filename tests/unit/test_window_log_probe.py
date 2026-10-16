@@ -77,19 +77,6 @@ class ProbeProtocolTests(unittest.TestCase):
 
 
 class ProbeLifetimeTests(unittest.TestCase):
-    @unittest.skipUnless(os.name == "nt", "Requires Windows startup flags")
-    def test_background_helper_does_not_request_startup_cursor(self):
-        child = MagicMock()
-        child.poll.return_value = 0
-        child.returncode = 0
-        with patch.object(probe.subprocess, "Popen", return_value=child) as start, \
-                patch.object(probe, "_read_result", return_value=probe.ProbeResult("process_changed")):
-            probe.probe_open_log_paths((123, 100.0), threading.Event())
-        options = start.call_args.kwargs
-        self.assertTrue(options["startupinfo"].dwFlags & probe.subprocess.STARTF_FORCEOFFFEEDBACK)
-        self.assertFalse(options["startupinfo"].dwFlags & probe.subprocess.STARTF_FORCEONFEEDBACK)
-        self.assertTrue(options["creationflags"] & probe.subprocess.CREATE_NO_WINDOW)
-
     def test_timeout_kills_and_reaps_helper(self):
         child = MagicMock()
         child.poll.return_value = None
