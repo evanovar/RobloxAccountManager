@@ -38,12 +38,18 @@ def _get_roblox_pids() -> set[int]:
     return set(presence_mod.get_roblox_processes())
 
 
-def _get_roblox_hwnds_for_pid(pid: int, expected_titles: set[str] | None = None) -> list[int]:
-    titles = expected_titles or {"Roblox"}
+def _get_roblox_hwnds_for_pid(pid: int, windows: list[int] | None = None) -> list[int]:
     hwnds = []
-    for hwnd in presence_mod.get_windows_by_pid({pid}).get(pid, []):
+    if windows is None:
+        windows = presence_mod.get_windows_by_pid({pid}).get(pid, [])
+    for hwnd in windows:
         try:
-            if win32gui.GetWindowText(hwnd) in titles:
+            # Account notes can replace the title. Select the client by PID and
+            # top-level window characteristics, not the mutable title text.
+            if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
+                continue
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if win32gui.GetWindowText(hwnd) and right > left and bottom > top:
                 hwnds.append(hwnd)
         except Exception:
             pass
@@ -51,10 +57,7 @@ def _get_roblox_hwnds_for_pid(pid: int, expected_titles: set[str] | None = None)
 
 
 def hide_roblox_window(pid: int, username: str | None = None) -> bool:
-    titles = {"Roblox"}
-    if username:
-        titles.add(username)
-    hwnds = _get_roblox_hwnds_for_pid(pid, titles)
+    hwnds = _get_roblox_hwnds_for_pid(pid)
     for hwnd in hwnds:
         try:
             show_window_async(hwnd, win32con.SW_HIDE)
@@ -65,10 +68,7 @@ def hide_roblox_window(pid: int, username: str | None = None) -> bool:
 
 
 def show_roblox_window(pid: int, username: str | None = None) -> bool:
-    titles = {"Roblox"}
-    if username:
-        titles.add(username)
-    hwnds = _get_roblox_hwnds_for_pid(pid, titles)
+    hwnds = _get_roblox_hwnds_for_pid(pid)
     for hwnd in hwnds:
         try:
             win32gui.PostMessage(hwnd, win32con.WM_SYSCOMMAND, win32con.SC_RESTORE, 0)
@@ -98,6 +98,9 @@ class HeadlessManager:
         self._enforce_thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._hidden_pids: set[int] = set()
+        # Intent survives Anti-AFK's temporary suspension of hide enforcement.
+        self._headless_created: dict[int, float] = {}
+        self._pid_created: dict[int, float] = {}
         self._uid_cache: dict[int, str] = {}   # pid -> user_id
         self._name_cache: dict[str, str] = {}  # user_id -> username
         self._pid_username: dict[int, str] = {}  # pid -> username, for window title matching
@@ -132,10 +135,15 @@ class HeadlessManager:
         self._scan_interval = max(SCAN_INTERVAL_MIN, min(SCAN_INTERVAL_MAX, float(seconds)))
 
     def set_hidden(self, pid: int, hidden: bool) -> None:
+        process = presence_mod.get_roblox_processes().get(pid)
         with self._lock:
             if hidden:
+                if process is None:
+                    return
+                self._headless_created[pid] = process[0]
                 self._hidden_pids.add(pid)
             else:
+                self._headless_created.pop(pid, None)
                 self._hidden_pids.discard(pid)
             username = self._pid_username.get(pid)
         if hidden:
@@ -145,7 +153,11 @@ class HeadlessManager:
 
     def is_hidden(self, pid: int) -> bool:
         with self._lock:
-            return pid in self._hidden_pids
+            return pid in self._headless_created
+
+    def get_headless_identities(self) -> set[tuple[int, float]]:
+        with self._lock:
+            return set(self._headless_created.items())
 
     def get_hidden_pids(self) -> set[int]:
         with self._lock:
@@ -163,34 +175,39 @@ class HeadlessManager:
             return False
 
     def resume_hidden(self, pid: int) -> None:
+        process = presence_mod.get_roblox_processes().get(pid)
         with self._lock:
+            if process is None or self._headless_created.get(pid) != process[0]:
+                return
             self._hidden_pids.add(pid)
             username = self._pid_username.get(pid)
         hide_roblox_window(pid, username)
 
     def restore_all(self) -> None:
+        processes = presence_mod.get_roblox_processes()
         with self._lock:
-            pids = list(self._hidden_pids)
+            pids = [pid for pid, created in self._headless_created.items()
+                    if pid in processes and processes[pid][0] == created]
             usernames = dict(self._pid_username)
             self._hidden_pids.clear()
+            self._headless_created.clear()
         for pid in pids:
             show_roblox_window(pid, usernames.get(pid))
 
     def _enforce_loop(self) -> None:
         while not self._stop_evt.is_set():
+            processes = presence_mod.get_roblox_processes()
             with self._lock:
+                self._headless_created = {
+                    pid: created for pid, created in self._headless_created.items()
+                    if pid in processes and processes[pid][0] == created
+                }
+                self._hidden_pids &= set(self._headless_created)
                 pids = list(self._hidden_pids)
-                usernames = dict(self._pid_username)
             windows = presence_mod.get_windows_by_pid(set(pids))
             for pid in pids:
-                titles = {"Roblox"}
-                username = usernames.get(pid)
-                if username:
-                    titles.add(username)
-                for hwnd in windows.get(pid, []):
+                for hwnd in _get_roblox_hwnds_for_pid(pid, windows.get(pid, [])):
                     try:
-                        if win32gui.GetWindowText(hwnd) not in titles:
-                            continue
                         if win32gui.IsWindowVisible(hwnd):
                             show_window_async(hwnd, win32con.SW_HIDE)
                             win32gui.PostMessage(
@@ -212,10 +229,17 @@ class HeadlessManager:
 
     def _do_scan(self) -> None:
         try:
-            pids = _get_roblox_pids()
+            processes = presence_mod.get_roblox_processes()
+            pids = set(processes)
             with self._lock:
-                self._hidden_pids &= pids
-            self._uid_cache = {p: u for p, u in self._uid_cache.items() if p in pids}
+                self._headless_created = {
+                    pid: created for pid, created in self._headless_created.items()
+                    if pid in processes and processes[pid][0] == created
+                }
+                self._hidden_pids &= set(self._headless_created)
+            self._uid_cache = {p: u for p, u in self._uid_cache.items()
+                               if p in pids and self._pid_created.get(p) == processes[p][0]}
+            self._pid_created = {pid: data[0] for pid, data in processes.items()}
 
             used_logs: set[str] = set()
             results: list[dict] = []

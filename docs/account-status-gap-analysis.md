@@ -1,6 +1,6 @@
 # Account status dot: gap analysis
 
-Analysis of `main` at `749d0a8`. This document proposes behavior; it does not implement the feature.
+Baseline analysis of `main` at `749d0a8`. The sections below describe the original gaps; accepted requirements and the resulting implementation are recorded at the end.
 
 ## Assessment
 
@@ -124,3 +124,20 @@ These checks validate relevant existing behavior; they do not validate the propo
 - Window titles set to usernames or notes; monitor enabled/disabled; search, groups, drag reorder, selection, theme contrast, and display scaling.
 
 Most important product decisions: monitoring toggle behavior, unknown/transitional display, yellow-versus-green precedence, and multiple-process aggregation. Most important technical validation: reliable current local connection/Home evidence and actual tray process/window behavior.
+
+## Accepted requirements and implementation
+
+The user confirmed these decisions after reviewing the analysis:
+
+- Move the dot into a fixed slot left of the avatar. Dots and RAM/CPU remain controlled together by Account Activity Monitor.
+- Light blue covers the signed-in desktop app generally, including Home, Discover, Avatar, and Settings, while outside a game.
+- Green means a game connection was established, with no PlaceID/JobID requirement. Joining, teleporting, disconnect errors, sign-out, and uncertain evidence are grey.
+- A stable non-headless background-only client is yellow even if its log still reports a connection. A minimized client keeps its Home/game color.
+- Aggregate multiple clients in the order game, desktop, unknown, background. Outline the dot only if all matched clients are intentionally headless. Explain each state and mixed clients in tooltips.
+- Target approximately two-second observations and immediate outline updates on explicit hide/show actions. Preserve the outline while Anti-AFK temporarily shows a headless window.
+
+`features/account_status.py` now tails local client logs incrementally, matches processes using launch trackers or the existing bounded open-log helper, and keeps bindings scoped to PID plus creation time. It does not use timestamp-only account guesses or query network presence. Local current logs contained desktop-stage, sign-in, connection, disconnect, and teleport events; [Bloxstrap's activity watcher](https://github.com/bloxstraplabs/bloxstrap/blob/main/Bloxstrap/Integrations/ActivityWatcher.cs) provides a primary implementation reference for several connection markers. Roblox may change these markers, so missing evidence remains unknown.
+
+Initial identity discovery runs separately from the normal status scan and can take longer than two seconds. If unidentified local Roblox processes could belong to an otherwise unmatched saved account, that account shows grey with an identity explanation and no attributed RAM/CPU. Failed observations invalidate old status instead of claiming an empty process list. Known headless clients use a separate intent identity while Anti-AFK suspends enforcement. Headless window selection also accepts note-renamed top-level client windows.
+
+Launch confirmation and Auto-Rejoin recovery policies are unchanged. The README and setting tooltip describe the new behavior. Unit and Qt tests cover state transitions, missing IDs, log replacement and failures, process identity ambiguity/reuse, aggregation, headless suspension, layout, tooltips, settings, and stale updates after monitor toggles. Live tray and UI transitions still require manual testing; historical log replay and read-only process inspection do not replace that testing.
