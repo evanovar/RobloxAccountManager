@@ -66,6 +66,7 @@ import features.account_creator as account_creator_mod
 import features.auto_rejoin as ar
 import features.account_filter as account_filter
 import features.account_order as account_order
+import features.account_status as account_status_mod
 import features.avatars as avatars
 import features.color_themes as color_themes
 import features.cookie_validator as cookie_validator_mod
@@ -363,7 +364,7 @@ class _Bridge(QObject):
     chromium_status = Signal(object) # OperationResult from latest build check
     roblox_download_progress = Signal(int, str) # (percent 0-100, current operation)
     roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
-    presence_update = Signal(object) # set[str] of online usernames
+    presence_update = Signal(object) # (scanner generation, account activity snapshot)
     cookie_validated = Signal(str, str) # (username, status) from validator worker
     update_available = Signal(str) # (latest_version) from update check worker
     update_check_finished = Signal(object) # OperationResult from a manual update check
@@ -1478,9 +1479,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._on_roblox_settings_path_changed
         )
 
-        # Account Activity Monitor
+        # Account status and optional performance display
         self._presence_mod = presence_mod
         self._presence_scanner = None
+        self._presence_generation = 0
         self._presence_dots: dict[str, QLabel] = {}
         self._online_usernames: set[str] = set()
         self._activity_snapshot: dict[str, dict] = {}
@@ -1574,8 +1576,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if S.get("rename_roblox_windows", False):
             self._start_rename_windows()
 
-        if S.get("presence_indicator", False):
-            self._start_presence_scanner()
+        self._start_presence_scanner()
 
         if S.get("roblox_installer_fix", False):
             try:
@@ -3876,16 +3877,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_rename_mode_controls()
 
         self._sett_monitoring_chk = _chk(
-            "presence_indicator", "Account Activity Monitor",
-            "Show online status and local Roblox RAM and CPU usage.\n"
-            "Scans saved accounts every 5 seconds without using the Roblox API.",
-            on_change=self._on_sett_presence_indicator,
+            "presence_indicator", "Performance Monitor",
+            "Show local Roblox RAM and CPU usage beside each account.\n"
+            "Updates about every 2 seconds. Status dots are always enabled.",
+            on_change=self._on_sett_performance_monitor,
         )
         f.addWidget(self._sett_monitoring_chk)
-
-        # Start scanner immediately if the setting is already on
-        if actions.load_ui_settings().get("presence_indicator", False):
-            self._start_presence_scanner()
 
         f.addWidget(_sec("WINDOW GRID"))
         self._sett_window_grid_chk = _chk(
@@ -4624,11 +4621,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._window_renamer is not None:
             self._window_renamer.set_title_mode(mode)
 
-    def _on_sett_presence_indicator(self, enabled: bool):
-        if enabled:
-            self._start_presence_scanner()
-        else:
-            self._stop_presence_scanner()
+    def _on_sett_performance_monitor(self, enabled: bool):
         self._refresh_account_list()
 
     def _on_sett_installer_fix(self, enabled: bool):
@@ -5178,6 +5171,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._headless_latest_rows = []
         if hasattr(self, "_headless_list"):
             self._refresh_headless_list([])
+        self._update_presence_dots()
         print("[INFO] Headless Manager stopped, Roblox windows restored.")
 
     def _headless_selected_pid(self) -> int | None:
@@ -5305,6 +5299,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             pass
 
     def _headless_set_status_label(self, pid: int, hidden: bool) -> None:
+        self._update_presence_dots()
         lbl = self._headless_status_labels.get(pid)
         if lbl is None:
             return
@@ -5613,15 +5608,18 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _start_presence_scanner(self) -> None:
         if self._presence_scanner is not None:
             return
+        self._presence_generation += 1
+        generation = self._presence_generation
         self._presence_scanner = self._presence_mod.PresenceScanner(
             self.manager,
-            on_update=lambda snapshot: self._bridge.presence_update.emit(snapshot),
-            interval_sec=5,
+            on_update=lambda snapshot: self._bridge.presence_update.emit((generation, snapshot)),
+            interval_sec=2,
         )
         self._presence_scanner.start()
-        print("[INFO] Account Activity Monitor started.")
+        print("[INFO] Account status monitor started.")
 
     def _stop_presence_scanner(self) -> None:
+        self._presence_generation += 1
         if self._presence_scanner is None:
             self._online_usernames = set()
             self._activity_snapshot = {}
@@ -5634,15 +5632,23 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._activity_snapshot = {}
         self._update_presence_dots()
         self._update_activity_rows()
-        print("[INFO] Account Activity Monitor stopped.")
+        print("[INFO] Account status monitor stopped.")
 
-    def _on_presence_update(self, snapshot: object) -> None:
+    def _on_presence_update(self, update: object) -> None:
+        generation, snapshot = update
+        if generation != self._presence_generation or self._presence_scanner is None:
+            return
         if isinstance(snapshot, dict):
-            self._activity_snapshot = {
+            updated = {
                 str(username): dict(metrics)
                 for username, metrics in snapshot.items()
                 if isinstance(metrics, dict)
             }
+            for username, metrics in updated.items():
+                if metrics.get("state") is None:
+                    previous = self._activity_snapshot.get(username, {})
+                    metrics.update(state=previous.get("state"), tooltip=previous.get("tooltip", ""))
+            self._activity_snapshot = updated
         else:
             self._activity_snapshot = {}
         self._online_usernames = set(self._activity_snapshot)
@@ -5650,13 +5656,37 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_activity_rows()
 
     def _update_presence_dots(self) -> None:
+        manager = self._headless_manager
+        headless = manager.get_headless_identities() if manager else set()
         for username, dot in self._presence_dots.items():
-            dot.setVisible(username in self._online_usernames)
+            slot = dot.parentWidget()
+            dot.setToolTip("")
+            slot.setToolTip("")
+            slot.setVisible(True)
+            metrics = self._activity_snapshot.get(username)
+            if not metrics:
+                dot.setVisible(False)
+                continue
+            status = (account_status_mod.summarize_processes(metrics["clients"], headless)
+                      if metrics.get("clients") else metrics)
+            if status["state"] is None:
+                status.update(state=metrics.get("state"), tooltip=metrics.get("tooltip", ""))
+            if status["state"] is None:
+                dot.setVisible(False)
+                continue
+            color = ACCENT_TEXT if status["state"] == "home" else account_status_mod.COLORS[status["state"]]
+            fill = "transparent" if status["hollow"] else color
+            dot.setStyleSheet(
+                f"QLabel {{ background: {fill}; border: 2px solid {color}; border-radius: 4px; }}"
+            )
+            dot.setToolTip(status["tooltip"])
+            slot.setToolTip(status["tooltip"])
+            dot.setVisible(True)
 
     def _update_activity_rows(self) -> None:
         for username, container in self._activity_widgets.items():
             metrics = self._activity_snapshot.get(username)
-            if not metrics:
+            if not metrics or not metrics.get("pids"):
                 container.setVisible(False)
                 continue
 
@@ -7131,8 +7161,24 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
             row = QWidget()
             row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(4, 0, 6, 0)
+            row_lay.setContentsMargins(2, 0, 6, 0)
             row_lay.setSpacing(6)
+
+            leading_lay = QHBoxLayout()
+            leading_lay.setContentsMargins(0, 0, 0, 0)
+            leading_lay.setSpacing(2)
+            row_lay.addLayout(leading_lay)
+            dot_slot = QWidget(row)
+            dot_slot.setFixedWidth(8)
+            dot_lay = QHBoxLayout(dot_slot)
+            dot_lay.setContentsMargins(0, 0, 0, 0)
+            dot_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            dot_lbl = QLabel(dot_slot)
+            dot_lbl.setFixedSize(8, 8)
+            dot_lbl.setVisible(False)
+            dot_lay.addWidget(dot_lbl)
+            self._presence_dots[username] = dot_lbl
+            leading_lay.addWidget(dot_slot)
 
             av_container = QWidget()
             av_container.setFixedSize(AV, AV)
@@ -7144,23 +7190,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             )
             av_lbl.setPixmap(self._make_placeholder_pixmap(AV))
 
-            DOT_SIZE = 6
-            RING = 1
-            dot_lbl = QLabel(av_container)
-            dot_lbl.setFixedSize(DOT_SIZE + RING * 2, DOT_SIZE + RING * 2)
-            dot_lbl.move(AV - DOT_SIZE - RING, AV - DOT_SIZE - RING)
-            dot_lbl.setStyleSheet(f"""
-                QLabel {{
-                    background: #2ECC71;
-                    border-radius: {(DOT_SIZE + RING * 2) // 2}px;
-                    border: {RING}px solid {BG};
-                }}
-            """)
-            is_online = username in self._online_usernames
-            dot_lbl.setVisible(is_online)
-            self._presence_dots[username] = dot_lbl
-
-            row_lay.addWidget(av_container)
+            leading_lay.addWidget(av_container)
             self._avatar_labels[username] = av_lbl
             self._account_avatar_containers[username] = av_container
 
@@ -7253,6 +7283,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._rebuild_group_bar()
         self._load_avatars_async()
+        self._update_presence_dots()
         self._update_activity_rows()
 
 

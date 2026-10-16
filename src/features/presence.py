@@ -1,5 +1,5 @@
 """
-Account Activity Monitor process scanning.
+Account status and performance process scanning.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import psutil
 import win32api
 import win32gui
 import win32process
+
+from features.account_status import ClientStatusTracker, summarize_processes
 
 
 _TRACKER_PATTERN = re.compile(
@@ -227,6 +229,7 @@ def is_valid_roblox_game_client(
 def get_roblox_processes(
     force: bool = False,
     max_age: float = _PROCESS_CACHE_MAX_AGE,
+    strict: bool = False,
 ) -> dict[int, tuple[float, psutil.Process]]:
     global _PROCESS_CACHE
     global _PROCESS_CACHE_TIME
@@ -271,7 +274,8 @@ def get_roblox_processes(
         psutil.AccessDenied,
         psutil.ZombieProcess,
     ):
-        pass
+        if strict:
+            raise
     live_keys = {(pid, value[0]) for pid, value in processes.items()}
     with _PROCESS_CACHE_LOCK:
         _VALIDATION_CACHE.clear()
@@ -284,6 +288,7 @@ def get_roblox_processes(
 
 def get_windows_by_pid(
     pids: set[int] | None = None,
+    strict: bool = False,
 ) -> dict[int, list[int]]:
     target_pids = set(pids) if pids is not None else set(get_roblox_processes())
     windows: dict[int, list[int]] = {pid: [] for pid in target_pids}
@@ -302,7 +307,8 @@ def get_windows_by_pid(
     try:
         win32gui.EnumWindows(_callback, None)
     except Exception:
-        pass
+        if strict:
+            raise
     return windows
 
 
@@ -337,14 +343,14 @@ class PresenceScanner:
         self,
         manager,
         on_update: Callable[[dict[str, dict]], None],
-        interval_sec: int = 5,
+        interval_sec: int = 2,
     ):
         self._manager = manager
         self._on_update = on_update
-        self._interval = max(5, int(interval_sec))
+        self._interval = max(1, float(interval_sec))
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
-        self._pid_uid_cache: dict[int, tuple[float, str]] = {}
+        self._status_tracker = ClientStatusTracker(self._stop_evt)
         self._process_cache: dict[int, tuple[float, psutil.Process]] = {}
         self._logical_cpu_count = max(1, psutil.cpu_count() or 1)
         self.latest_snapshot: dict[str, dict] = {}
@@ -366,41 +372,22 @@ class PresenceScanner:
         self._thread = None
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
-        self._pid_uid_cache.clear()
+        if thread and thread.is_alive():
+            return
         self._process_cache.clear()
         self.latest_snapshot = {}
 
     def _run(self) -> None:
         while not self._stop_evt.is_set():
+            started = time.monotonic()
             self._do_scan()
-            if self._stop_evt.wait(self._interval):
+            if self._stop_evt.wait(max(0, self._interval - (time.monotonic() - started))):
                 break
-
-    def _resolve_pid_user_id(
-        self,
-        pid: int,
-        create_time: float,
-        used_logs: set[str],
-    ) -> str | None:
-        cached = self._pid_uid_cache.get(pid)
-        if cached is not None and cached[0] == create_time:
-            return cached[1]
-
-        user_id = _get_user_id_from_pid(pid, used_logs)
-        if user_id:
-            self._pid_uid_cache[pid] = (create_time, user_id)
-        return user_id
 
     def _do_scan(self) -> None:
         try:
-            discovered_processes = get_roblox_processes()
+            discovered_processes = get_roblox_processes(force=True, strict=True)
             current_pids = set(discovered_processes)
-            self._pid_uid_cache = {
-                pid: value
-                for pid, value in self._pid_uid_cache.items()
-                if pid in current_pids
-                and value[0] == discovered_processes[pid][0]
-            }
             self._process_cache = {
                 pid: value
                 for pid, value in self._process_cache.items()
@@ -422,28 +409,30 @@ class PresenceScanner:
                 self._on_update({})
                 return
 
-            used_logs: set[str] = set()
-            matched_processes: list[tuple[str, psutil.Process]] = []
-            for pid in sorted(current_processes):
-                create_time, process = current_processes[pid]
-                user_id = self._resolve_pid_user_id(
-                    pid,
-                    create_time,
-                    used_logs,
-                )
-                username = uid_map.get(user_id or "")
-                if username:
-                    matched_processes.append((username, process))
+            get_records = getattr(self._manager, "get_launch_records", None)
+            clients = self._status_tracker.scan(
+                current_processes, uid_map,
+                get_records() if callable(get_records) else {},
+                get_windows_by_pid(current_pids, strict=True),
+            )
+            # Import lazily: Headless Manager also uses process discovery here.
+            from features.headless_manager import get_active_manager
+            headless_manager = get_active_manager()
+            headless = headless_manager.get_headless_identities() if headless_manager else set()
 
             aggregates: dict[str, dict] = {}
-            for username, process in matched_processes:
+            for key, client in clients.items():
+                username = client["username"]
+                process = current_processes[key[0]][1]
                 entry = aggregates.setdefault(username, {
                     "pids": [],
+                    "clients": [],
                     "ram_mb": 0.0,
                     "cpu_percent": 0.0,
                     "ram_available": False,
                     "cpu_available": False,
                 })
+                entry["clients"].append(client)
                 try:
                     entry["pids"].append(process.pid)
                     entry["ram_mb"] += process.memory_info().rss / 1024 / 1024
@@ -471,12 +460,15 @@ class PresenceScanner:
 
             snapshot: dict[str, dict] = {}
             for username, entry in aggregates.items():
+                entry.update(summarize_processes(entry["clients"], headless))
                 entry["cpu_percent"] = min(
                     100.0,
                     entry["cpu_percent"] / self._logical_cpu_count,
                 )
                 snapshot[username] = entry
 
+            if self._stop_evt.is_set():
+                return
             self.latest_snapshot = snapshot
             try:
                 self._on_update(snapshot)
@@ -484,6 +476,14 @@ class PresenceScanner:
                 pass
         except Exception as exc:
             print(
-                f"[ERROR] Account Activity Monitor scan failed: "
+                f"[ERROR] Account status monitor scan failed: "
                 f"{type(exc).__name__}: {exc}"
             )
+            # Process/window observation failures do not change dot colors.
+            snapshot = {
+                username: {**metrics, "ram_available": False, "cpu_available": False}
+                for username, metrics in self.latest_snapshot.items()
+            }
+            if not self._stop_evt.is_set():
+                self.latest_snapshot = snapshot
+                self._on_update(snapshot)
