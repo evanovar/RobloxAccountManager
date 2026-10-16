@@ -1479,7 +1479,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._on_roblox_settings_path_changed
         )
 
-        # Account Activity Monitor
+        # Account status and optional performance display
         self._presence_mod = presence_mod
         self._presence_scanner = None
         self._presence_generation = 0
@@ -1576,8 +1576,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if S.get("rename_roblox_windows", False):
             self._start_rename_windows()
 
-        if S.get("presence_indicator", False):
-            self._start_presence_scanner()
+        self._start_presence_scanner()
 
         if S.get("roblox_installer_fix", False):
             try:
@@ -3878,18 +3877,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_rename_mode_controls()
 
         self._sett_monitoring_chk = _chk(
-            "presence_indicator", "Account Activity Monitor",
-            "Show local client status and Roblox RAM and CPU usage.\n"
-            "Updates about every 2 seconds using local processes and logs.\n"
-            "Blue: desktop app; green: in game; yellow: background; red: a Roblox hard error.\n"
-            "An outlined dot means headless. Hover a dot for details.",
-            on_change=self._on_sett_presence_indicator,
+            "presence_indicator", "Performance Monitor",
+            "Show local Roblox RAM and CPU usage beside each account.\n"
+            "Updates about every 2 seconds. Status dots are always enabled.",
+            on_change=self._on_sett_performance_monitor,
         )
         f.addWidget(self._sett_monitoring_chk)
-
-        # Start scanner immediately if the setting is already on
-        if actions.load_ui_settings().get("presence_indicator", False):
-            self._start_presence_scanner()
 
         f.addWidget(_sec("WINDOW GRID"))
         self._sett_window_grid_chk = _chk(
@@ -4628,11 +4621,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._window_renamer is not None:
             self._window_renamer.set_title_mode(mode)
 
-    def _on_sett_presence_indicator(self, enabled: bool):
-        if enabled:
-            self._start_presence_scanner()
-        else:
-            self._stop_presence_scanner()
+    def _on_sett_performance_monitor(self, enabled: bool):
         self._refresh_account_list()
 
     def _on_sett_installer_fix(self, enabled: bool):
@@ -5627,7 +5616,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             interval_sec=2,
         )
         self._presence_scanner.start()
-        print("[INFO] Account Activity Monitor started.")
+        print("[INFO] Account status monitor started.")
 
     def _stop_presence_scanner(self) -> None:
         self._presence_generation += 1
@@ -5643,7 +5632,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._activity_snapshot = {}
         self._update_presence_dots()
         self._update_activity_rows()
-        print("[INFO] Account Activity Monitor stopped.")
+        print("[INFO] Account status monitor stopped.")
 
     def _on_presence_update(self, update: object) -> None:
         generation, snapshot = update
@@ -5667,16 +5656,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._update_activity_rows()
 
     def _update_presence_dots(self) -> None:
-        enabled = bool(actions.load_ui_settings().get("presence_indicator", False))
         manager = self._headless_manager
         headless = manager.get_headless_identities() if manager else set()
         for username, dot in self._presence_dots.items():
             slot = dot.parentWidget()
             dot.setToolTip("")
             slot.setToolTip("")
-            slot.setVisible(enabled)
+            slot.setVisible(True)
             metrics = self._activity_snapshot.get(username)
-            if not metrics or not enabled:
+            if not metrics:
                 dot.setVisible(False)
                 continue
             status = (account_status_mod.summarize_processes(metrics["clients"], headless)
@@ -7189,7 +7177,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             dot_lbl.setFixedSize(8, 8)
             dot_lbl.setVisible(False)
             dot_lay.addWidget(dot_lbl)
-            dot_slot.setVisible(activity_enabled)
             self._presence_dots[username] = dot_lbl
             leading_lay.addWidget(dot_slot)
 

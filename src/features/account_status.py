@@ -1,4 +1,4 @@
-"""Read-only local Roblox client state for the Account Activity Monitor."""
+"""Read-only local Roblox client state for persistent account status dots."""
 
 from __future__ import annotations
 

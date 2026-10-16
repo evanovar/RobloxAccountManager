@@ -37,7 +37,8 @@ class AccountStatusUITests(unittest.TestCase):
             setattr(self.window, name, lambda method=method: method(self.window))
 
     def update(self, state="game", visible=True):
-        snapshot = {"Account": {"clients": [{
+        snapshot = {"Account": {"pids": [123], "ram_mb": 128, "cpu_percent": 1.5,
+                                "ram_available": True, "cpu_available": True, "clients": [{
             "pid": 123, "created": 100.0, "client_state": state,
             "window_visible": visible, "reason": "Connected to a game server." if state == "game" else state,
         }]}}
@@ -94,18 +95,19 @@ class AccountStatusUITests(unittest.TestCase):
         self.assertEqual(self.list.currentItem().data(Qt.ItemDataRole.UserRole), "Other")
         self.assertIn(ui.ACCENT_TEXT, self.window._presence_dots["Account"].styleSheet())
 
-    def test_disabled_monitor_hides_dots_and_metrics(self):
+    def test_disabled_performance_monitor_keeps_status_dots_and_hides_metrics(self):
         self.window._refresh_account_list()
         self.update()
         self.settings["presence_indicator"] = False
-        self.window._activity_snapshot = {}
         self.window._refresh_account_list()
-        self.assertTrue(self.window._presence_dots["Account"].parentWidget().isHidden())
+        self.assertFalse(self.window._presence_dots["Account"].parentWidget().isHidden())
+        self.assertFalse(self.window._presence_dots["Account"].isHidden())
+        self.assertEqual(self.window._presence_dots["Account"].toolTip(), "In Game")
         self.assertEqual(self.window._activity_widgets, {})
-        self.assertEqual(self.window._presence_dots["Account"].toolTip(), "")
-        self.assertEqual(self.window._presence_dots["Account"].parentWidget().toolTip(), "")
+        self.update("home")
+        self.assertEqual(self.window._presence_dots["Account"].toolTip(), "In Main Screen")
 
-    def test_old_scanner_cannot_restore_stale_status_after_toggle(self):
+    def test_old_scanner_cannot_restore_stale_status_after_restart(self):
         self.window._refresh_account_list()
         self.window._presence_generation = 2
         self.update()
@@ -141,3 +143,41 @@ class AccountStatusUITests(unittest.TestCase):
         with patch.object(ui, "ACCENT_TEXT", "#123ABC"):
             self.update("home")
         self.assertIn("#123ABC", self.window._presence_dots["Account"].styleSheet())
+
+    def test_startup_and_performance_toggle_leave_status_scanner_running(self):
+        self.settings["presence_indicator"] = False
+        manager = MagicMock()
+        manager.accounts = {"Account": {}}
+        manager.get_encryption_method.return_value = "none"
+        manager.get_secure_setting.return_value = ""
+        with patch.object(ui.QTimer, "singleShot"), \
+                patch.object(ui.AccountManagerUIQt, "_load_avatars_async"), \
+                patch.object(ui.AccountManagerUIQt, "_start_chromium_status_check"), \
+                patch.object(ui.AccountManagerUIQt, "_load_roblox_settings"), \
+                patch.object(ui.AccountManagerUIQt, "_setup_system_tray"), \
+                patch.object(ui.EncryptionConfig, "is_setup_complete", return_value=True), \
+                patch.object(ui.presence_mod, "PresenceScanner") as scanner, \
+                patch.object(ui.actions, "save_ui_setting", side_effect=self.settings.__setitem__):
+            window = ui.AccountManagerUIQt(manager)
+            self.addCleanup(window.deleteLater)
+            self.addCleanup(window.close)
+            scanner.assert_called_once()
+            scanner.return_value.start.assert_called_once()
+            window._ensure_page_built(4)
+            self.assertEqual(window._sett_monitoring_chk.text(), "Performance Monitor")
+            self.assertFalse(window._sett_monitoring_chk.isChecked())
+            self.assertEqual(window._activity_widgets, {})
+            generation = window._presence_generation
+            self.update()
+            window._on_presence_update((generation, self.window._activity_snapshot))
+            for enabled in (True, False, True):
+                window._sett_monitoring_chk.click()
+                self.assertEqual(self.settings["presence_indicator"], enabled)
+                self.assertEqual(bool(window._activity_widgets), enabled)
+                self.assertFalse(window._presence_dots["Account"].isHidden())
+                self.assertEqual(window._presence_dots["Account"].toolTip(), "In Game")
+                self.assertEqual(window._presence_generation, generation)
+                if enabled:
+                    ram, cpu = window._activity_labels["Account"]
+                    self.assertEqual((ram.text(), cpu.text()), ("128 MB", "1.5%"))
+            scanner.return_value.stop.assert_not_called()

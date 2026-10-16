@@ -1,5 +1,5 @@
 """
-Account Activity Monitor process scanning.
+Account status and performance process scanning.
 """
 
 from __future__ import annotations
@@ -476,7 +476,7 @@ class PresenceScanner:
                 pass
         except Exception as exc:
             print(
-                f"[ERROR] Account Activity Monitor scan failed: "
+                f"[ERROR] Account status monitor scan failed: "
                 f"{type(exc).__name__}: {exc}"
             )
             # Process/window observation failures do not change dot colors.
