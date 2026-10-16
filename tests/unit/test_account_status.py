@@ -82,7 +82,7 @@ class ClientLogTests(unittest.TestCase):
         self.assertFalse(self.log.available)
 
     def test_ignored_transitions_preserve_last_color(self):
-        for marker in ("[FLog::SingleSurfaceApp] userDidLogout", "challengedByGcs",
+        for marker in ("[FLog::SingleSurfaceApp] userDidLogout",
                        "[FLog::SingleSurfaceApp] shutDown: (stage:LuaApp).",
                        "[FLog::SingleSurfaceApp] destroyLuaApp:",
                        "[FLog::SingleSurfaceApp] launchUGCGameInternal",
@@ -91,6 +91,13 @@ class ClientLogTests(unittest.TestCase):
                         "[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
             self.append(marker + "\n")
             self.assertEqual(self.log.state, "home")
+
+    def test_security_challenge_is_red_through_shutdown_until_confirmed_recovery(self):
+        self.append("challengedByGcs\n")
+        self.append("[FLog::SingleSurfaceApp] shutDown: (stage:LuaApp).\n")
+        self.assertEqual((self.log.state, self.log.reason), ("error", "ROBLOX_SECURITY_CHALLENGE"))
+        self.append("[FLog::Network] Replicator created: server\n")
+        self.assertEqual(self.log.state, "game")
 
     def test_joining_does_not_clear_red_until_a_confirmed_state_arrives(self):
         self.append("[FLog::Output] Session Transition FSM: Error Occurred.\n")
@@ -122,12 +129,20 @@ class StatusAggregationTests(unittest.TestCase):
     def test_hard_error_is_red_even_if_main_window_is_absent(self):
         self.assertEqual(status.summarize_processes([client("error", visible=False)], set())["state"], "error")
 
-    def test_background_overrides_game_and_retains_connection_in_tooltip(self):
+    def test_background_overrides_game_with_simple_tooltip(self):
         row = client(visible=False)
         row["reason"] = "Connected to a game server."
         result = status.summarize_processes([row], set())
         self.assertEqual(result["state"], "background")
-        self.assertIn("Connected to a game server", result["tooltip"])
+        self.assertEqual(result["tooltip"], "Running in Background")
+
+    def test_tooltips_use_simple_state_or_error_labels(self):
+        for state, expected in (("game", "In Game"), ("home", "In Main Screen"), (None, "")):
+            self.assertEqual(status.summarize_processes([client(state)], set())["tooltip"], expected)
+        row = {**client("error", visible=False), "reason": "ROBLOX_SECURITY_CHALLENGE"}
+        self.assertEqual(status.summarize_processes([row], set())["tooltip"], "Error: ROBLOX_SECURITY_CHALLENGE")
+        self.assertEqual(status.summarize_processes([row], {(123, 100.0)})["tooltip"],
+                         "Error: ROBLOX_SECURITY_CHALLENGE (Headless)")
 
     def test_headless_home_and_game_keep_their_color_and_outline(self):
         for state in ("home", "game", "error"):
@@ -140,7 +155,7 @@ class StatusAggregationTests(unittest.TestCase):
         result = status.summarize_processes(rows, {(1, 100.0)})
         self.assertEqual(result["state"], "home")
         self.assertFalse(result["hollow"])
-        self.assertIn("Mixed headless", result["tooltip"])
+        self.assertEqual(result["tooltip"], "In Main Screen")
         rows.append(client("game", pid=4))
         self.assertEqual(status.summarize_processes(rows, set())["state"], "game")
 
@@ -183,6 +198,18 @@ class StatusTrackerTests(unittest.TestCase):
         row = self.scan()[(123, 100.0)]
         self.assertEqual((row["username"], row["client_state"]), ("Account", "home"))
         self.probe.assert_not_called()
+
+    def test_security_challenge_without_newline_is_red_even_without_game_identity(self):
+        self.scan()
+        with self.path.open("a") as handle:
+            handle.write("challengedByGcs")
+        with patch.object(status, "client_window_visible", return_value=False), \
+                patch.object(status, "has_error_dialog", return_value=True):
+            row = self.scan()[(123, 100.0)]
+        self.assertEqual(row["username"], "Account")
+        self.assertEqual((row["client_state"], row["reason"]), ("error", "ROBLOX_SECURITY_CHALLENGE"))
+        result = status.summarize_processes([{**row, "window_visible": False}], set())
+        self.assertEqual((result["state"], result["tooltip"]), ("error", "Error: ROBLOX_SECURITY_CHALLENGE"))
 
     def test_external_process_uses_exact_open_log_and_authenticated_identity(self):
         self.process.cmdline.return_value = []

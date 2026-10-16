@@ -5672,11 +5672,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         headless = manager.get_headless_identities() if manager else set()
         for username, dot in self._presence_dots.items():
             slot = dot.parentWidget()
+            dot.setToolTip("")
+            slot.setToolTip("")
             slot.setVisible(enabled)
             metrics = self._activity_snapshot.get(username)
             if not metrics or not enabled:
                 dot.setVisible(False)
-                slot.setToolTip("No matched local Roblox process." if enabled else "")
                 continue
             status = (account_status_mod.summarize_processes(metrics["clients"], headless)
                       if metrics.get("clients") else metrics)

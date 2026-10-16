@@ -18,6 +18,7 @@ from features.window_log_probe import probe_open_log_paths
 
 
 COLORS = {"game": "#2ECC71", "background": "#F4C542", "error": "#E74C3C"}
+SECURITY_CHALLENGE = "ROBLOX_SECURITY_CHALLENGE"
 _PRIORITY = {"game": 3, "home": 2, "error": 1, "background": 0, None: -1}
 _TRACKER = re.compile(r"browsertrackerid[^0-9]{0,32}(\d+)", re.I)
 _WEB_TRACKER = re.compile(r"web launch, websiteBTId is (\d+)", re.I)
@@ -87,16 +88,17 @@ class ClientLog:
         elif "[FLog::UgcExperienceController]" in line and "doTeleport:" in line:
             self.desktop = False
             self.place_id = self.job_id = ""
-        elif "challengedByGcs" in line:
-            self.desktop = False
         # Routine asset/script/HTTP errors are common in healthy clients. Only
-        # explicit session-failure or fatal-crash markers change the dot to red.
-        if "[FLog::Output] Session Transition FSM: Error Occurred." in line:
+        # explicit session-failure, security-challenge or crash markers turn red.
+        if "challengedByGcs" in line:
             self.desktop = False
-            self.state, self.reason = "error", "Roblox reported a hard session error."
+            self.state, self.reason = "error", SECURITY_CHALLENGE
+        elif "[FLog::Output] Session Transition FSM: Error Occurred." in line:
+            self.desktop = False
+            self.state, self.reason = "error", "Session failure"
         elif _CRASH.search(line):
             self.desktop = False
-            self.state, self.reason = "error", "Roblox reported a fatal client crash (RBXCRASH)."
+            self.state, self.reason = "error", "Fatal client crash (RBXCRASH)"
 
     def read(self, path: str) -> None:
         self.available = False
@@ -123,6 +125,11 @@ class ClientLog:
                     if len(self.partial) > 256 * 1024:
                         self.partial = b""
                 self.mtime = stat.st_mtime_ns
+                # Launch confirmation recognizes this marker before a trailing
+                # newline too; a challenged client may stop writing at this point.
+                if b"challengedByGcs" in self.partial:
+                    self.desktop = False
+                    self.state, self.reason = "error", SECURITY_CHALLENGE
                 self.available = self.offset >= stat.st_size and stat.st_size > 0 and not self.partial
         except OSError:
             pass
@@ -172,27 +179,16 @@ def summarize_processes(processes: list[dict], headless: set[tuple[int, float]])
                 state = "background"
         row["state"] = state
         rows.append(row)
-    state = max(rows, key=lambda row: _PRIORITY[row["state"]])["state"]
+    selected = max(rows, key=lambda row: _PRIORITY[row["state"]])
+    state = selected["state"]
     hollow = all(row["headless"] for row in rows)
-    names = {"game": "In game", "home": "Roblox desktop app", "error": "Roblox hard error",
-             "background": "Running in background", None: "No confirmed status yet"}
-    lines = [names[state] + (" — headless" if hollow else "")]
-    if len(rows) > 1:
-        lines.append(f"{len(rows)} local clients; showing in-game before desktop, red status, then background.")
-        if any(row["headless"] for row in rows) and not hollow:
-            lines.append("Mixed headless and shown clients; the dot is solid.")
-    for row in rows:
-        text = row.get("reason") or "No confirmed status yet."
-        if row["state"] == "background":
-            text = "Process is running without a displayed client window. " + text
-        if row["headless"]:
-            text += " Headless mode is enabled."
-        if row.get("place_id"):
-            text += f" PlaceID: {row['place_id']}."
-        if row.get("job_id"):
-            text += f" JobID: {row['job_id']}."
-        lines.append(f"PID {row['pid']}: {text}")
-    return {"state": state, "hollow": hollow, "tooltip": "\n".join(lines)}
+    names = {"game": "In Game", "home": "In Main Screen",
+             "background": "Running in Background", None: ""}
+    tooltip = (f"Error: {selected.get('reason') or 'Roblox client error'}"
+               if state == "error" else names[state])
+    if tooltip and hollow:
+        tooltip += " (Headless)"
+    return {"state": state, "hollow": hollow, "tooltip": tooltip}
 
 
 class ClientStatusTracker:
@@ -308,10 +304,10 @@ class ClientStatusTracker:
             else:
                 self._last_windows[key] = visible
             available = bool(log and log.available)
-            state = log.state if available else None
-            reason = log.reason if available else ""
-            if has_error_dialog(windows.get(key[0], [])):
-                state, reason = "error", "A Roblox error or crash dialog is open."
+            state = log.state if log and (available or log.state == "error") else None
+            reason = log.reason if state is not None else ""
+            if state != "error" and has_error_dialog(windows.get(key[0], [])):
+                state, reason = "error", "Roblox error or crash dialog"
             result[key] = {
                 "pid": key[0], "created": key[1], "username": uid_map[user_id],
                 "client_state": state,

@@ -59,6 +59,8 @@ class AccountStatusUITests(unittest.TestCase):
         other = self.window._presence_dots["Other"]
         self.assertTrue(other.isHidden())
         self.assertFalse(other.parentWidget().isHidden())
+        self.assertEqual(other.toolTip(), "")
+        self.assertEqual(other.parentWidget().toolTip(), "")
         self.assertEqual(dot.parentWidget().width(), other.parentWidget().width())
 
     def test_all_color_states_have_explanatory_tooltips(self):
@@ -79,7 +81,7 @@ class AccountStatusUITests(unittest.TestCase):
         self.headless.add((123, 100.0))
         self.window._update_presence_dots()
         self.assertIn("background: transparent", dot.styleSheet())
-        self.assertIn("headless", dot.toolTip())
+        self.assertEqual(dot.toolTip(), "In Game (Headless)")
         self.headless.clear()
         self.window._update_presence_dots()
         self.assertNotIn("background: transparent", dot.styleSheet())
@@ -100,6 +102,8 @@ class AccountStatusUITests(unittest.TestCase):
         self.window._refresh_account_list()
         self.assertTrue(self.window._presence_dots["Account"].parentWidget().isHidden())
         self.assertEqual(self.window._activity_widgets, {})
+        self.assertEqual(self.window._presence_dots["Account"].toolTip(), "")
+        self.assertEqual(self.window._presence_dots["Account"].parentWidget().toolTip(), "")
 
     def test_old_scanner_cannot_restore_stale_status_after_toggle(self):
         self.window._refresh_account_list()
@@ -119,6 +123,18 @@ class AccountStatusUITests(unittest.TestCase):
         self.window._refresh_account_list()
         self.update(None)
         self.assertTrue(self.window._presence_dots["Account"].isHidden())
+        self.assertEqual(self.window._presence_dots["Account"].toolTip(), "")
+        self.assertEqual(self.window._presence_dots["Account"].parentWidget().toolTip(), "")
+
+    def test_stopped_account_clears_both_previous_tooltips(self):
+        self.window._refresh_account_list()
+        self.update()
+        dot = self.window._presence_dots["Account"]
+        self.assertEqual(dot.toolTip(), "In Game")
+        ui.AccountManagerUIQt._on_presence_update(self.window, (1, {}))
+        self.assertTrue(dot.isHidden())
+        self.assertEqual(dot.toolTip(), "")
+        self.assertEqual(dot.parentWidget().toolTip(), "")
 
     def test_home_color_uses_memory_text_theme_color(self):
         self.window._refresh_account_list()
