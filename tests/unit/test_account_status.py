@@ -30,7 +30,7 @@ class ClientLogTests(unittest.TestCase):
         self.assertEqual(self.log.state, "game")
         self.assertEqual((self.log.place_id, self.log.job_id), ("", ""))
         self.append("[FLog::Network] Time to disconnect replication data: 1\n")
-        self.assertEqual(self.log.state, "error")
+        self.assertEqual(self.log.state, "game")
 
     def test_home_requires_signed_in_desktop_evidence(self):
         self.append("[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
@@ -67,13 +67,13 @@ class ClientLogTests(unittest.TestCase):
         self.append("[FLog::Network] Replicator created: server\n")
         self.path.write_text("reset\n")
         self.log.read(str(self.path))
-        self.assertEqual(self.log.state, "error")
+        self.assertIsNone(self.log.state)
         self.append("[FLog::Network] Replicator created: server\n")
         replacement = self.path.with_suffix(".new")
         replacement.write_text("new log without connection evidence\n")
         replacement.replace(self.path)
         self.log.read(str(self.path))
-        self.assertEqual(self.log.state, "error")
+        self.assertIsNone(self.log.state)
 
     def test_unreadable_log_invalidates_connection_evidence(self):
         self.append("[FLog::Network] Replicator created: server\n")
@@ -93,14 +93,35 @@ class ClientLogTests(unittest.TestCase):
             self.assertEqual(self.log.state, "home")
 
     def test_joining_does_not_clear_red_until_a_confirmed_state_arrives(self):
+        self.append("[FLog::Output] Session Transition FSM: Error Occurred.\n")
         self.append("[FLog::Network] Time to disconnect replication data: 1\n")
         self.append("[FLog::Output] ! Joining game 'next' place 42 at server\n")
         self.assertEqual(self.log.state, "error")
         self.append("[FLog::Network] Replicator created: server\n")
         self.assertEqual(self.log.state, "game")
 
+    def test_fatal_crash_marker_is_red_and_home_can_clear_session_error(self):
+        self.append("2026-10-16T00:00:00Z,1,1,6 [LOGCHANNELS + 1] RBXCRASH: HardAssert (Out of job nodes)\n")
+        self.assertEqual(self.log.state, "error")
+        self.append("[FLog::SingleSurfaceApp] initializeLuaAppWithLoggedInUser:\n"
+                    "[FLog::SingleSurfaceApp] setStage: (stage:LuaApp)\n")
+        self.assertEqual(self.log.state, "home")
+
+    def test_routine_log_errors_do_not_change_color(self):
+        self.append("[FLog::Network] Replicator created: server\n")
+        for line in ("[FLog::Error] Asset (Image) load failed: Invalid image or texture.",
+                     "[FLog::CreatorError] Script error: attempt to index nil",
+                     "[DFLog::HttpTraceError] HttpResponse status:500",
+                     "[FLog::CreatorOutput] Session Transition FSM: Error Occurred.",
+                     "[FLog::CreatorOutput] RBXCRASH: HardAssert (script output)"):
+            self.append(line + "\n")
+            self.assertEqual(self.log.state, "game")
+
 
 class StatusAggregationTests(unittest.TestCase):
+    def test_hard_error_is_red_even_if_main_window_is_absent(self):
+        self.assertEqual(status.summarize_processes([client("error", visible=False)], set())["state"], "error")
+
     def test_background_overrides_game_and_retains_connection_in_tooltip(self):
         row = client(visible=False)
         row["reason"] = "Connected to a game server."
@@ -191,10 +212,10 @@ class StatusTrackerTests(unittest.TestCase):
         self.processes[124] = (100.0, self.process)
         self.assertEqual(self.scan(), {})
 
-    def test_missing_log_makes_known_process_red_and_exit_removes_it(self):
+    def test_missing_log_does_not_request_a_color_change_and_exit_removes_it(self):
         self.scan()
         self.path.unlink()
-        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
+        self.assertIsNone(self.scan()[(123, 100.0)]["client_state"])
         self.processes.clear()
         self.assertEqual(self.scan(), {})
         self.assertFalse(self.tracker._bindings)
@@ -205,19 +226,27 @@ class StatusTrackerTests(unittest.TestCase):
         self.assertEqual(self.scan({}), {})
         self.assertNotIn((123, 100.0), self.tracker._bindings)
 
-    def test_read_failure_does_not_inherit_blue(self):
+    def test_read_failure_does_not_request_a_color_change(self):
         self.scan()
         with patch("builtins.open", side_effect=PermissionError):
-            self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
+            self.assertIsNone(self.scan()[(123, 100.0)]["client_state"])
 
-    def test_incomplete_log_turns_red_and_recovers_when_completed(self):
+    def test_incomplete_log_does_not_request_a_color_change(self):
         self.scan()
         with self.path.open("a") as handle:
             handle.write("[FLog::Network] Replicator crea")
-        self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "error")
+        self.assertIsNone(self.scan()[(123, 100.0)]["client_state"])
         with self.path.open("a") as handle:
             handle.write("ted: server\n")
         self.assertEqual(self.scan()[(123, 100.0)]["client_state"], "game")
+
+    def test_error_dialog_can_turn_red_even_without_readable_logs(self):
+        self.scan()
+        self.path.unlink()
+        with patch.object(status, "has_error_dialog", return_value=True):
+            row = self.scan()[(123, 100.0)]
+        self.assertEqual(row["client_state"], "error")
+        self.assertIn("dialog", row["reason"])
 
     def test_failed_window_observation_keeps_previous_background_state(self):
         with patch.object(status, "client_window_visible", return_value=False), \
@@ -239,6 +268,20 @@ class StatusTrackerTests(unittest.TestCase):
 
 
 class WindowStatusTests(unittest.TestCase):
+    def test_native_error_dialog_requires_visible_dialog_class_and_error_title(self):
+        with patch.object(status.win32gui, "IsWindowVisible", return_value=True) as visible, \
+                patch.object(status.win32gui, "GetClassName", return_value="#32770") as window_class, \
+                patch.object(status.win32gui, "GetWindowText", return_value="Roblox Crash") as title:
+            self.assertTrue(status.has_error_dialog([123]))
+            visible.return_value = False
+            self.assertFalse(status.has_error_dialog([123]))
+            visible.return_value = True
+            title.return_value = "Roblox"
+            self.assertFalse(status.has_error_dialog([123]))
+            title.return_value = "Error"
+            window_class.return_value = "RobloxGameWindow"
+            self.assertFalse(status.has_error_dialog([123]))
+
     def test_minimized_or_note_renamed_window_counts_as_a_client_window(self):
         with patch.object(status.win32gui, "GetWindow", return_value=0), \
                 patch.object(status.win32gui, "GetWindowRect", return_value=(0, 0, 800, 600)), \

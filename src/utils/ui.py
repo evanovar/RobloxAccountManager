@@ -3881,7 +3881,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             "presence_indicator", "Account Activity Monitor",
             "Show local client status and Roblox RAM and CPU usage.\n"
             "Updates about every 2 seconds using local processes and logs.\n"
-            "Blue: desktop app; green: in game; yellow: background; red: disconnected or log unavailable.\n"
+            "Blue: desktop app; green: in game; yellow: background; red: a Roblox hard error.\n"
             "An outlined dot means headless. Hover a dot for details.",
             on_change=self._on_sett_presence_indicator,
         )
