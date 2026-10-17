@@ -1,9 +1,10 @@
 import hashlib
+import pickle
 import subprocess
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from classes import encryption
 from classes.encryption import HardwareEncryption
@@ -43,7 +44,7 @@ class ReadWmiIdentifiersTests(unittest.TestCase):
 
     def read(self, rows, **errors):
         pythoncom, modules = fake_com(rows, **errors)
-        with patch.dict(sys.modules, modules):
+        with patch.dict(encryption.__dict__, {"pythoncom": pythoncom, "win32com": modules["win32com"]}):
             return encryption._read_wmi_identifiers(), pythoncom
 
     def test_one_value_per_class_is_returned_in_order(self):
@@ -81,8 +82,18 @@ class ReadWmiIdentifiersTests(unittest.TestCase):
         pythoncom.CoUninitialize.assert_not_called()
 
     def test_missing_pywin32_returns_none(self):
-        with patch.dict(sys.modules, {"pythoncom": None}):
+        values, pythoncom = self.read(GOOD, init_error=ImportError("No module named pythoncom"))
+        self.assertIsNone(values)
+        pythoncom.CoUninitialize.assert_not_called()
+
+    def test_corrupt_com_cache_during_lazy_import_returns_none(self):
+        pythoncom, _ = fake_com(GOOD)
+        package = MagicMock()
+        type(package).client = PropertyMock(side_effect=pickle.UnpicklingError("invalid load key, '\\x00'."))
+        with patch.dict(encryption.__dict__, {"pythoncom": pythoncom, "win32com": package}):
             self.assertIsNone(encryption._read_wmi_identifiers())
+        pythoncom.CoInitialize.assert_called_once()
+        pythoncom.CoUninitialize.assert_called_once()
 
     def test_other_platforms_return_none(self):
         with patch.object(encryption.platform, "system", return_value="Linux"):

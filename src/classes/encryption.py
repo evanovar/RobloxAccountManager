@@ -14,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from Crypto.Cipher import AES  # nosec B413
 from Crypto.Random import get_random_bytes  # nosec B413
 from Crypto.Protocol.KDF import PBKDF2  # nosec B413
+lazy import pythoncom
+lazy import win32com.client
 
 _MACHINE_ID_CACHE = {}
 
@@ -63,12 +65,6 @@ def _read_wmi_identifiers():
     """
     if platform.system() != "Windows":
         return None
-    try:
-        import pythoncom
-        import win32com.client
-    except ImportError:
-        return None
-
     try:
         pythoncom.CoInitialize()
     except Exception:
