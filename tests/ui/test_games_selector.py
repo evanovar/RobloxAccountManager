@@ -234,27 +234,60 @@ class FieldIntegrationTests(unittest.TestCase):
     def setUp(self):
         QApplication.instance() or QApplication([])
 
-    def test_apply_sets_the_place_field_and_emits_its_existing_change_signal(self):
+    def test_apply_sets_place_and_clears_private_server_with_change_signals(self):
         combo = QComboBox()
         combo.setEditable(True)
         changed = Mock()
         combo.currentTextChanged.connect(changed)
-        window = SimpleNamespace(_place_id_edit=combo)
+        private = QComboBox()
+        private.setEditable(True)
+        private.setCurrentText("123456789")
+        self.addCleanup(combo.deleteLater)
+        self.addCleanup(private.deleteLater)
+        private_changed = Mock()
+        private.currentTextChanged.connect(private_changed)
+        window = SimpleNamespace(_place_id_edit=combo, _private_server_edit=private)
         with patch.object(ui, "_GamesSelectorDialog") as dialog:
             dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
             dialog.return_value.selected_place_id = "12345678901234"
             ui.AccountManagerUIQt._open_games_selector(window)
         self.assertEqual(combo.currentText(), "12345678901234")
         changed.assert_called_once_with("12345678901234")
+        self.assertEqual(private.currentText(), "")
+        private_changed.assert_called_once_with("")
 
-    def test_cancel_keeps_the_existing_place_field(self):
+    def test_cancel_keeps_both_existing_fields(self):
         combo = QComboBox()
         combo.setEditable(True)
         combo.setCurrentText("123")
+        private = QComboBox()
+        private.setEditable(True)
+        private.setCurrentText("123456789")
+        self.addCleanup(combo.deleteLater)
+        self.addCleanup(private.deleteLater)
         with patch.object(ui, "_GamesSelectorDialog") as dialog:
             dialog.return_value.exec.return_value = QDialog.DialogCode.Rejected
-            ui.AccountManagerUIQt._open_games_selector(SimpleNamespace(_place_id_edit=combo))
+            window = SimpleNamespace(_place_id_edit=combo, _private_server_edit=private)
+            ui.AccountManagerUIQt._open_games_selector(window)
         self.assertEqual(combo.currentText(), "123")
+        self.assertEqual(private.currentText(), "123456789")
+
+    def test_accepting_without_a_selected_game_keeps_both_fields(self):
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setCurrentText("123")
+        private = QComboBox()
+        private.setEditable(True)
+        private.setCurrentText("123456789")
+        self.addCleanup(combo.deleteLater)
+        self.addCleanup(private.deleteLater)
+        with patch.object(ui, "_GamesSelectorDialog") as dialog:
+            dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog.return_value.selected_place_id = ""
+            window = SimpleNamespace(_place_id_edit=combo, _private_server_edit=private)
+            ui.AccountManagerUIQt._open_games_selector(window)
+        self.assertEqual(combo.currentText(), "123")
+        self.assertEqual(private.currentText(), "123456789")
 
     def test_main_window_search_button_is_to_the_right_of_place_id(self):
         manager = Mock()
