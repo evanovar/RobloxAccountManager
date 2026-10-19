@@ -237,13 +237,15 @@ def confirm_launch(result, session, before, username):
                 ready_since = None
         else:
             ready_since = None
-            if process is not None and not process.is_running():
+        if time.monotonic() >= deadline:
+            # A startup process can exit before its replacement appears. Allow
+            # the same launch tracker to return within the existing timeout.
+            if not matches and process is not None and not process.is_running():
                 return _failure(
                     "ROBLOX_CLIENT_EXITED",
                     f"The Roblox client for {username} exited during startup. "
                     "Check Multi Roblox and try again.",
                 )
-        if time.monotonic() >= deadline:
             return _failure(
                 "ROBLOX_LAUNCH_UNCONFIRMED",
                 f"The Roblox launch for {username} could not be verified within {_TIMEOUT:g} seconds. "
