@@ -62,6 +62,20 @@ _user32.RegisterHotKey.argtypes = [
 ]
 _user32.UnregisterHotKey.restype = wintypes.BOOL
 _user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+_user32.IsZoomed.restype = wintypes.BOOL
+_user32.IsZoomed.argtypes = [wintypes.HWND]
+
+try:
+    _dwmapi = ctypes.WinDLL("dwmapi")
+    _dwmapi.DwmSetWindowAttribute.restype = wintypes.LONG
+    _dwmapi.DwmSetWindowAttribute.argtypes = [
+        wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+    ]
+except OSError:
+    _dwmapi = None
+
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33
+_DWMWCP_ROUND = 2
 
 
 def _parse_hotkey(sequence: str) -> tuple[int, int] | None:
@@ -201,6 +215,19 @@ def _grid_dimensions(count: int) -> tuple[int, int]:
     return columns, rows
 
 
+def _set_rounded_corners(hwnd: int) -> None:
+    if _dwmapi is None:
+        return
+    preference = ctypes.c_int(_DWMWCP_ROUND)
+    try:
+        _dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(preference), ctypes.sizeof(preference),
+        )
+    except OSError:
+        pass
+
+
 def tile_roblox_windows() -> OperationResult:
     windows = _get_roblox_windows()
     if not windows:
@@ -222,6 +249,8 @@ def tile_roblox_windows() -> OperationResult:
         for index, hwnd in enumerate(windows):
             try:
                 if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                if _user32.IsZoomed(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                 actual_left, actual_top, actual_right, actual_bottom = win32gui.GetWindowRect(hwnd)
                 client_left, client_top, client_right, client_bottom = win32gui.GetClientRect(hwnd)
@@ -290,6 +319,7 @@ def tile_roblox_windows() -> OperationResult:
                     )
                     insert_after = hwnd
                     moved += 1
+                    _set_rounded_corners(hwnd)
                 except Exception as exc:
                     print(f"[Window Grid] Failed to move window {hwnd}: {exc}")
 

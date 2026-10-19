@@ -5,14 +5,23 @@ from features import window_grid as grid
 
 
 class WindowGridTests(unittest.TestCase):
+    def setUp(self):
+        self.round_corners = self.enterContext(patch.object(grid, "_set_rounded_corners"))
+
     def tile(self, count, work_area, window_size=(845, 627), failed=(), minimized=(),
              minimum_width=0, frame_size=(16, 39), minimum_height=0,
-             z_order=None, topmost=(), move_failed=()):
+             z_order=None, topmost=(), move_failed=(), maximized=()):
         windows = list(range(1, count + 1))
         rectangles = {hwnd: (100, 200, 100 + window_size[0], 200 + window_size[1])
                       for hwnd in windows}
         resized_widths = []
         topmost = set(topmost)
+
+        def read_rectangle(hwnd):
+            if hwnd in maximized:
+                self.assertTrue(any(call.args == (hwnd, grid.win32con.SW_RESTORE)
+                                    for call in restore.call_args_list))
+            return rectangles[hwnd]
 
         def move(hwnd, insert_after, x, y, width, height, flags):
             if hwnd in failed:
@@ -45,8 +54,9 @@ class WindowGridTests(unittest.TestCase):
         with patch.object(grid, "_get_roblox_windows", return_value=windows), \
                 patch.object(grid, "_get_cursor_monitor_work_area", return_value=work_area), \
                 patch.object(grid.win32gui, "IsIconic", side_effect=lambda hwnd: hwnd in minimized), \
+                patch.object(grid._user32, "IsZoomed", side_effect=lambda hwnd: hwnd in maximized), \
                 patch.object(grid.win32gui, "ShowWindow") as restore, \
-                patch.object(grid.win32gui, "GetWindowRect", side_effect=rectangles.__getitem__), \
+                patch.object(grid.win32gui, "GetWindowRect", side_effect=read_rectangle), \
                 patch.object(grid.win32gui, "GetClientRect", side_effect=lambda hwnd: (
                     0, 0, rectangles[hwnd][2] - rectangles[hwnd][0] - frame_size[0],
                     rectangles[hwnd][3] - rectangles[hwnd][1] - frame_size[1],
@@ -264,6 +274,12 @@ class WindowGridTests(unittest.TestCase):
         self.assertTrue(result)
         restore.assert_called_once_with(4, grid.win32con.SW_RESTORE)
 
+    def test_maximized_windows_are_restored_before_frame_measurement(self):
+        result, _, restore, _ = self.tile(4, (0, 0, 2560, 1392), maximized=(2,))
+        self.assertTrue(result)
+        restore.assert_called_once_with(2, grid.win32con.SW_RESTORE)
+        self.assertEqual({call.args[0] for call in self.round_corners.call_args_list}, {1, 2, 3, 4})
+
     def test_closed_window_does_not_prevent_other_windows_from_fitting(self):
         work_area = (0, 0, 2560, 1392)
         result, rectangles, _, _ = self.tile(8, work_area, failed=(4,))
@@ -281,3 +297,23 @@ class WindowGridTests(unittest.TestCase):
         result, _, _, _ = self.tile(2, (0, 0, 2560, 1392), failed=(1, 2))
         self.assertFalse(result)
         self.assertEqual(result.code, "ROBLOX_WINDOWS_MOVE_FAILED")
+        self.round_corners.assert_not_called()
+
+
+class RoundedCornerTests(unittest.TestCase):
+    def test_request_uses_a_sized_native_corner_preference(self):
+        with patch.object(grid, "_dwmapi") as dwm:
+            grid._set_rounded_corners(123)
+        hwnd, attribute, pointer, size = dwm.DwmSetWindowAttribute.call_args.args
+        self.assertEqual((hwnd, attribute, size), (123, 33, grid.ctypes.sizeof(grid.ctypes.c_int)))
+        value = grid.ctypes.cast(pointer, grid.ctypes.POINTER(grid.ctypes.c_int)).contents.value
+        self.assertEqual(value, 2)
+
+    def test_unsupported_rounding_is_optional(self):
+        with patch.object(grid, "_dwmapi", None):
+            grid._set_rounded_corners(123)
+        with patch.object(grid, "_dwmapi") as dwm:
+            dwm.DwmSetWindowAttribute.return_value = -2147024809  # E_INVALIDARG on older Windows.
+            grid._set_rounded_corners(123)
+            dwm.DwmSetWindowAttribute.side_effect = OSError("DWM unavailable")
+            grid._set_rounded_corners(123)
