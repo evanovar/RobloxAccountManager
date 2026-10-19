@@ -7415,6 +7415,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         try:
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_place_id:
                 self._place_id_edit.setCurrentText(dialog.selected_place_id)
+                self._private_server_edit.setCurrentText("")
         finally:
             dialog.deleteLater()
 
