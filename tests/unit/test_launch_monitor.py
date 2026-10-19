@@ -115,11 +115,20 @@ class LaunchConfirmationTests(unittest.TestCase):
             return current
 
         self.snapshot.side_effect = snapshot
-        result = self.confirm(before=existing)
-        self.assertTrue(result, result.code)
-        self.assertEqual(result.data["process_identity"], replacement_key)
-        self.assertGreaterEqual(self.now, 2.0 + monitor._STABLE_SECONDS)
-        self.auth.assert_called_with("987", replacement_key[1], ANY)
+        for mode in ("handle64", "default"):
+            with self.subTest(mode=mode):
+                self.now = 0.0
+                self.session["mode"] = mode
+                self.handles.reset_mock()
+                result = self.confirm(before=existing)
+                self.assertTrue(result, result.code)
+                self.assertEqual(result.data["process_identity"], replacement_key)
+                self.assertGreaterEqual(self.now, 2.0 + monitor._STABLE_SECONDS)
+                self.auth.assert_called_with("987", replacement_key[1], ANY)
+                if mode == "default":
+                    self.handles.assert_not_called()
+                else:
+                    self.handles.assert_called()
 
     def test_delayed_replacement_still_rejects_wrong_account_or_challenge(self):
         def snapshot():
