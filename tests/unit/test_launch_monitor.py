@@ -2,7 +2,7 @@ import threading
 import unittest
 import os
 import tempfile
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import psutil
 
@@ -94,9 +94,71 @@ class LaunchConfirmationTests(unittest.TestCase):
 
     def test_observed_client_exits_before_ready(self):
         self.window.return_value = False
-        self.snapshot.side_effect = [{self.key: self.process}, {}]
+        self.snapshot.side_effect = lambda: {self.key: self.process} if self.now == 0 else {}
         self.process.is_running.return_value = False
         self.assertEqual(self.confirm().code, "ROBLOX_CLIENT_EXITED")
+        self.assertGreaterEqual(self.now, monitor._TIMEOUT)
+
+    def test_delayed_replacement_with_many_existing_clients_can_confirm(self):
+        existing = {(3000 + index, 50.0): Mock() for index in range(13)}
+        replacement_key = (124, 101.0)
+        replacement = Mock()
+        replacement.cmdline.return_value = self.process.cmdline.return_value
+        self.process.is_running.return_value = False
+
+        def snapshot():
+            current = dict(existing)
+            if self.now < 1.0:
+                current[self.key] = self.process
+            elif self.now >= 2.0:
+                current[replacement_key] = replacement
+            return current
+
+        self.snapshot.side_effect = snapshot
+        for mode in ("handle64", "default"):
+            with self.subTest(mode=mode):
+                self.now = 0.0
+                self.session["mode"] = mode
+                self.handles.reset_mock()
+                result = self.confirm(before=existing)
+                self.assertTrue(result, result.code)
+                self.assertEqual(result.data["process_identity"], replacement_key)
+                self.assertGreaterEqual(self.now, 2.0 + monitor._STABLE_SECONDS)
+                self.auth.assert_called_with("987", replacement_key[1], ANY)
+                if mode == "default":
+                    self.handles.assert_not_called()
+                else:
+                    self.handles.assert_called()
+
+    def test_delayed_replacement_still_rejects_wrong_account_or_challenge(self):
+        def snapshot():
+            if self.now < 1.0:
+                return {self.key: self.process}
+            if self.now >= 2.0:
+                return {(124, 101.0): self.process}
+            return {}
+
+        self.snapshot.side_effect = snapshot
+        for user_id, challenged, code in (
+            ("99", False, "ROBLOX_ACCOUNT_MISMATCH"),
+            ("", True, "ROBLOX_SECURITY_CHALLENGE"),
+        ):
+            with self.subTest(code=code):
+                self.now = 0.0
+                self.process.is_running.return_value = False
+                self.auth.side_effect = lambda *_: ("", False) if self.now < 2.0 else (user_id, challenged)
+                self.assertEqual(self.confirm().code, code)
+
+    def test_unrelated_client_cannot_replace_the_exited_client(self):
+        unrelated = Mock()
+        unrelated.cmdline.return_value = ["browsertrackerid:1234"]
+        self.process.is_running.return_value = False
+        self.window.return_value = False
+        self.snapshot.side_effect = lambda: (
+            {self.key: self.process} if self.now == 0 else {(124, 101.0): unrelated}
+        )
+        self.assertEqual(self.confirm().code, "ROBLOX_CLIENT_EXITED")
+        self.assertGreaterEqual(self.now, monitor._TIMEOUT)
 
     def test_replacement_process_must_complete_its_own_stability_interval(self):
         replacement = (124, 101.0)
