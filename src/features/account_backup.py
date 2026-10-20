@@ -141,6 +141,9 @@ def merge_accounts(existing: dict, imported: dict, overwrite: bool) -> tuple[dic
             merged[name] = record
             added += 1
         elif overwrite:
+            previous = existing[name]
+            if isinstance(previous, dict) and previous.get("cookie_valid", previous.get("valid")) is False:
+                record = {**record, "cookie_valid": False}
             merged[name] = record
             updated += 1
         else:

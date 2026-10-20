@@ -105,6 +105,13 @@ class LaunchRecordTests(unittest.TestCase):
         self.assertFalse(self.manager.launch_roblox("alice", "1818"))
         self.assertFalse(self.manager.get_launch_records())
 
+    def test_successful_launch_does_not_clear_saved_invalid_status(self):
+        self.manager.accounts["alice"]["cookie_valid"] = False
+        self.launcher.return_value = OperationResult.success()
+        self.assertTrue(self.manager.launch_roblox("alice", "1818"))
+        self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
+        self.manager.save_accounts.assert_not_called()
+
     def test_launch_without_account_id_records_nothing(self):
         self.manager.accounts["alice"].pop("user_id")
         self.launcher.return_value = OperationResult.success(data={

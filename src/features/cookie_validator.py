@@ -6,6 +6,7 @@ Core logic for cookie validation.
 from __future__ import annotations
 
 import threading
+from contextlib import nullcontext
 import requests
 import time
 from typing import Callable
@@ -43,32 +44,24 @@ def is_flagged(data: dict) -> bool:
     return data.get("valid") is False
 
 
-def _set_status(manager, username: str, status: str) -> bool:
-    data = manager.accounts.get(username)
-    if not isinstance(data, dict):
+def _set_status(manager, username: str, status: str, *, checked_cookie=None, checked_record=None) -> bool:
+    if status not in (VALID, INVALID):
         return False
-
-    value = {
-        VALID: True,
-        INVALID: False,
-        UNKNOWN: None,
-    }.get(status)
-    changed = (
-        "cookie_valid" not in data
-        or data.get("cookie_valid") is not value
-        or "valid" in data
-    )
-    if not changed:
-        return False
-
     account_lock = getattr(manager, "_accounts_lock", None)
-    if account_lock is None:
+    with account_lock if account_lock is not None else nullcontext():
+        data = manager.accounts.get(username)
+        if not isinstance(data, dict) or is_flagged(data):
+            return False
+        # A response for an old cookie must not invalidate a replacement account.
+        if checked_record is not None and data is not checked_record:
+            return False
+        if checked_cookie is not None and data.get("cookie") != checked_cookie:
+            return False
+        value = status == VALID
+        if data.get("cookie_valid") is value and "valid" not in data:
+            return False
         data["cookie_valid"] = value
         data.pop("valid", None)
-    else:
-        with account_lock:
-            data["cookie_valid"] = value
-            data.pop("valid", None)
     return True
 
 
@@ -85,7 +78,7 @@ def _check(cookie: str, session: requests.Session) -> tuple[str, str, bool]:
             )
             if response.status_code == 200:
                 return VALID, "Authenticated successfully.", False
-            if response.status_code in (401, 403):
+            if response.status_code == 401:
                 authentication_failures += 1
                 last_detail = (
                     f"Roblox returned HTTP {response.status_code}."
@@ -141,11 +134,8 @@ class CookieValidator:
 
     def _run(self) -> None:
         account_lock = getattr(self._manager, "_accounts_lock", None)
-        if account_lock is None:
-            accounts_snapshot = list(self._manager.accounts.items())
-        else:
-            with account_lock:
-                accounts_snapshot = list(self._manager.accounts.items())
+        with account_lock if account_lock is not None else nullcontext():
+            accounts_snapshot = list(self._manager.accounts)
         changed = False
         checked = 0
         invalid = 0
@@ -154,20 +144,23 @@ class CookieValidator:
         session = requests.Session()
 
         try:
-            for username, data in accounts_snapshot:
+            for username in accounts_snapshot:
                 if self._stop_evt.is_set():
                     break
-                if not isinstance(data, dict):
-                    continue
-
-                cookie = data.get("cookie", "")
+                with account_lock if account_lock is not None else nullcontext():
+                    data = self._manager.accounts.get(username)
+                    if not isinstance(data, dict) or is_flagged(data):
+                        continue
+                    cookie = data.get("cookie", "")
                 if not cookie:
                     continue
 
                 status, detail, rate_limited = _check(cookie, session)
-                if self._stop_evt.is_set():
-                    break
-                changed = _set_status(self._manager, username, status) or changed
+                updated = _set_status(self._manager, username, status,
+                                      checked_cookie=cookie, checked_record=data)
+                changed = updated or changed
+                if updated and status == INVALID:
+                    changed = not self._save_statuses()
                 checked += 1
 
                 if status == INVALID:
@@ -199,11 +192,8 @@ class CookieValidator:
         finally:
             session.close()
 
-        if changed and not self._stop_evt.is_set():
-            try:
-                self._manager.save_accounts()
-            except Exception as exc:
-                print(f"[WARNING] Cookie validation statuses could not be saved: {exc}")
+        if changed:
+            self._save_statuses()
 
         print(
             f"[INFO] Cookie validation complete: checked {checked}, "
@@ -215,3 +205,11 @@ class CookieValidator:
                 self._on_done()
             except Exception:
                 pass
+
+    def _save_statuses(self) -> bool:
+        try:
+            self._manager.save_accounts()
+            return True
+        except Exception as exc:
+            print(f"[WARNING] Cookie validation statuses could not be saved: {exc}")
+            return False

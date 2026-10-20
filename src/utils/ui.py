@@ -5561,7 +5561,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _on_cookie_validated(self, username: str, status: str) -> None:
         self._apply_cookie_status_to_row(
             username,
-            status == self._cv_mod.INVALID,
+            self._is_account_invalid(username),
         )
 
     def _apply_cookie_status_to_row(self, username: str, flagged: bool) -> None:
@@ -9553,7 +9553,7 @@ class _AutoRejoinAddWindow(QDialog):
             self._apply_cookie_status_to_row(username, flagged)
 
     def _on_cookie_validated(self, username: str, status: str) -> None:
-        self._apply_cookie_status_to_row(username, status == cookie_validator_mod.INVALID)
+        self._apply_cookie_status_to_row(username, cookie_validator_mod.is_flagged(self.manager.accounts.get(username)))
 
     def _apply_cookie_status_to_row(self, username: str, flagged: bool) -> None:
         widgets = self._validation_rows.get(username)

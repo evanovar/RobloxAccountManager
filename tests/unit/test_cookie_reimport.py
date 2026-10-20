@@ -49,6 +49,14 @@ class ReimportTests(unittest.TestCase):
         self.assertEqual(self.manager.accounts["alice"]["note"], "")
         self.assertNotIn("password", self.manager.accounts["alice"])
 
+    def test_reimport_cannot_clear_invalid_status_until_account_is_deleted(self):
+        self.manager.accounts["alice"] = {"cookie": COOKIE + "old", "cookie_valid": False}
+        self.assertTrue(self.manager.import_cookie_account_result(COOKIE + "new"))
+        self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
+        self.manager.delete_account("alice")
+        self.assertTrue(self.manager.import_cookie_account_result(COOKIE + "new"))
+        self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
+
     def test_new_password_replaces_the_old_one(self):
         self.manager.accounts["alice"] = {"username": "alice", "password": "old"}
         record = self.manager._merge_existing_account("alice", {"password": "new", "note": ""})

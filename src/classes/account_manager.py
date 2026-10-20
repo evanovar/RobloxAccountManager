@@ -223,13 +223,16 @@ class RobloxAccountManager:
                 if 'note' not in account_data:
                     account_data['note'] = ''
                 if 'cookie_valid' not in account_data:
-                    account_data['cookie_valid'] = None
+                    legacy_status = account_data.get('valid')
+                    account_data['cookie_valid'] = legacy_status if isinstance(legacy_status, bool) else None
     
     def _merge_existing_account(self, username, record):
         existing = self.accounts.get(username)
         if isinstance(existing, dict):
             if not record.get('note'):
                 record['note'] = existing.get('note', '')
+            if existing.get('cookie_valid', existing.get('valid')) is False:
+                record['cookie_valid'] = False
         return record
 
     def save_accounts(self):
@@ -1216,11 +1219,15 @@ class RobloxAccountManager:
                     # Bound pending evidence even if the renamer is disabled.
                     while len(self._launch_records) > 256:
                         self._launch_records.pop(next(iter(self._launch_records)))
-        if launched and self.accounts[username].get('cookie_valid') is not True:
+        if launched:
             with self._accounts_lock:
-                self.accounts[username]['cookie_valid'] = True
-                self.accounts[username].pop('valid', None)
-                self.save_accounts()
+                account = self.accounts.get(username)
+                if (isinstance(account, dict)
+                        and account.get('cookie_valid') is not True
+                        and account.get('cookie_valid', account.get('valid')) is not False):
+                    account['cookie_valid'] = True
+                    account.pop('valid', None)
+                    self.save_accounts()
         return launched
 
     def set_account_note(self, username, note):
