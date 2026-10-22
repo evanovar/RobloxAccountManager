@@ -45,6 +45,10 @@ _LOG_FILE_GROUPS = (
 
 _REDACTION_PATTERNS = (
     (
+        re.compile(r"roblox-player:[^\s\"'<>]+", re.IGNORECASE),
+        "[REDACTED ROBLOX LAUNCH URL]",
+    ),
+    (
         re.compile(r"(?i)(\.ROBLOSECURITY\s*=\s*)[^;\s\"']+"),
         r"\1[REDACTED]",
     ),

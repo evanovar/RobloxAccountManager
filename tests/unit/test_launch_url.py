@@ -1,5 +1,7 @@
 import unittest
 import threading
+import contextlib
+import io
 from unittest import mock
 
 from classes.operation_result import OperationResult
@@ -80,6 +82,59 @@ class LaunchUrlTests(unittest.TestCase):
             result = RobloxAPI.launch_roblox("alice", "cookie", game_id="1818")
         self.assertIs(result, failure)
         self.assertIsNone(result.data)
+
+
+class ExecuteLaunchTests(unittest.TestCase):
+    URL = "roblox-player:1+launchmode:play+gameinfo:SYNTHETIC-TICKET+placelauncherurl:https://example.com/?linkCode=PRIVATE-CODE"
+
+    def execute_error(self, error):
+        output = io.StringIO()
+        with mock.patch("classes.roblox_api.os.startfile", side_effect=error), \
+                mock.patch("classes.roblox_api.subprocess.Popen") as process, \
+                contextlib.redirect_stdout(output):
+            result = RobloxAPI._execute_launch(self.URL, "default")
+        process.assert_not_called()
+        for text in (result.detail, result.message, output.getvalue()):
+            self.assertNotIn("SYNTHETIC-TICKET", text)
+            self.assertNotIn("PRIVATE-CODE", text)
+        return result
+
+    def test_missing_protocol_errors_explain_how_to_choose_an_installed_launcher(self):
+        for code in (-2147221003, 0x800401F5, 1155, 0x80070483):
+            with self.subTest(code=code):
+                error = OSError(0, "Application not found", self.URL)
+                error.winerror = code
+                result = self.execute_error(error)
+                self.assertEqual(result.code, "ROBLOX_PROTOCOL_UNAVAILABLE")
+                self.assertIn("Roblox Client (direct .exe)", result.message)
+                self.assertIn("Settings > Roblox", result.message)
+                self.assertIn(str(code), result.detail)
+
+    def test_other_failures_keep_their_existing_error_categories_without_leaking_the_url(self):
+        cases = (
+            (PermissionError(13, "Denied", self.URL), "LAUNCH_PERMISSION_DENIED"),
+            (FileNotFoundError(2, "Missing", self.URL), "LAUNCHER_NOT_FOUND"),
+            (OSError(123, "Other failure", self.URL), "ROBLOX_LAUNCH_FAILED"),
+            (RuntimeError(f"Unexpected failure: {self.URL}"), "UNEXPECTED_ERROR"),
+        )
+        for error, code in cases:
+            with self.subTest(code=code):
+                self.assertEqual(self.execute_error(error).code, code)
+
+    def test_default_launch_still_passes_the_original_url_to_windows(self):
+        with mock.patch("classes.roblox_api.os.startfile") as start:
+            self.assertTrue(RobloxAPI._execute_launch(self.URL, "default"))
+        start.assert_called_once_with(self.URL)
+
+    def test_protocol_error_does_not_change_explicit_custom_launcher_behavior(self):
+        with mock.patch("classes.roblox_api.Path.exists", return_value=True), \
+                mock.patch("classes.roblox_api.subprocess.Popen", side_effect=OSError(0, "Application not found", self.URL, -2147221003)), \
+                mock.patch("classes.roblox_api.os.startfile") as start, \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = RobloxAPI._execute_launch(self.URL, "custom", "C:/Example/Launcher.exe")
+        self.assertEqual(result.code, "ROBLOX_LAUNCH_FAILED")
+        self.assertNotIn("SYNTHETIC-TICKET", result.detail)
+        start.assert_not_called()
 
 
 class LaunchRecordTests(unittest.TestCase):

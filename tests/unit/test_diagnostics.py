@@ -50,6 +50,17 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("RuntimeError: test crash", report)
             self.assertNotIn("private-cookie", report)
 
+    def test_launch_urls_are_redacted_in_windows_errors_and_console_logs(self):
+        url = "roblox-player:1+launchmode:play+gameinfo:SYNTHETIC-TICKET+placelauncherurl:https://example.com/?linkCode=PRIVATE-CODE"
+        for text in (f"Application not found: '{url}'", f"Launch failed: {url}", f'Launch failed: "{url.upper()}"'):
+            with self.subTest(text=text):
+                redacted = diagnostics.redact(text)
+                self.assertIn("[REDACTED ROBLOX LAUNCH URL]", redacted)
+                self.assertNotIn("SYNTHETIC-TICKET", redacted)
+                self.assertNotIn("PRIVATE-CODE", redacted)
+        diagnostics._record_line(f"Launch failed: {url}", "test")
+        self.assertNotIn("SYNTHETIC-TICKET", diagnostics._RECENT_LINES[-1])
+
 
 class UIHangDiagnosticsTests(unittest.TestCase):
     def test_hang_report_has_thread_locations_without_local_values(self):

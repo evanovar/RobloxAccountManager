@@ -15,10 +15,12 @@ import threading
 from pathlib import Path
 
 from .operation_result import OperationResult, unexpected_result
+lazy from features import diagnostics
 
 _PLACE_ID_RE = re.compile(r"[0-9]{1,20}")
 _JOB_ID_RE = re.compile(r"[0-9A-Za-z-]{1,64}")
 _LINK_CODE_RE = re.compile(r"[0-9A-Za-z]{1,64}")
+_MISSING_PROTOCOL_ERRORS = {1155, 0x800401F5, 0x80070483}
 
 class RobloxAPI:
     """Handles all Roblox API interactions"""
@@ -830,32 +832,50 @@ class RobloxAPI:
             )
                 
         except PermissionError as exc:
-            print(f"[ERROR] Roblox launch permission error: {exc}")
+            detail = diagnostics.redact(exc)
+            print(f"[ERROR] Roblox launch permission error: {detail}")
             return OperationResult.failure(
                 "LAUNCH_PERMISSION_DENIED",
                 "Roblox Launch Blocked",
                 "Windows denied permission to start the selected launcher.",
-                detail=str(exc),
+                detail=detail,
             )
         except FileNotFoundError as exc:
-            print(f"[ERROR] Roblox launcher file missing: {exc}")
+            detail = diagnostics.redact(exc)
+            print(f"[ERROR] Roblox launcher file missing: {detail}")
             return OperationResult.failure(
                 "LAUNCHER_NOT_FOUND",
                 "Roblox Launcher Not Found",
                 "The selected Roblox launcher could not be found.",
-                detail=str(exc),
+                detail=detail,
             )
         except OSError as exc:
-            print(f"[ERROR] Failed to launch Roblox: {exc}")
+            detail = diagnostics.redact(f"{type(exc).__name__}: {exc}")
+            print(f"[ERROR] Failed to launch Roblox: {detail}")
+            error_code = getattr(exc, "winerror", None)
+            if error_code is None:
+                error_code = exc.errno
+            if (launcher_preference == "default" and isinstance(error_code, int)
+                    and (error_code & 0xFFFFFFFF) in _MISSING_PROTOCOL_ERRORS):
+                return OperationResult.failure(
+                    "ROBLOX_PROTOCOL_UNAVAILABLE",
+                    "Roblox Link Handler Not Found",
+                    "Windows could not find an application to open roblox-player links.\n\n"
+                    "In Settings > Roblox, select Roblox Client (direct .exe) "
+                    "or the launcher you have installed. You can also reinstall "
+                    "Roblox from roblox.com to repair its link registration.",
+                    detail=detail,
+                )
             return OperationResult.failure(
                 "ROBLOX_LAUNCH_FAILED",
                 "Roblox Could Not Start",
                 "Windows could not start Roblox. Check the selected launcher and try again.",
-                detail=f"{type(exc).__name__}: {exc}",
+                detail=detail,
             )
         except Exception as exc:
-            print(f"[ERROR] Failed to launch Roblox: {exc}")
-            return unexpected_result("Launching Roblox", exc)
+            print(f"[ERROR] Failed to launch Roblox: {diagnostics.redact(exc)}")
+            result = unexpected_result("Launching Roblox", exc)
+            return replace(result, detail=diagnostics.redact(result.detail))
     
     @staticmethod
     def validate_cookie(cookie):
