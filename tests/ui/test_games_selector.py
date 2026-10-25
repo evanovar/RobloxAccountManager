@@ -308,7 +308,8 @@ class FieldIntegrationTests(unittest.TestCase):
         self.assertEqual(button.iconSize().width(), 14)
         self.assertEqual(button.mapTo(window, button.rect().topRight()).x(),
                          window._place_id_edit.mapTo(window, window._place_id_edit.rect().topRight()).x())
-        for mode, color in ((QIcon.Mode.Normal, ui.MUTED), (QIcon.Mode.Active, ui.MUTED)):
+        for mode, role in ((QIcon.Mode.Normal, 'MUTED'), (QIcon.Mode.Active, 'TEXT')):
+            color = ui.theme_runtime.color(role)
             image = button.icon().pixmap(14, 14, mode).toImage()
             pixels = [image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())]
             self.assertTrue(any(pixel.alpha() > 0 and pixel.name() == QColor(color).name() for pixel in pixels))

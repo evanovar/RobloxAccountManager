@@ -1,8 +1,3 @@
-"""
-features/color_themes.py
-Colour presets for the application and the maths for a custom accent colour.
-"""
-
 from __future__ import annotations
 
 import re

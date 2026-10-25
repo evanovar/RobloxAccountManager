@@ -61,6 +61,17 @@ class SettingsTests(unittest.TestCase):
 
 
 class ButtonMotionTests(MotionCase):
+    def test_live_theme_tint_updates_existing_and_new_button_feedback(self):
+        self.make_window()
+        overlay = next(c for c in self.button.children() if isinstance(c, motion._Overlay))
+        self.filter.set_tint('#224466')
+        self.assertEqual(overlay._motion.tint, '#224466')
+        another = QPushButton('New', self.window)
+        another.show()
+        QApplication.processEvents()
+        new_overlay = next(c for c in another.children() if isinstance(c, motion._Overlay))
+        self.assertEqual(new_overlay._motion.tint, '#224466')
+
     def test_a_button_gets_one_overlay_even_if_it_is_shown_again(self):
         window = self.make_window()
         window.hide()

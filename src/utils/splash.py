@@ -1,7 +1,3 @@
-"""
-Loading screen shown while the application starts.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -11,9 +7,8 @@ from PySide6.QtCore import QEasingCurve, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-import features.color_themes as color_themes
 import features.settings_store as settings_store
-from utils import motion
+from utils import motion, theme_runtime
 
 SPLASH_SETTING = "startup_splash"
 WIDTH = 380
@@ -147,7 +142,7 @@ def show(version: str, icon_paths: list[str] | None = None) -> bool:
     settings = settings_store.load()
     _active = StartupSplash(
         version,
-        color_themes.resolve_colors(settings),
+        theme_runtime.resolve_startup_theme(settings).colors,
         list(icon_paths or []),
         motion.animations_enabled(settings),
     )

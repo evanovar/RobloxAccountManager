@@ -1,19 +1,13 @@
-"""
-Small, optional animations: button hover and press feedback and page fades.
-
-Nothing here touches a widget's stylesheet. Buttons get a transparent child
-overlay that is tinted with the theme's text color, so every existing button
-style keeps working.
-"""
-
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import weakref
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QAbstractButton, QGraphicsOpacityEffect, QPushButton, QToolButton, QWidget
+from shiboken6 import isValid
 
 ANIMATIONS_SETTING = "ui_animations"
 HOVER_ALPHA = 14
@@ -128,6 +122,14 @@ class MotionFilter(QObject):
         super().__init__(parent)
         self.tint = tint
         self.animate = animate
+        self._motions = weakref.WeakSet()
+
+    def set_tint(self, tint):
+        self.tint = tint
+        for motion in list(self._motions):
+            if isValid(motion):
+                motion.tint = tint
+                motion.overlay.update()
 
     def eventFilter(self, watched, event):
         if (
@@ -136,7 +138,7 @@ class MotionFilter(QObject):
             and not watched.property(_MARKER)
         ):
             watched.setProperty(_MARKER, True)
-            ButtonMotion(watched, self.tint, self.animate)
+            self._motions.add(ButtonMotion(watched, self.tint, self.animate))
         return False
 
 
