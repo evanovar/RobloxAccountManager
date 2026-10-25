@@ -23,7 +23,7 @@ if _ROOT_DIR not in sys.path:
 import psutil
 
 from PySide6.QtCore import (
-    QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal,
+    QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
     QAction, QColor, QCursor, QFont, QIcon, QPainter, QPainterPath,
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
-    QSizeGrip, QSizePolicy, QDoubleSpinBox, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
+    QSizeGrip, QSizePolicy, QDoubleSpinBox, QSpinBox, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
     QToolButton, QVBoxLayout, QWidget,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem,

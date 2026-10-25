@@ -12,7 +12,7 @@ import zipfile
 
 from features import settings_store
 from features.color_themes import PRESETS, is_hex_color, resolve_colors
-from features.theme_media import MAX_MEDIA_BYTES, MEDIA_EXTENSIONS, validate_media
+from features.theme_media import MAX_MEDIA_BYTES, validate_media
 from features.theme_model import Background, Theme, ThemeError, builtin_theme, theme_from_dict, theme_to_dict, validate_theme
 from utils.app_paths import get_data_dir
 from utils.atomic_io import write_json_atomic
