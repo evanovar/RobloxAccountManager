@@ -67,7 +67,7 @@ def webm_fixture(document_type=b'webm', clusters=1):
 class ThemeLibraryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.path_patch = patch.object(settings_store, '_SETTINGS_PATH', str(self.root / 'ui_settings.json'))
         self.path_patch.start()
         settings_store.invalidate()
