@@ -196,9 +196,11 @@ DIALOG = f"""
 COMMON = (
     'QPushButton:disabled, QToolButton:disabled { color: @RAM_MUTED@; }'
     'QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus,'
-    'QAbstractSpinBox:focus, QTextEdit:focus { border: 1px solid @RAM_ACCENT@; }'
-    'QComboBox, QAbstractSpinBox { background: @RAM_INPUT@; color: @RAM_TEXT@;'
+    'QTextEdit:focus { border: 1px solid @RAM_ACCENT@; }'
+    'QComboBox { background: @RAM_INPUT@; color: @RAM_TEXT@;'
     ' border: 1px solid @RAM_LINE@; padding: 3px 6px; min-height: 24px; }'
+    # Native frames keep buttonless spin box editors from collapsing.
+    'QAbstractSpinBox { background: @RAM_INPUT@; color: @RAM_TEXT@; min-height: 24px; }'
     'QComboBox QLineEdit, QAbstractSpinBox QLineEdit { background: transparent;'
     ' border: 0; padding: 0; margin: 0; min-height: 0; min-width: 0; }'
     'QComboBox QAbstractItemView { background: @RAM_OPAQUE_PANEL@; color: @RAM_TEXT@;'

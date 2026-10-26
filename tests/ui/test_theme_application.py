@@ -1,8 +1,9 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from PySide6.QtCore import QEvent
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QMainWindow, QSpinBox, QVBoxLayout, QWidget
 
 from features.theme_model import builtin_theme
 from tests.ui.test_theme_runtime import MemoryLibrary
@@ -54,6 +55,44 @@ class ApplicationThemeTests(unittest.TestCase):
             window.closeEvent(event)
         event.ignore.assert_called_once()
         window._perform_shutdown_cleanup.assert_not_called()
+
+    def test_numeric_fields_have_room_for_values_and_remain_editable_after_theme_changes(self):
+        window = QMainWindow()
+        self.windows.append(window)
+        ui.AccountManagerUIQt._apply_stylesheet(window)
+        content = QWidget()
+        window.setCentralWidget(content)
+        layout = QVBoxLayout(content)
+        fields = []
+        for field_type, width, value in ((QSpinBox, 64, 123), (QDoubleSpinBox, 80, 1.5)):
+            field = field_type()
+            field.setRange(0, 1000)
+            field.setButtonSymbols(field.ButtonSymbols.NoButtons)
+            field.setFixedWidth(width)
+            if isinstance(field, QDoubleSpinBox):
+                field.setDecimals(1)
+                field.setSuffix(' s')
+            field.setValue(value)
+            layout.addWidget(field)
+            fields.append(field)
+        window.show()
+        self.app.processEvents()
+
+        for theme in ('default', 'nord', 'forest'):
+            self.manager.apply(builtin_theme(theme))
+            self.app.processEvents()
+            for field in fields:
+                with self.subTest(theme=theme, field=type(field).__name__):
+                    editor = field.lineEdit()
+                    for focused in (False, True):
+                        editor.setFocus() if focused else editor.clearFocus()
+                        self.app.processEvents()
+                        self.assertGreaterEqual(editor.width(), editor.fontMetrics().horizontalAdvance(field.text()) + 4)
+                        self.assertGreaterEqual(editor.height(), editor.fontMetrics().height())
+                    field.selectAll()
+                    QTest.keyClicks(editor, '2')
+                    QTest.keyClick(editor, Qt.Key.Key_Return)
+                    self.assertEqual(field.value(), 2)
 
 
 if __name__ == '__main__':
