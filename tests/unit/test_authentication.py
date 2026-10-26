@@ -67,20 +67,31 @@ class AuthenticationTests(unittest.TestCase):
         self.assertTrue(rate_limited)
 
     @patch("features.cookie_validator.time.sleep")
-    def test_background_validator_marks_repeated_401_invalid(self, sleep):
+    def test_background_validator_marks_repeated_authentication_failures_invalid(self, sleep):
+        for responses in ((401, 401), (403, 403), (401, 403), (403, 401)):
+            with self.subTest(responses=responses):
+                session = Mock()
+                session.get.side_effect = [Mock(status_code=value) for value in responses]
+                status, detail, rate_limited = cookie_validator._check("synthetic-cookie", session)
+                self.assertEqual(status, cookie_validator.INVALID)
+                self.assertIn(str(responses[-1]), detail)
+                self.assertFalse(rate_limited)
+
+    @patch("features.cookie_validator.time.sleep")
+    def test_background_validator_accepts_success_after_403(self, sleep):
         session = Mock()
-        session.get.return_value = Mock(status_code=401)
+        session.get.side_effect = [Mock(status_code=403), Mock(status_code=200)]
         status, detail, rate_limited = cookie_validator._check(
             "cookie",
             session,
         )
-        self.assertEqual(status, cookie_validator.INVALID)
-        self.assertIn("401", detail)
+        self.assertEqual(status, cookie_validator.VALID)
         self.assertFalse(rate_limited)
 
     @patch("features.cookie_validator.time.sleep")
     def test_other_failures_are_inconclusive_even_after_an_unauthorized_response(self, sleep):
-        for responses in ((403, 403), (500, 500), (401, 500), (401, 429), (401, requests.Timeout("timeout"))):
+        for responses in ((500, 500), (401, 500), (401, 429), (401, requests.Timeout("timeout")),
+                          (403, 500), (403, 429), (403, requests.Timeout("timeout"))):
             with self.subTest(responses=responses):
                 session = Mock()
                 session.get.side_effect = [Mock(status_code=value) if isinstance(value, int) else value for value in responses]
@@ -117,7 +128,7 @@ class CookieValidationPersistenceTests(unittest.TestCase):
 
     def test_inconclusive_results_preserve_status_without_saving(self):
         for initial in (True, None):
-            for response in (403, 429, 500, requests.ConnectionError("offline")):
+            for response in (429, 500, requests.ConnectionError("offline")):
                 with self.subTest(initial=initial, response=response):
                     self.manager.accounts["alice"]["cookie_valid"] = initial
                     self.session.get.side_effect = response if isinstance(response, Exception) else None
@@ -126,6 +137,19 @@ class CookieValidationPersistenceTests(unittest.TestCase):
                         self.worker()._run()
                     self.assertIs(self.manager.accounts["alice"]["cookie_valid"], initial)
                     save.assert_not_called()
+
+    def test_repeated_403_saves_invalid_status_before_callback(self):
+        self.session.get.return_value = Mock(status_code=403)
+        results = []
+
+        def on_result(username, status):
+            results.append((username, status))
+            self.assertFalse(am.RobloxAccountManager().accounts[username]["cookie_valid"])
+
+        self.worker(on_result)._run()
+        self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
+        self.assertEqual(results, [("alice", cookie_validator.INVALID)])
+        self.assertFalse(am.RobloxAccountManager().accounts["alice"]["cookie_valid"])
 
     def test_invalid_status_cannot_be_cleared_by_another_validation_result(self):
         self.manager.accounts["alice"]["cookie_valid"] = False

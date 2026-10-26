@@ -78,7 +78,7 @@ def _check(cookie: str, session: requests.Session) -> tuple[str, str, bool]:
             )
             if response.status_code == 200:
                 return VALID, "Authenticated successfully.", False
-            if response.status_code == 401:
+            if response.status_code in (401, 403):
                 authentication_failures += 1
                 last_detail = (
                     f"Roblox returned HTTP {response.status_code}."
