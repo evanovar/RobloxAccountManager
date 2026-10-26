@@ -100,7 +100,8 @@ def _record_line(line: str, stream_name: str = "stdout") -> None:
     if not line.strip():
         return
     cleaned = redact(line.rstrip("\r\n"))
-    entry = f"[{_timestamp()}] [{stream_name}] {cleaned}"
+    timestamp = _timestamp()
+    entry = f"[{timestamp}] [{stream_name}] {cleaned}"
     with _LOCK:
         _RECENT_LINES.append(entry)
         if _SESSION_LOG_HANDLE is not None:
@@ -124,7 +125,7 @@ def _record_line(line: str, stream_name: str = "stdout") -> None:
             break
     with _LOCK:
         was_empty = not _CONSOLE_QUEUE
-        _CONSOLE_QUEUE.append((cleaned, color))
+        _CONSOLE_QUEUE.append((f"[{timestamp}] {cleaned}", color))
         wakeup = _CONSOLE_WAKEUP
     if was_empty and wakeup is not None:
         try:

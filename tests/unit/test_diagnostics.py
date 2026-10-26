@@ -23,6 +23,33 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("private-server-code", redacted)
         self.assertNotIn("secret-token", redacted)
 
+    def test_console_includes_the_recorded_timestamp_and_preserves_color_and_redaction(self):
+        with patch.object(diagnostics, '_timestamp', return_value='2026-10-26 14:05:06.123'):
+            diagnostics._record_line('[WARNING] .ROBLOSECURITY=synthetic-secret', 'stderr')
+
+        text, color = diagnostics.console_queue().popleft()
+        self.assertEqual(text, '[2026-10-26 14:05:06.123] [WARNING] .ROBLOSECURITY=[REDACTED]')
+        self.assertEqual(color, '#FFA726')
+        self.assertEqual(
+            diagnostics.get_recent_lines()[-1],
+            '[2026-10-26 14:05:06.123] [stderr] [WARNING] .ROBLOSECURITY=[REDACTED]',
+        )
+
+    def test_stream_timestamps_complete_lines_and_flushed_partial_lines(self):
+        stream = diagnostics.DiagnosticStream(None, 'stdout')
+        with patch.object(diagnostics, '_timestamp', side_effect=(
+            '2026-10-26 14:05:06.123', '2026-10-26 14:05:07.456',
+        )):
+            stream.write('[INFO] First')
+            self.assertFalse(diagnostics.console_queue())
+            stream.write(' line\nSecond line')
+            stream.flush()
+
+        self.assertEqual(list(diagnostics.console_queue()), [
+            ('[2026-10-26 14:05:06.123] [INFO] First line', '#5BB8FF'),
+            ('[2026-10-26 14:05:07.456] Second line', None),
+        ])
+
     def test_crash_report_contains_traceback_and_redacts_console(self):
         with tempfile.TemporaryDirectory() as work_dir:
             crash_path = os.path.join(work_dir, "crash.log")
