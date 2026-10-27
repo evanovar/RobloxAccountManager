@@ -226,6 +226,49 @@ class AutoRejoinTests(unittest.TestCase):
                     ("disconnected", ""),
                 )
 
+    def test_presence_accepts_subplaces_of_the_configured_root_place(self):
+        worker = self.user_worker()
+        worker._process_identity = (101, 10.0)
+        for joined_place in ('456', None, 'unavailable'):
+            with self.subTest(joined_place=joined_place), \
+                    patch.object(auto_rejoin, '_identity_matches', return_value=True), \
+                    patch.object(auto_rejoin, '_wait_presence_slot', return_value=True), \
+                    patch.object(auto_rejoin.RobloxAPI, 'get_player_presence', return_value={
+                        'in_game': True, 'status': 2, 'place_id': joined_place,
+                        'root_place_id': 123, 'game_id': 'server',
+                    }):
+                self.assertEqual(worker._is_in_game('333', 'cookie', '123'), ('in_game', 'server'))
+                self.assertEqual(worker._is_in_game('333', 'cookie', '123', True, 'other-server'),
+                                 ('disconnected', 'server'))
+                self.assertEqual(worker._is_in_game('333', 'cookie', '789'), ('disconnected', 'server'))
+
+    def test_adopted_client_in_a_subplace_is_not_closed_or_relaunched(self):
+        identity = (101, 10.0)
+        statuses = []
+        worker = auto_rejoin.AutoRejoinWorker(
+            'test', {'place_id': '123', 'check_internet': False},
+            SimpleNamespace(accounts={'test': {'user_id': '333', 'cookie': 'synthetic-cookie'}}),
+            lambda account, status: statuses.append(status),
+        )
+        worker._stop.wait = lambda _: False
+        with patch.object(worker, '_wait', side_effect=[False, False, True]), \
+                patch.object(auto_rejoin, 'find_running_processes_for_user', return_value={identity}), \
+                patch.object(auto_rejoin, '_identity_matches', return_value=True), \
+                patch.object(auto_rejoin, '_wait_presence_slot', return_value=True), \
+                patch.object(auto_rejoin.RobloxAPI, 'get_player_presence', return_value={
+                    'in_game': True, 'status': 2, 'place_id': '456',
+                    'root_place_id': '123', 'game_id': 'server',
+                }), \
+                patch.object(auto_rejoin, '_terminate_process', return_value=(False, 'Synthetic close blocked')) as close, \
+                patch.object(worker, '_launch_and_track') as launch:
+            worker._run()
+
+        close.assert_not_called()
+        launch.assert_not_called()
+        self.assertEqual(worker._process_identity, identity)
+        self.assertTrue(any('(existing client)' in status for status in statuses))
+        self.assertFalse(any(status.startswith('Rejoining') for status in statuses))
+
     def test_presence_can_check_online_status_without_place_id(self):
         worker = auto_rejoin.AutoRejoinWorker(
             "test",

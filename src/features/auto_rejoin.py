@@ -482,13 +482,15 @@ class AutoRejoinWorker:
             if not check_place_id:
                 return "in_game", game_id
             if in_game:
-                try:
-                    if int(cur_pid) == int(place_id):
+                for joined_place in (cur_pid, presence.get("root_place_id")):
+                    try:
+                        matches_place = int(joined_place) == int(place_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if matches_place:
                         if expected_job_id and game_id and game_id != expected_job_id:
                             return "disconnected", game_id
                         return "in_game", game_id
-                except (TypeError, ValueError):
-                    pass
             return "disconnected", game_id
         except Exception as e:
             print(f"[Auto-Rejoin] [{self.account}] Presence error: {e}")
