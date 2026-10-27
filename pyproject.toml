@@ -17,10 +17,11 @@ dependencies = [
 [dependency-groups]
 build = [
     "pyinstaller>=6.21.0",
+    "setuptools>=84.1.0",
 ]
 
 [build-system]
-requires = ["setuptools>=80.0.0"]
+requires = ["setuptools>=84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
