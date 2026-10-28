@@ -901,6 +901,8 @@ def _apply_settings(
             original_read_only = not bool(os.stat(path).st_mode & stat.S_IWRITE)
             if normalized_changes:
                 try:
+                    if backup_path.is_file():
+                        _set_writable(backup_path)
                     shutil.copy2(path, backup_path)
                 except OSError as exc:
                     return OperationResult.failure(

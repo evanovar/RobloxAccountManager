@@ -107,6 +107,47 @@ class RobloxSettingsPathTests(unittest.TestCase):
         self.assertEqual(ET.parse(self.custom).find('.//int[@name="FramerateCap"]').text, "144")
         self.assertEqual(ET.parse(self.default).find('.//int[@name="FramerateCap"]').text, "60")
 
+    def test_repeated_apply_refreshes_a_backup_copied_from_read_only_settings(self):
+        settings._set_read_only(self.default, True)
+        backup = Path(str(self.default) + '.ram.bak')
+
+        for volume in ('0.2', '0.3', '0.4'):
+            with self.subTest(volume=volume):
+                previous = self.default.read_bytes()
+                result = settings.apply_settings({'MasterVolume': volume})
+                self.assertTrue(result, result.detail)
+                self.assertEqual(self.volume(self.default), volume)
+                self.assertEqual(backup.read_bytes(), previous)
+                self.assertFalse(self.default.stat().st_mode & stat.S_IWRITE)
+
+    def test_read_only_backup_does_not_prevent_applying_to_writable_settings(self):
+        backup = Path(str(self.default) + '.ram.bak')
+        backup.write_bytes(b'previous backup')
+        settings._set_read_only(backup, True)
+        previous = self.default.read_bytes()
+
+        result = settings.apply_settings({'MasterVolume': '0.2'})
+
+        self.assertTrue(result, result.detail)
+        self.assertEqual(backup.read_bytes(), previous)
+        self.assertEqual(self.volume(self.default), '0.2')
+        self.assertTrue(self.default.stat().st_mode & stat.S_IWRITE)
+
+    def test_backup_permission_failure_aborts_without_changing_settings(self):
+        backup = Path(str(self.default) + '.ram.bak')
+        backup.write_bytes(b'previous backup')
+        settings._set_read_only(self.default, True)
+        previous = self.default.read_bytes()
+
+        with patch.object(settings.shutil, 'copy2', side_effect=PermissionError('backup access denied')):
+            result = settings.apply_settings({'MasterVolume': '0.2'})
+
+        self.assertFalse(result)
+        self.assertEqual(result.code, 'ROBLOX_SETTINGS_BACKUP_FAILED')
+        self.assertEqual(self.default.read_bytes(), previous)
+        self.assertEqual(backup.read_bytes(), b'previous backup')
+        self.assertFalse(self.default.stat().st_mode & stat.S_IWRITE)
+
     def test_path_change_loads_new_values_instead_of_old_pending_edits(self):
         self.profile()
         self.assertTrue(settings.save_advanced_setting("MasterVolume", "0.1"))
