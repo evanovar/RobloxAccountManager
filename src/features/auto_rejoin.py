@@ -387,6 +387,19 @@ class AutoRejoinWorker:
             if not ok:
                 return False
 
+            evidence = getattr(ok, 'data', None)
+            if isinstance(evidence, dict) and str(evidence.get('expected_user_id', '')) == str(user_id):
+                identity = evidence.get('process_identity')
+                if (isinstance(identity, (tuple, list)) and len(identity) == 2
+                        and isinstance(identity[0], int) and not isinstance(identity[0], bool)
+                        and isinstance(identity[1], (int, float)) and not isinstance(identity[1], bool)
+                        and _identity_matches(tuple(identity))):
+                    if self._stop.is_set():
+                        return False
+                    self._process_identity = tuple(identity)
+                    self._owned_processes = {self._process_identity}
+                    return True
+
             deadline = time.monotonic() + 30.0
             while time.monotonic() < deadline:
                 if self._stop.wait(0.5):

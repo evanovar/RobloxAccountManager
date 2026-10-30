@@ -247,6 +247,8 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_place_all {u}: {'OK' if result else 'FAIL'}")
+                if not result and result.code in launch_monitor.SESSION_FAILURE_CODES:
+                    break
             except Exception as exc:
                 print(f"[ERROR] join_place_all {u}: {exc}")
                 failures.append((u, unexpected_result(f"Joining place for {u}", exc)))
@@ -441,6 +443,8 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
                     f"[{'SUCCESS' if result else 'ERROR'}] "
                     f"launch_home {account}: {'OK' if result else 'FAIL'}"
                 )
+                if not result and result.code in launch_monitor.SESSION_FAILURE_CODES:
+                    break
             except Exception as exc:
                 print(f"[ERROR] launch_home {account}: {exc}")
                 failures.append((
@@ -556,6 +560,8 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_user {u}: {'OK' if result else 'FAIL'}")
+                    if not result and result.code in launch_monitor.SESSION_FAILURE_CODES:
+                        break
                 except Exception as exc:
                     print(f"[ERROR] join_user {u}: {exc}")
                     failures.append((u, unexpected_result(f"Joining user with {u}", exc)))
@@ -611,6 +617,8 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_job_id {u}: {'OK' if result else 'FAIL'}")
+                if not result and result.code in launch_monitor.SESSION_FAILURE_CODES:
+                    break
             except Exception as exc:
                 print(f"[ERROR] join_job_id {u}: {exc}")
                 failures.append((u, unexpected_result(f"Joining Job ID with {u}", exc)))
@@ -686,6 +694,8 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_small_server {u}: {'OK' if result else 'FAIL'}")
+                    if not result and result.code in launch_monitor.SESSION_FAILURE_CODES:
+                        break
                 except Exception as exc:
                     print(f"[ERROR] join_small_server {u}: {exc}")
                     failures.append((u, unexpected_result(f"Joining small server with {u}", exc)))

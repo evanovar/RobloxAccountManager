@@ -27,6 +27,7 @@ class LaunchConfirmationTests(unittest.TestCase):
         self.window = self.enterContext(patch.object(monitor, "_has_main_window", return_value=True))
         self.auth = self.enterContext(patch.object(monitor, "_read_launch_state", return_value=("42", False)))
         self.enterContext(patch.object(monitor, "_TIMEOUT", 5.0))
+        self.enterContext(patch.object(monitor, "_REPLACEMENT_GRACE_SECONDS", 1.5, create=True))
         self.enterContext(patch.object(monitor.time, "monotonic", side_effect=lambda: self.now))
         self.enterContext(patch.object(monitor.time, "sleep", side_effect=self.sleep))
 
@@ -41,7 +42,8 @@ class LaunchConfirmationTests(unittest.TestCase):
         self.handles.side_effect = lambda _: self.now >= 2.0
         result = self.confirm()
         self.assertTrue(result)
-        self.assertGreaterEqual(self.now, 4.0)
+        self.assertGreaterEqual(self.now, 2.2)
+        self.assertLess(self.now, 2.7)
         self.assertEqual(result.data["process_identity"], self.key)
         self.assertEqual(result.data["browser_tracker_id"], "987")
 
@@ -97,7 +99,7 @@ class LaunchConfirmationTests(unittest.TestCase):
         self.snapshot.side_effect = lambda: {self.key: self.process} if self.now == 0 else {}
         self.process.is_running.return_value = False
         self.assertEqual(self.confirm().code, "ROBLOX_CLIENT_EXITED")
-        self.assertGreaterEqual(self.now, monitor._TIMEOUT)
+        self.assertLess(self.now, 3.0)
 
     def test_delayed_replacement_with_many_existing_clients_can_confirm(self):
         existing = {(3000 + index, 50.0): Mock() for index in range(13)}
@@ -158,16 +160,16 @@ class LaunchConfirmationTests(unittest.TestCase):
             {self.key: self.process} if self.now == 0 else {(124, 101.0): unrelated}
         )
         self.assertEqual(self.confirm().code, "ROBLOX_CLIENT_EXITED")
-        self.assertGreaterEqual(self.now, monitor._TIMEOUT)
+        self.assertLess(self.now, 3.0)
 
     def test_replacement_process_must_complete_its_own_stability_interval(self):
         replacement = (124, 101.0)
         self.snapshot.side_effect = lambda: {
-            self.key if self.now < 1.0 else replacement: self.process,
+            self.key if self.now < 0.1 else replacement: self.process,
         }
         result = self.confirm()
         self.assertTrue(result)
-        self.assertGreaterEqual(self.now, 3.0)
+        self.assertGreaterEqual(self.now, 0.4)
         self.assertEqual(result.data["process_identity"], replacement)
 
     def test_mode_stop_or_restart_interrupts_confirmation(self):
@@ -209,6 +211,15 @@ class LaunchConfirmationTests(unittest.TestCase):
             confirmed.append(result.data["process_identity"])
         self.assertEqual(len(set(confirmed)), 13)
 
+    def test_ready_client_does_not_wait_two_extra_seconds(self):
+        self.assertTrue(self.confirm())
+        self.assertGreater(self.now, 0)
+        self.assertLess(self.now, 0.7)
+
+    def test_challenge_during_the_short_stability_check_still_blocks_success(self):
+        self.auth.side_effect = lambda *_: ('42', self.now > 0)
+        self.assertEqual(self.confirm().code, 'ROBLOX_SECURITY_CHALLENGE')
+
 
 class LaunchGateTests(unittest.TestCase):
     def setUp(self):
@@ -243,6 +254,21 @@ class LaunchGateTests(unittest.TestCase):
         self.slot.return_value = failure
         self.assertIs(self.manager.launch_roblox("alice"), failure)
         self.manager._launch_roblox.assert_not_called()
+
+    def test_handle_timeout_is_not_repeated_for_the_next_account(self):
+        failure = OperationResult.failure('MULTI_ROBLOX_NOT_READY', 'Paused', 'Handle clearance failed')
+        self.slot.return_value = failure
+        self.assertIs(self.manager.launch_roblox('alice'), failure)
+        self.assertIs(self.manager.launch_roblox('bob'), failure)
+        self.slot.assert_called_once()
+        self.manager._launch_roblox.assert_not_called()
+
+    def test_startup_exit_pauses_further_launches_in_the_session(self):
+        failure = OperationResult.failure('ROBLOX_CLIENT_EXITED', 'Paused', 'Client exited')
+        self.confirm.return_value = failure
+        self.assertIs(self.manager.launch_roblox('alice'), failure)
+        self.assertIs(self.manager.launch_roblox('bob'), failure)
+        self.manager._launch_roblox.assert_called_once()
 
     def test_failed_launch_is_not_confirmed(self):
         self.manager._launch_roblox.return_value = OperationResult.failure("AUTH_FAILED", "Failed", "Rejected")
@@ -373,8 +399,75 @@ class StartupLogTests(unittest.TestCase):
             handle.write("status:403 challengedByGcs\n")
         self.assertEqual(monitor._read_launch_state("987", 100.0, cache), ("42", True))
 
+    def test_unchanged_log_filenames_are_not_parsed_again_on_each_poll(self):
+        self.write_log('web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n')
+        cache = {}
+        with patch.object(monitor, 'datetime', wraps=monitor.datetime) as dates:
+            for _ in range(5):
+                self.assertEqual(monitor._read_launch_state('987', 100.0, cache), ('42', False))
+        self.assertEqual(dates.strptime.call_count, 1)
+
+    def test_new_log_is_discovered_while_reusing_the_reader_cache(self):
+        cache = {}
+        self.assertEqual(monitor._read_launch_state('987', 100.0, cache), ('', False))
+        self.write_log('web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n')
+        self.assertEqual(monitor._read_launch_state('987', 100.0, cache), ('42', False))
+
+    def test_original_process_log_cannot_confirm_a_replacement_without_current_evidence(self):
+        self.write_log('web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n')
+        cache = {'_launch_time': 99.0}
+        self.assertEqual(monitor._read_launch_state('987', 104.0, cache), ('', False))
+
+    def test_replacement_log_is_not_confused_with_the_previous_process_log(self):
+        self.write_log('web launch, websiteBTId is 987\n', 'original')
+        self.write_log('web launch, websiteBTId is 987\n[FLog::GameJoinLoadTime] userid:42,\n',
+                       'replacement', '19700101T000144Z')
+        cache = {'_launch_time': 99.0}
+        self.assertEqual(monitor._read_launch_state('987', 104.0, cache), ('42', False))
+
+    def test_ambiguous_tracker_logs_do_not_hide_a_security_challenge(self):
+        self.write_log('web launch, websiteBTId is 987\n', 'A')
+        self.write_log('web launch, websiteBTId is 987\nchallengedByGcs\n', 'B')
+        self.assertEqual(monitor._read_launch_state('987', 100.0, {}), ('', True))
+
 
 class BatchSurvivalTests(unittest.TestCase):
+    def test_session_failures_stop_every_batch_entry_point_without_another_delay(self):
+        users = ['alice', 'bob', 'carol']
+        invocations = (
+            lambda manager, done: actions.join_place_all(manager, users, '1818', on_done=done),
+            lambda manager, done: actions.launch_home(manager, users, on_done=done),
+            lambda manager, done: actions.join_job_id(manager, users, '1818', 'job', on_done=done),
+            lambda manager, done: actions.join_user(manager, users, 'target', on_done=done),
+            lambda manager, done: actions.join_small_server(manager, users, '1818', on_done=done),
+        )
+        for code in ('MULTI_ROBLOX_NOT_READY', 'ROBLOX_CLIENT_EXITED', 'ROBLOX_SECURITY_CHALLENGE'):
+            for index, invoke in enumerate(invocations):
+                with self.subTest(code=code, entry_point=index):
+                    manager = Mock()
+                    manager.accounts = {'alice': {'cookie': 'synthetic'}}
+                    manager.launch_roblox.return_value = OperationResult.failure(code, 'Paused', 'Restart Multi Roblox')
+                    finished = threading.Event()
+                    results = []
+
+                    def done(ok, result):
+                        results.append(result)
+                        finished.set()
+
+                    response = Mock()
+                    response.json.return_value = {'data': [{'id': 'job', 'playing': 1, 'maxPlayers': 10}]}
+                    with patch.object(actions, 'load_ui_settings', return_value={'launch_delay_seconds': 300}), \
+                            patch.object(actions, '_wait_between_launches') as wait, \
+                            patch.object(actions.RobloxAPI, 'get_user_id_from_username', return_value=42), \
+                            patch.object(actions.RobloxAPI, 'get_player_presence', return_value={
+                                'in_game': True, 'place_id': 1818, 'game_id': 'job',
+                            }), patch.object(actions.requests, 'get', return_value=response):
+                        invoke(manager, done)
+                        self.assertTrue(finished.wait(5))
+                    manager.launch_roblox.assert_called_once()
+                    wait.assert_not_called()
+                    self.assertEqual(results[0].code, code)
+
     def test_exited_client_or_reused_pid_reduces_final_batch_count(self):
         result = OperationResult.success(data={"process_identity": (123, 100.0)})
         process = Mock()

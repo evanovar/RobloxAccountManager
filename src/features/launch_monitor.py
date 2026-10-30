@@ -16,8 +16,15 @@ from features import account_actions as actions, presence
 
 LAUNCH_LOCK = threading.Lock()
 _TIMEOUT = 120.0
-_STABLE_SECONDS = 2.0
+_STABLE_SECONDS = 0.2
 _POLL_SECONDS = 0.2
+_REPLACEMENT_GRACE_SECONDS = 10.0
+SESSION_FAILURE_CODES = frozenset({
+    'ROBLOX_SECURITY_CHALLENGE', 'ROBLOX_ACCOUNT_MISMATCH',
+    'ROBLOX_LAUNCH_UNCONFIRMED', 'LAUNCH_IDENTITY_AMBIGUOUS',
+    'LAUNCH_EVIDENCE_MISSING', 'LAUNCH_ACCOUNT_ID_MISSING',
+    'MULTI_ROBLOX_NOT_READY', 'ROBLOX_CLIENT_EXITED', 'MULTI_ROBLOX_STOPPED',
+})
 _TRACKER = re.compile(r"browsertrackerid[^0-9]{0,32}(\d+)", re.IGNORECASE)
 _WEB_TRACKER = re.compile(r"web launch, websiteBTId is (\d+)", re.IGNORECASE)
 _GAME_USER = re.compile(r"\[FLog::GameJoinLoadTime\].*\buserid:(\d+)(?=[,\s])", re.IGNORECASE)
@@ -71,35 +78,51 @@ class _StartupLogState:
         return self.matched or matched, self.user_id or user_id, self.challenged or challenged
 
 
+def _candidate_logs(logs_dir, created, cache):
+    earliest = created - 2
+    previous = cache.get('_filenames', {})
+    timestamps = {}
+    paths = []
+    for filename in os.listdir(logs_dir):
+        if not filename.endswith('_last.log') or 'CrashHandler' in filename:
+            continue
+        if filename in previous:
+            started = previous[filename]
+        else:
+            timestamp = re.search(r'(\d{8}T\d{6}Z)_Player_', filename)
+            try:
+                started = (datetime.strptime(timestamp[1], '%Y%m%dT%H%M%SZ')
+                           .replace(tzinfo=timezone.utc).timestamp()) if timestamp else None
+            except ValueError:
+                started = None
+        timestamps[filename] = started
+        if started is not None and earliest <= started <= created + 60:
+            paths.append(os.path.join(logs_dir, filename))
+    cache['_filenames'] = timestamps
+    return paths
+
+
 def _read_launch_state(tracker, created, cache=None):
-    """Read only the startup log carrying the exact tracker sent to this client."""
     cache = {} if cache is None else cache
     logs_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Roblox", "logs")
     matches = []
     try:
-        filenames = os.listdir(logs_dir)
+        paths = _candidate_logs(logs_dir, created, cache)
     except OSError:
         return "", False
-    for filename in filenames:
-        if not filename.endswith("_last.log") or "CrashHandler" in filename:
-            continue
-        timestamp = re.search(r"(\d{8}T\d{6}Z)_Player_", filename)
-        if not timestamp:
-            continue
+    for path in paths:
         try:
-            started = datetime.strptime(timestamp[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
-            if not -2 <= started - created <= 60:
-                continue
-            path = os.path.join(logs_dir, filename)
-            state = cache.setdefault((path, tracker), _StartupLogState())
+            state = cache.get((path, tracker))
+            if state is None:
+                state = cache[(path, tracker)] = _StartupLogState()
             matched, user_id, challenged = state.read(path, tracker)
+            if not matched:
+                continue
         except (OSError, ValueError):
-            continue
-        if not matched:
             continue
         matches.append((user_id, challenged))
     # Unknown/ambiguous evidence must never establish an authenticated join.
-    return matches[0] if len(matches) == 1 else ("", False)
+    return matches[0] if len(matches) == 1 else ('', any(challenged for _, challenged in matches))
 
 
 def _failure(code, message):
@@ -147,7 +170,7 @@ def wait_for_launch_slot(session):
             return _failure(
                 "MULTI_ROBLOX_NOT_READY",
                 "Handle64 has not cleared the running clients. No new launch was sent. "
-                "Check Multi Roblox in the Console and try again.",
+                "Check the Console and restart Multi Roblox before trying again.",
             )
         time.sleep(_POLL_SECONDS)
     return _failure("MULTI_ROBLOX_STOPPED", "Multi Roblox stopped before the launch was sent.")
@@ -181,11 +204,13 @@ def confirm_launch(result, session, before, username):
             f"The saved user ID for {username} is missing. Further launches are paused. "
             "Re-add the account before restarting Multi Roblox.",
         )
-    deadline = time.monotonic() + _TIMEOUT
+    started = time.monotonic()
+    deadline = started + _TIMEOUT
     identity = None
     process = None
     ready_since = None
     log_cache = {}
+    missing_since = None
     while _session_active(session):
         current = _snapshot()
         matches = []
@@ -204,6 +229,7 @@ def confirm_launch(result, session, before, username):
         if len(matches) > 1:
             return _failure("LAUNCH_IDENTITY_AMBIGUOUS", "Multiple clients have this launch tracker.")
         if matches:
+            missing_since = None
             key, candidate = matches[0]
             if identity is not None and identity != key:
                 ready_since = None
@@ -227,20 +253,41 @@ def confirm_launch(result, session, before, username):
                 session.get("mode") != "handle64"
                 or actions.singleton_handles_ready(set(current))
             )
-            if _has_main_window(key[0]) and handles_ready and (not requires_join or user_id == expected_user):
+            try:
+                running = candidate.is_running()
+            except psutil.Error:
+                running = False
+            if running and _has_main_window(key[0]) and handles_ready and (not requires_join or user_id == expected_user):
                 if ready_since is None:
                     ready_since = time.monotonic()
                 if time.monotonic() - ready_since >= _STABLE_SECONDS:
-                    print(f"[SUCCESS] Confirmed Roblox {'game join' if requires_join else 'client window'} for {username}: PID {key[0]}")
+                    elapsed = time.monotonic() - started
+                    print(f"[SUCCESS] Confirmed Roblox {'game join' if requires_join else 'client window'} for {username}: PID {key[0]} ({elapsed:.2f}s)")
                     return replace(result, data={**data, "process_identity": key})
             else:
                 ready_since = None
         else:
             ready_since = None
+            if process is not None:
+                try:
+                    exited = not process.is_running()
+                except psutil.Error:
+                    exited = False
+                if exited:
+                    if missing_since is None:
+                        missing_since = time.monotonic()
+                    if time.monotonic() - missing_since >= _REPLACEMENT_GRACE_SECONDS:
+                        return _failure(
+                            'ROBLOX_CLIENT_EXITED',
+                            f'The Roblox client for {username} exited during startup. '
+                            'Check the client and restart Multi Roblox before trying again.',
+                        )
+                else:
+                    missing_since = None
         if time.monotonic() >= deadline:
             # A startup process can exit before its replacement appears. Allow
             # the same launch tracker to return within the existing timeout.
-            if not matches and process is not None and not process.is_running():
+            if missing_since is not None:
                 return _failure(
                     "ROBLOX_CLIENT_EXITED",
                     f"The Roblox client for {username} exited during startup. "

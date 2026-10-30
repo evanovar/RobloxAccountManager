@@ -1139,6 +1139,8 @@ class RobloxAccountManager:
                     return session["launch_blocked"]
                 ready = launch_monitor.wait_for_launch_slot(session)
                 if not ready:
+                    if ready.code in launch_monitor.SESSION_FAILURE_CODES:
+                        session['launch_blocked'] = ready
                     return ready
                 before = launch_monitor._snapshot()
             result = self._launch_roblox(
@@ -1147,11 +1149,7 @@ class RobloxAccountManager:
             )
             if result and session is not None:
                 confirmed = launch_monitor.confirm_launch(result, session, before, username)
-                if not confirmed and confirmed.code in (
-                    "ROBLOX_SECURITY_CHALLENGE", "ROBLOX_ACCOUNT_MISMATCH",
-                    "ROBLOX_LAUNCH_UNCONFIRMED", "LAUNCH_IDENTITY_AMBIGUOUS",
-                    "LAUNCH_EVIDENCE_MISSING", "LAUNCH_ACCOUNT_ID_MISSING",
-                ):
+                if not confirmed and confirmed.code in launch_monitor.SESSION_FAILURE_CODES:
                     # Batch, WebSocket and Auto-Rejoin must not send more tickets
                     # while authentication remains unresolved in this session.
                     session["launch_blocked"] = confirmed
