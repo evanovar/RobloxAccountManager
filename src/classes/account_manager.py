@@ -13,6 +13,7 @@ import traceback
 import threading
 import requests
 from dataclasses import replace
+from urllib.parse import urlsplit
 
 from .encryption import (
     EncryptedDataError,
@@ -25,6 +26,12 @@ from .encryption import (
 from .operation_result import OperationResult, unexpected_result
 from .roblox_api import RobloxAPI
 lazy from features import account_actions, launch_monitor
+lazy from selenium import webdriver
+lazy from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
+lazy from selenium.webdriver.chrome.options import Options as ChromeOptions
+lazy from selenium.webdriver.chrome.service import Service as ChromeService
+lazy from selenium.webdriver.edge.options import Options as EdgeOptions
+lazy from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from utils.app_paths import get_data_dir
 
 class AccountManagerStartupError(Exception):
@@ -392,7 +399,7 @@ class RobloxAccountManager:
             return browser.get(key, default)
         return getattr(browser, key, default)
 
-    def setup_browser_driver(self, browser=None, browser_path=None):
+    def setup_browser_driver(self, browser=None, browser_path=None, *, interactive=False):
         if browser is None:
             selected_key = "chromium" if browser_path and "chromium" in browser_path.lower() else "chrome"
             bundled_driver = (
@@ -416,10 +423,6 @@ class RobloxAccountManager:
         bundled = bool(self._browser_value(browser, "bundled", False))
         profile_dir = self.create_temp_profile()
 
-        from selenium import webdriver
-        from selenium.common.exceptions import SessionNotCreatedException
-        from selenium.common.exceptions import WebDriverException
-
         if executable_path and not os.path.isfile(executable_path):
             self.cleanup_temp_profile(profile_dir)
             return OperationResult.failure(
@@ -432,62 +435,59 @@ class RobloxAccountManager:
                 detail=f"Expected path: {executable_path}",
             )
 
+        driver = None
+        ready = False
         try:
             if browser_key == "firefox":
-                from selenium.webdriver.firefox.options import Options
-
-                options = Options()
+                options = FirefoxOptions()
                 if executable_path:
                     options.binary_location = executable_path
                 options.add_argument("-profile")
                 options.add_argument(profile_dir)
-                options.set_preference("dom.webdriver.enabled", False)
-                options.set_preference("useAutomationExtension", False)
+                if not interactive:
+                    options.set_preference("dom.webdriver.enabled", False)
+                    options.set_preference("useAutomationExtension", False)
             elif browser_key in ("chrome", "chromium"):
-                from selenium.webdriver.chrome.options import Options
-
-                options = Options()
+                options = ChromeOptions()
                 if executable_path:
                     options.binary_location = executable_path
                 options.add_argument(f"--user-data-dir={profile_dir}")
                 options.add_argument("--no-first-run")
                 options.add_argument("--no-default-browser-check")
-                options.add_argument("--disable-blink-features=AutomationControlled")
-                options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-                options.add_experimental_option("useAutomationExtension", False)
-                options.add_argument("--log-level=3")
-                options.add_argument("--silent")
-                options.add_argument("--disable-logging")
-                options.add_argument("--disable-gpu-logging")
-                options.add_argument("--disable-default-apps")
-                # options.add_argument("--disable-extensions")
-                options.add_argument("--disable-plugins")
-                options.add_argument("--disable-dev-shm-usage")
-                options.add_argument("--no-sandbox")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--disable-background-timer-throttling")
-                options.add_argument("--disable-renderer-backgrounding")
-                options.add_argument("--disable-backgrounding-occluded-windows")
-                options.add_argument("--disable-component-extensions-with-background-pages")
-                options.add_argument("--disable-hang-monitor")
-                options.add_argument("--disable-prompt-on-repost")
-                options.add_argument("--disable-domain-reliability")
-                options.add_argument("--disable-component-update")
-                options.add_argument("--disable-background-networking")
-                options.add_argument("--aggressive-cache-discard")
+                if not interactive:
+                    options.add_argument("--disable-blink-features=AutomationControlled")
+                    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+                    options.add_experimental_option("useAutomationExtension", False)
+                    options.add_argument("--log-level=3")
+                    options.add_argument("--silent")
+                    options.add_argument("--disable-logging")
+                    options.add_argument("--disable-gpu-logging")
+                    options.add_argument("--disable-default-apps")
+                    options.add_argument("--disable-plugins")
+                    options.add_argument("--disable-dev-shm-usage")
+                    options.add_argument("--no-sandbox")
+                    options.add_argument("--disable-gpu")
+                    options.add_argument("--disable-background-timer-throttling")
+                    options.add_argument("--disable-renderer-backgrounding")
+                    options.add_argument("--disable-backgrounding-occluded-windows")
+                    options.add_argument("--disable-component-extensions-with-background-pages")
+                    options.add_argument("--disable-hang-monitor")
+                    options.add_argument("--disable-prompt-on-repost")
+                    options.add_argument("--disable-domain-reliability")
+                    options.add_argument("--disable-component-update")
+                    options.add_argument("--disable-background-networking")
+                    options.add_argument("--aggressive-cache-discard")
             elif browser_key == "edge":
-                from selenium.webdriver.edge.options import Options
-
-                options = Options()
+                options = EdgeOptions()
                 if executable_path:
                     options.binary_location = executable_path
                 options.add_argument(f"--user-data-dir={profile_dir}")
                 options.add_argument("--no-first-run")
                 options.add_argument("--no-default-browser-check")
-                options.add_argument("--disable-extensions")
-                options.add_argument("--disable-background-networking")
+                if not interactive:
+                    options.add_argument("--disable-extensions")
+                    options.add_argument("--disable-background-networking")
             else:
-                self.cleanup_temp_profile(profile_dir)
                 return OperationResult.failure(
                     "BROWSER_SELECTION_INVALID",
                     "Invalid Browser Selection",
@@ -502,33 +502,30 @@ class RobloxAccountManager:
                     driver = webdriver.Edge(options=options)
                 elif bundled:
                     if not driver_path or not os.path.isfile(driver_path):
-                        self.cleanup_temp_profile(profile_dir)
                         return OperationResult.failure(
                             "BROWSER_DRIVER_MISSING",
                             "Chromium Driver Missing",
                             "The Chromium installation is incomplete. Download Chromium again.",
                             detail=f"Missing driver: {driver_path}",
                         )
-                    from selenium.webdriver.chrome.service import Service
-
                     driver = webdriver.Chrome(
-                        service=Service(driver_path),
+                        service=ChromeService(driver_path),
                         options=options,
                     )
                 else:
                     driver = webdriver.Chrome(options=options)
 
             driver._ram_profile_dir = profile_dir
-            driver.set_page_load_timeout(120)
+            driver.set_page_load_timeout(30 if interactive else 120)
             driver.implicitly_wait(10)
-            if browser_key != "firefox":
+            if browser_key != "firefox" and not interactive:
                 driver.execute_script(
                     "Object.defineProperty(navigator, 'webdriver', "
                     "{get: () => undefined})"
                 )
+            ready = True
             return OperationResult.success(data=driver)
         except SessionNotCreatedException as exc:
-            self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] {browser_label} driver version mismatch: {exc}")
             return OperationResult.failure(
                 "BROWSER_DRIVER_MISMATCH",
@@ -537,7 +534,6 @@ class RobloxAccountManager:
                 detail=str(exc),
             )
         except WebDriverException as exc:
-            self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] Selenium could not start {browser_label}: {exc}")
             return OperationResult.failure(
                 "BROWSER_START_FAILED",
@@ -546,7 +542,6 @@ class RobloxAccountManager:
                 detail=str(exc),
             )
         except PermissionError as exc:
-            self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] Browser startup permission denied: {exc}")
             return OperationResult.failure(
                 "BROWSER_PERMISSION_DENIED",
@@ -555,7 +550,6 @@ class RobloxAccountManager:
                 detail=str(exc),
             )
         except Exception as exc:
-            self.cleanup_temp_profile(profile_dir)
             print(f"[ERROR] Error setting up {browser_label}: {exc}")
             traceback.print_exc()
             return OperationResult.failure(
@@ -564,10 +558,85 @@ class RobloxAccountManager:
                 "The browser could not be prepared. Check the Console tab or session log.",
                 detail=f"{type(exc).__name__}: {exc}",
             )
+        finally:
+            if not ready:
+                if driver is not None:
+                    self.close_browser_driver(driver)
+                else:
+                    self.cleanup_temp_profile(profile_dir)
 
     def setup_chrome_driver(self, browser_path=None):
         # Preserve the old method for external callers while using the browser factory.
         return self.setup_browser_driver(browser_path=browser_path)
+
+    def close_browser_driver(self, driver):
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        finally:
+            profile_dir = getattr(driver, "_ram_profile_dir", "")
+            if profile_dir:
+                self.cleanup_temp_profile(profile_dir)
+
+    def open_browser_home(self, username, browser, stop_event):
+        with self._accounts_lock:
+            account = self.accounts.get(username)
+            cookie = account.get("cookie") if account else None
+        if account is None:
+            return OperationResult.failure(
+                "ACCOUNT_NOT_FOUND", "Account Not Found",
+                "The selected account is no longer available.",
+            )
+        if not isinstance(cookie, str) or not cookie.strip():
+            return OperationResult.failure(
+                "COOKIE_MISSING", "Account Cookie Missing",
+                "The selected account does not have a saved Roblox cookie.",
+            )
+
+        setup = self.setup_browser_driver(browser=browser, interactive=True)
+        if not setup:
+            return setup
+
+        driver = setup.data
+        opened = False
+        try:
+            driver.get("https://www.roblox.com/robots.txt")
+            origin = urlsplit(driver.current_url)
+            if origin.scheme != "https" or origin.netloc.lower() != "www.roblox.com":
+                return OperationResult.failure(
+                    "BROWSER_ROBLOX_ORIGIN_UNAVAILABLE", "Roblox Could Not Be Opened",
+                    "The browser did not reach the secure Roblox website. Try again.",
+                )
+            if stop_event.is_set():
+                return OperationResult.failure("BROWSER_HOME_CANCELLED", "Launch Cancelled", "The app is closing.")
+            driver.add_cookie({
+                "name": ".ROBLOSECURITY",
+                "value": cookie,
+                "domain": ".roblox.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            })
+            driver.get("https://www.roblox.com/home")
+            location = urlsplit(driver.current_url)
+            if (location.scheme != "https" or location.netloc.lower() != "www.roblox.com"
+                    or location.path.rstrip("/") != "/home"):
+                return OperationResult.failure(
+                    "BROWSER_HOME_NOT_REACHED", "Roblox Home Could Not Be Opened",
+                    "Roblox redirected the browser away from Home. Check the saved cookie and try again.",
+                )
+            opened = True
+            return OperationResult.success(data=driver)
+        except Exception as exc:
+            return OperationResult.failure(
+                "BROWSER_HOME_FAILED", "Roblox Home Could Not Be Opened",
+                "The browser could not open Roblox Home with the saved cookie.",
+                detail=type(exc).__name__,
+            )
+        finally:
+            if not opened:
+                self.close_browser_driver(driver)
     
     def wait_for_login(self, driver, timeout=300):
         from selenium.common.exceptions import WebDriverException

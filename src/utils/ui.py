@@ -973,6 +973,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._tray_restore_maximized = False
         self._tray_detached_states: dict[int, str] = {}
         self._shutdown_cleanup_done = False
+        self._browser_home_stop = threading.Event()
         self._admin_restart_pending = False
         self._page_hosts: dict[int, _DetachablePageHost] = {}
         self._detached_windows: dict[int, _DetachedPageWindow] = {}
@@ -1754,6 +1755,33 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._page_stack.setCurrentIndex(0)
         self._setup_needed = False
 
+    @staticmethod
+    def _make_split_button(label: str, icon_name: str, *, primary: bool = False) -> QToolButton:
+        button = QToolButton()
+        button.setText(label)
+        theme_runtime.bind_icon(button, icon_name)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.setMenu(QMenu(button))
+
+        background = theme_styles.SELECT if primary else theme_styles.INPUT
+        hover = theme_styles.HOVER if primary else theme_styles.SELECT
+        pressed = theme_styles.PRESSED if primary else theme_styles.SELECT
+        weight = 700 if primary else 400
+        theme_runtime.bind_style(button, f"""
+            QToolButton {{
+                background: {background}; border: 1px solid {theme_styles.LINE};
+                min-height: 28px; font-size: 12px; font-weight: {weight}; padding: 3px 28px 3px 8px;
+                text-align: center; color: {theme_styles.TEXT};
+            }}
+            QToolButton:hover {{ background: {hover}; }}
+            QToolButton:pressed {{ background: {pressed}; }}
+            QToolButton::menu-button {{ width: 24px; border-left: 1px solid {theme_styles.LINE}; }}
+            QToolButton::menu-arrow {{ width: 9px; height: 9px; }}
+            """)
+        return button
+
     def _build_center_panel(self) -> QFrame: # Main account list
         panel = QFrame()
         panel.setObjectName("centerPanel")
@@ -1839,23 +1867,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         bottom.setSpacing(6)
 
         # Add account button
-        self._add_btn = QToolButton()
-        self._add_btn.setText("Add Account")
-        theme_runtime.bind_icon(self._add_btn, "plus")
-        self._add_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        self._add_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._add_btn.setFixedHeight(26)
-        theme_runtime.bind_style(self._add_btn, f"""
-            QToolButton {{ background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE}; font-size: 11px; min-height: 26px; padding: 2px 28px 2px 8px; text-align: center; color: {theme_styles.TEXT};}}
-            QToolButton:hover {{ background: {theme_styles.SELECT}; }}
-            QToolButton:pressed {{ background: {theme_styles.SELECT}; }}
-            QToolButton::menu-button {{ width: 24px; border-left: 1px solid {theme_styles.LINE}; }}
-            QToolButton::menu-arrow {{ width: 9px; height: 9px; }}
-            """)
+        self._add_btn = self._make_split_button("Add Account", "plus")
 
         # Dropdown menu for add button
-        add_menu = QMenu(self._add_btn)
+        add_menu = self._add_btn.menu()
         act_cookie = add_menu.addAction("Import Cookie")
         act_userpass = add_menu.addAction("Import User:Pass")
         act_creator = add_menu.addAction("Account Creator")
@@ -1864,17 +1879,15 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         act_userpass.triggered.connect(self._on_import_userpass)
         act_creator.triggered.connect(self._on_account_creator)
         act_js.triggered.connect(self._on_add_javascript)
-        self._add_btn.setMenu(add_menu)
         self._add_btn.clicked.connect(self._on_add_account_browser)
 
         # Remove Button
         remove_btn = QPushButton("Remove")
         theme_runtime.bind_icon(remove_btn, "trash")
         remove_btn.setFixedWidth(86)
-        remove_btn.setFixedHeight(26)
         remove_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         theme_runtime.bind_style(remove_btn, f"""
-            QPushButton {{ background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE}; font-size: 11px; min-height: 26px; padding: 2px 8px; text-align: center; color: {theme_styles.TEXT}; }}
+            QPushButton {{ background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE}; font-size: 12px; min-height: 28px; padding: 3px 8px; text-align: center; color: {theme_styles.TEXT}; }}
             QPushButton:hover {{ background: {theme_styles.SELECT}; }}
             QPushButton:pressed {{ background: {theme_styles.SELECT}; }}
             """)
@@ -5813,6 +5826,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if self._shutdown_cleanup_done:
             return
         self._shutdown_cleanup_done = True
+        self._browser_home_stop.set()
         try:
             self._close_detached_pages()
         except Exception:
@@ -6006,40 +6020,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._private_server_edit.action_requested.connect(self._open_private_server_manager)
         lay.addWidget(self._private_server_edit)
 
-        # join button
-        join_btn = QPushButton("Join Place ID")
-        theme_runtime.bind_icon(join_btn, "enter")
-        theme_runtime.bind_style(join_btn, f"""
-            QPushButton {{ background: {theme_styles.SELECT}; border: 1px solid {theme_styles.LINE}; min-height: 30px; font-weight: 700; text-align: center; color: {theme_styles.TEXT}; }}
-            QPushButton:hover {{ background: {theme_styles.HOVER}; }}
-            QPushButton:pressed {{ background: {theme_styles.PRESSED}; }}
-            """)
+        join_btn = self._make_split_button("Join Place ID", "enter", primary=True)
         join_btn.clicked.connect(self._on_join_place)
 
-        self._join_menu = QMenu(self)
-        act_join_user = self._join_menu.addAction("Join User")
-        act_job_id = self._join_menu.addAction("Job ID")
-        act_small_srv = self._join_menu.addAction("Small Server")
-        self._join_menu.addSeparator()
-        act_save_fav = self._join_menu.addAction("Save Current Game")
-        act_join_user.triggered.connect(self._on_join_user)
-        act_job_id.triggered.connect(self._on_join_job_id)
-        act_small_srv.triggered.connect(self._on_join_small_server)
-        act_save_fav.triggered.connect(self._on_save_current_game)
-
-        self._join_arrow = QToolButton()
-        self._join_arrow.setObjectName("splitArrow")
-        self._join_arrow.setText("v")
-        self._join_arrow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._join_arrow.setMenu(self._join_menu)
-        self._join_arrow.setFixedWidth(26)
-        self._join_arrow.setFixedHeight(30)
-
-        join_row = QHBoxLayout()
-        join_row.setSpacing(4)
-        join_row.addWidget(join_btn, 1)
-        join_row.addWidget(self._join_arrow)
-        lay.addLayout(join_row)
+        join_menu = join_btn.menu()
+        join_menu.addAction("Join User", self._on_join_user)
+        join_menu.addAction("Job ID", self._on_join_job_id)
+        join_menu.addAction("Small Server", self._on_join_small_server)
+        join_menu.addSeparator()
+        join_menu.addAction("Save Current Game", self._on_save_current_game)
+        lay.addWidget(join_btn)
 
         recent_header = QHBoxLayout()
         recent_header.setContentsMargins(0, 0, 0, 0)
@@ -6087,13 +6077,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         for label, slot, icon_name in [
             ("Edit Note",           self._on_edit_note, "pencil"),
             ("Refresh List",        self._refresh_account_list, "refresh"),
-            ("Launch Roblox Home",  self._on_launch_home, "home"),
         ]:
             btn = QPushButton(label)
             theme_runtime.bind_icon(btn, icon_name)
             theme_runtime.bind_style(btn, f'QPushButton {{ text-align: center; color: {theme_styles.TEXT}; }}')
             btn.clicked.connect(slot)
             lay.addWidget(btn)
+
+        home_button = self._make_split_button("Launch Roblox Home", "home")
+        home_button.clicked.connect(self._on_launch_home)
+        home_button.menu().addAction("Launch Browser Home", self._on_launch_browser_home)
+        lay.addWidget(home_button)
 
         lay.addStretch(1)
         return panel
@@ -7071,6 +7065,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         actions.launch_home(
             self.manager, launch_accounts,
             on_done=self._emit_launch_done,
+        )
+
+    def _on_launch_browser_home(self):
+        usernames = self._get_selected_usernames()
+        if len(usernames) != 1:
+            _show_error(self, "Select One Account", "Select one account to launch Roblox Home in a browser.")
+            return
+        if not self._guard_invalid(usernames) or not self._confirm_launch("Browser Home", usernames):
+            return
+        actions.launch_browser_home(
+            self.manager, usernames[0], self._browser_home_stop, self._emit_launch_done,
         )
 
     def _on_kill_all_roblox(self):

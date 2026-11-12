@@ -910,6 +910,47 @@ def get_browser_result() -> OperationResult:
     return browsers_mod.resolve_browser(browser_type)
 
 
+def launch_browser_home(
+    manager, username: str, stop_event: threading.Event,
+    on_done: Callable[[bool, OperationResult], None],
+) -> None:
+    def _worker():
+        if stop_event.is_set():
+            return
+        driver = None
+        try:
+            browser = get_browser_result()
+            result = manager.open_browser_home(username, browser.data["browser"], stop_event) if browser else browser
+            if result:
+                driver = result.data
+        except Exception as exc:
+            result = OperationResult.failure(
+                "BROWSER_HOME_FAILED", "Roblox Home Could Not Be Opened",
+                "The selected browser could not open Roblox Home.",
+                detail=type(exc).__name__,
+            )
+
+        try:
+            if not stop_event.is_set():
+                if result:
+                    print(f"[SUCCESS] Opened Browser Home for {username}")
+                    on_done(True, OperationResult.success())
+                else:
+                    on_done(False, result)
+            if driver is not None:
+                while not stop_event.wait(0.5):
+                    try:
+                        if not driver.window_handles:
+                            break
+                    except Exception:
+                        break
+        finally:
+            if driver is not None:
+                manager.close_browser_driver(driver)
+
+    threading.Thread(target=_worker, daemon=False, name="launch-browser-home").start()
+
+
 def add_account_browser(manager, on_done: Callable[[bool, str], None] = lambda *_: None, javascript: str = "") -> None:
     browser_result = get_browser_result()
     if not browser_result:

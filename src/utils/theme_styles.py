@@ -92,15 +92,6 @@ MAIN = f"""
             QPushButton:hover {{ background: {SELECT}; }}
             QPushButton:pressed {{ background: {SELECT}; }}
 
-            QToolButton#splitArrow {{
-                background: {INPUT}; border: 1px solid {LINE};
-                min-width: 26px; max-width: 26px; min-height: 26px;
-                padding: 0; color: {TEXT};
-            }}
-            QToolButton#splitArrow:hover {{ background: {SELECT}; }}
-            QToolButton#splitArrow:pressed {{ background: {SELECT}; }}
-            QToolButton#splitArrow::menu-indicator {{ image: none; }}
-
             QMenu {{
                 background: {OPAQUE_PANEL}; border: 1px solid {LINE};
                 color: {TEXT}; font-size: 11px;
