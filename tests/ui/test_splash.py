@@ -79,18 +79,25 @@ class ProgressTests(SplashCase):
     def test_none_means_indeterminate(self):
         window = self.start(animate=False)
         splash.status("Waiting for password", None)
-        self.assertIsNone(window.target)
+        self.assertIsNone(window.progress)
         self.assertEqual(window.status_text, "Waiting for password")
 
-    def test_progress_moves_gradually_when_animated(self):
+    def test_startup_stages_animate_and_reach_their_targets(self):
         window = self.start()
-        splash.status("Halfway", 1.0)
-        animation = window._progress_animation
-        animation.setCurrentTime(animation.duration() // 4)
-        self.assertGreater(window.progress, 0.0)
-        self.assertLess(window.progress, 1.0)
-        animation.setCurrentTime(animation.duration())
-        self.assertEqual(window.progress, 1.0)
+        accent = QColor(window.colors["ACCENT"]).rgb()
+        self.assertEqual(QColor(window.grab().toImage().pixel(45, 151)).rgb(), accent)
+        for text, progress, x in (
+            ("Opening your accounts", 0.5, 175),
+            ("Building the interface", 0.75, 255),
+            ("Ready", 1.0, 340),
+        ):
+            previous = window.progress
+            with patch.object(window, "_on_progress", wraps=window._on_progress) as advance:
+                splash.status(text, progress)
+            self.assertTrue(any(previous < call.args[0] < progress for call in advance.call_args_list))
+            self.assertEqual(window.status_text, text)
+            self.assertEqual(window.progress, progress)
+            self.assertEqual(QColor(window.grab().toImage().pixel(x, 151)).rgb(), accent)
 
     def test_bar_is_drawn_to_the_progress(self):
         window = self.start(animate=False)

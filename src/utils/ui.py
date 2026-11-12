@@ -1103,6 +1103,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._apply_stylesheet()
         self._build_ui()
+        splash.status("Finishing setup", 0.9)
         self._setup_system_tray()
 
         _data_folder = get_data_dir()
@@ -8712,6 +8713,7 @@ def main(icon_path: str | None = None, *, smoke_test: bool = False) -> int:
     # Create it first, before setup_encryption() and before _PasswordDialog.
     diagnostics.set_startup_stage("creating QApplication")
     app = QApplication.instance() or QApplication(sys.argv)
+    splash.status("Starting the interface", 0.2)
     app.setApplicationName("Roblox Account Manager")
     app.setFont(QFont("Segoe UI", 10))
     apply_palette(app)
@@ -8721,11 +8723,11 @@ def main(icon_path: str | None = None, *, smoke_test: bool = False) -> int:
             lambda theme: motion_filter.set_tint(theme.colors['TEXT'])
         )
     diagnostics.set_startup_stage("QApplication ready")
-    splash.status("Starting", 0.2)
 
     password = None
     try:
         diagnostics.set_startup_stage("loading encryption settings")
+        splash.status("Loading settings", 0.35)
         data_folder = get_data_dir()
         os.makedirs(data_folder, exist_ok=True)
         enc_cfg = EncryptionConfig(os.path.join(data_folder, "encryption_config.json"))
@@ -8837,7 +8839,7 @@ def main(icon_path: str | None = None, *, smoke_test: bool = False) -> int:
 
     try:
         diagnostics.set_startup_stage("creating main window")
-        splash.status("Building the interface", 0.8)
+        splash.status("Building the interface", 0.75)
         window = AccountManagerUIQt(manager, icon_path=icon_path)
         app.aboutToQuit.connect(window._perform_shutdown_cleanup)
     except Exception as exc:

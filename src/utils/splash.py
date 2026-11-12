@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QEasingCurve, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QEasingCurve, QEventLoop, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -14,7 +14,7 @@ SPLASH_SETTING = "startup_splash"
 WIDTH = 380
 HEIGHT = 190
 FADE_MS = 220
-PROGRESS_MS = 260
+PROGRESS_MS = 90
 SHIMMER_MS = 1300
 
 _active: "StartupSplash | None" = None
@@ -31,17 +31,12 @@ class StartupSplash(QWidget):
         self.version = version
         self.animate = animate
         self.status_text = "Starting"
-        self.progress = 0.0
-        self.target = None
+        self.progress: float | None = 0.1
         self.shimmer = 0.0
         self.setFixedSize(WIDTH, HEIGHT)
         self.setWindowTitle("Roblox Account Manager")
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._icon = self._load_icon(icon_paths)
-        self._progress_animation = QVariantAnimation(self)
-        self._progress_animation.setDuration(PROGRESS_MS)
-        self._progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._progress_animation.valueChanged.connect(self._on_progress)
         self._shimmer_animation = QVariantAnimation(self)
         self._shimmer_animation.setDuration(SHIMMER_MS)
         self._shimmer_animation.setStartValue(0.0)
@@ -66,29 +61,42 @@ class StartupSplash(QWidget):
 
     def start(self) -> None:
         self.show()
-        if self.animate:
-            self._shimmer_animation.start()
 
     def set_status(self, text: str, progress: float | None) -> None:
         self.status_text = text
-        self.target = None if progress is None else max(0.0, min(1.0, float(progress)))
-        if self.target is not None:
-            self._progress_animation.stop()
+        if progress is None:
+            self.progress = None
             if self.animate:
-                self._progress_animation.setStartValue(self.progress)
-                self._progress_animation.setEndValue(self.target)
-                self._progress_animation.start()
-            else:
-                self.progress = self.target
-        self.update()
+                self._shimmer_animation.start()
+            self.repaint()
+            return
 
-    def _on_progress(self, value) -> None:
-        self.progress = float(value)
+        self._shimmer_animation.stop()
+        target = max(0.0, min(1.0, float(progress)))
+        if self.animate and self.isVisible() and self.progress is not None and self.progress != target:
+            self._animate_progress(target)
+        self.progress = target
+        self.repaint()
+
+    def _animate_progress(self, target: float) -> None:
+        animation = QVariantAnimation()
+        animation.setDuration(PROGRESS_MS)
+        animation.setStartValue(self.progress)
+        animation.setEndValue(target)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._on_progress)
+        loop = QEventLoop()
+        animation.finished.connect(loop.quit)
+        animation.start()
+        loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _on_progress(self, value: float) -> None:
+        self.progress = value
         self.update()
 
     def _on_shimmer(self, value) -> None:
         self.shimmer = float(value)
-        if self.target is None:
+        if self.progress is None:
             self.update()
 
     def paintEvent(self, _event):
@@ -119,7 +127,7 @@ class StartupSplash(QWidget):
         painter.setBrush(QColor(c["LINE"]))
         painter.drawRoundedRect(track, 1.5, 1.5)
         painter.setBrush(QColor(c["ACCENT"]))
-        if self.target is None:
+        if self.progress is None:
             span = track.width() * 0.3
             start = track.left() + (track.width() + span) * self.shimmer - span
             fill = QRectF(max(track.left(), start), track.top(), 0, track.height())
