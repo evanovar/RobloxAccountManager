@@ -49,13 +49,27 @@ class ReimportTests(unittest.TestCase):
         self.assertEqual(self.manager.accounts["alice"]["note"], "")
         self.assertNotIn("password", self.manager.accounts["alice"])
 
-    def test_reimport_cannot_clear_invalid_status_until_account_is_deleted(self):
+    def test_reimport_of_a_verified_cookie_clears_invalid_status(self):
+        for suffix in ("old", "new"):
+            with self.subTest(cookie=suffix):
+                self.manager.accounts["alice"] = {"cookie": COOKIE + "old", "cookie_valid": False}
+                self.assertTrue(self.manager.import_cookie_account_result(COOKIE + suffix))
+                self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
+
+    def test_failed_reimport_keeps_invalid_status(self):
         self.manager.accounts["alice"] = {"cookie": COOKIE + "old", "cookie_valid": False}
-        self.assertTrue(self.manager.import_cookie_account_result(COOKIE + "new"))
+        failure = OperationResult.failure("COOKIE_INVALID", "Invalid", "Invalid cookie.")
+        with mock.patch.object(am.RobloxAPI, "validate_cookie", return_value=failure):
+            self.assertFalse(self.manager.import_cookie_account_result(COOKIE + "new"))
         self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
-        self.manager.delete_account("alice")
-        self.assertTrue(self.manager.import_cookie_account_result(COOKIE + "new"))
+
+    def test_successful_launch_clears_invalid_status(self):
+        self.manager.accounts["alice"] = {"cookie": COOKIE + "old", "cookie_valid": False}
+        launched = OperationResult.success(data={})
+        with mock.patch.object(am.RobloxAPI, "launch_roblox", return_value=launched):
+            self.assertTrue(self.manager.launch_roblox("alice"))
         self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
+        self.assertTrue(am.RobloxAccountManager().accounts["alice"]["cookie_valid"])
 
     def test_new_password_replaces_the_old_one(self):
         self.manager.accounts["alice"] = {"username": "alice", "password": "old"}

@@ -160,9 +160,21 @@ class LaunchRecordTests(unittest.TestCase):
         self.assertFalse(self.manager.launch_roblox("alice", "1818"))
         self.assertFalse(self.manager.get_launch_records())
 
-    def test_successful_launch_does_not_clear_saved_invalid_status(self):
+    def test_successful_launch_clears_saved_invalid_status(self):
         self.manager.accounts["alice"]["cookie_valid"] = False
         self.launcher.return_value = OperationResult.success()
+        self.assertTrue(self.manager.launch_roblox("alice", "1818"))
+        self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
+        self.manager.save_accounts.assert_called_once()
+
+    def test_launch_does_not_mark_a_replaced_cookie_valid(self):
+        self.manager.accounts["alice"]["cookie_valid"] = False
+
+        def launch(*_args):
+            self.manager.accounts["alice"]["cookie"] = "synthetic-replacement"
+            return OperationResult.success()
+
+        self.launcher.side_effect = launch
         self.assertTrue(self.manager.launch_roblox("alice", "1818"))
         self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
         self.manager.save_accounts.assert_not_called()

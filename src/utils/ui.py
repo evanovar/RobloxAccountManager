@@ -7131,6 +7131,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         )
         if not operation_result:
             self._show_operation_error(operation_result)
+            return
+        # A successful launch can clear an invalid flag.
+        for username in list(self._invalid_badges):
+            self._apply_cookie_status_to_row(username, self._is_account_invalid(username))
 
     def _operation_error_message_text(self, result: OperationResult) -> str:
         lines = [
@@ -7409,29 +7413,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         copy_btn.clicked.connect(_copy_link)
         card_lay.addWidget(copy_btn)
-
-        plus_lbl = QLabel("Or donate robux via plus")
-        plus_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        plus_lbl.setWordWrap(True)
-        theme_runtime.bind_style(plus_lbl, f'font-size: 11px; color: {theme_styles.MUTED}; background: transparent;')
-        card_lay.addWidget(plus_lbl)
-
-        copy_user_btn = QPushButton("Copy Username")
-        copy_user_btn.setFixedHeight(34)
-        copy_user_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        theme_runtime.bind_style(copy_user_btn, f"""
-            QPushButton {{ background: {theme_styles.FG_ACCENT}; color: {theme_styles.ON_ACCENT}; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; }}
-            QPushButton:hover {{ background: {theme_styles.ACCENT_HOVER}; }}
-            QPushButton:pressed {{ background: {theme_styles.ACCENT_PRESSED}; }}
-            """)
-
-        def _copy_username():
-            QApplication.clipboard().setText(self._DONATION_USERNAME)
-            copy_user_btn.setText("Copied!")
-            QTimer.singleShot(2000, lambda: copy_user_btn.setText("Copy Username"))
-
-        copy_user_btn.clicked.connect(_copy_username)
-        card_lay.addWidget(copy_user_btn)
 
         h = QHBoxLayout()
         h.addStretch(1)

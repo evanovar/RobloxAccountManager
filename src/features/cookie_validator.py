@@ -50,7 +50,7 @@ def _set_status(manager, username: str, status: str, *, checked_cookie=None, che
     account_lock = getattr(manager, "_accounts_lock", None)
     with account_lock if account_lock is not None else nullcontext():
         data = manager.accounts.get(username)
-        if not isinstance(data, dict) or is_flagged(data):
+        if not isinstance(data, dict):
             return False
         # A response for an old cookie must not invalidate a replacement account.
         if checked_record is not None and data is not checked_record:
@@ -149,8 +149,10 @@ class CookieValidator:
                     break
                 with account_lock if account_lock is not None else nullcontext():
                     data = self._manager.accounts.get(username)
-                    if not isinstance(data, dict) or is_flagged(data):
+                    if not isinstance(data, dict):
                         continue
+                    # Flagged accounts are checked again so a valid cookie can recover.
+                    was_flagged = is_flagged(data)
                     cookie = data.get("cookie", "")
                 if not cookie:
                     continue
@@ -163,7 +165,9 @@ class CookieValidator:
                     changed = not self._save_statuses()
                 checked += 1
 
-                if status == INVALID:
+                if updated and status == VALID and was_flagged:
+                    print(f"[INFO] Cookie validation: {username} is valid again.")
+                elif status == INVALID:
                     invalid += 1
                     print(
                         f"[WARNING] Cookie validation: {username} received "

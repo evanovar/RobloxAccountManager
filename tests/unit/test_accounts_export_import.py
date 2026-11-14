@@ -127,14 +127,21 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(merged["alice"]["cookie"], "new")
         self.assertEqual((added, updated, skipped), (0, 1, 0))
 
-    def test_overwrite_preserves_a_saved_invalid_status_without_changing_backup(self):
-        imported = {"alice": {"cookie": "new", "cookie_valid": True}}
+    def test_overwrite_preserves_a_saved_invalid_status_for_the_same_cookie(self):
+        imported = {"alice": {"cookie": "old", "cookie_valid": True}}
         merged, *_ = backup.merge_accounts(
             {"alice": {"cookie": "old", "cookie_valid": False}}, imported, overwrite=True,
         )
         self.assertFalse(merged["alice"]["cookie_valid"])
-        self.assertEqual(merged["alice"]["cookie"], "new")
         self.assertTrue(imported["alice"]["cookie_valid"])
+
+    def test_overwrite_with_a_new_cookie_drops_the_invalid_status(self):
+        imported = {"alice": {"cookie": "new", "cookie_valid": None}}
+        merged, *_ = backup.merge_accounts(
+            {"alice": {"cookie": "old", "cookie_valid": False}}, imported, overwrite=True,
+        )
+        self.assertIsNone(merged["alice"]["cookie_valid"])
+        self.assertEqual(merged["alice"]["cookie"], "new")
 
     def test_existing_order_is_kept_and_input_is_not_modified(self):
         existing = {"b": {"cookie": "1"}, "a": {"cookie": "2"}}

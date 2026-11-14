@@ -76,7 +76,7 @@ def main():
     diagnostics.set_startup_stage("data folder ready")
 
     icon_path = resolve_icon_path()
-
+    
     try:
         exit_code = _ui_main(icon_path=icon_path, smoke_test=SMOKE_TEST)
     except Exception as exc:

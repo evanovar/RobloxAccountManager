@@ -114,7 +114,7 @@ class CookieValidationPersistenceTests(unittest.TestCase):
         worker._stop_evt.wait = Mock(return_value=False)
         return worker
 
-    def test_invalid_status_is_saved_before_callback_and_skipped_after_restart(self):
+    def test_invalid_status_is_saved_before_callback_and_rechecked_after_restart(self):
         def on_result(username, status):
             self.assertEqual(status, cookie_validator.INVALID)
             self.assertFalse(am.RobloxAccountManager().accounts[username]["cookie_valid"])
@@ -124,7 +124,17 @@ class CookieValidationPersistenceTests(unittest.TestCase):
         self.manager = am.RobloxAccountManager()
         self.session.get.reset_mock()
         self.worker()._run()
-        self.session.get.assert_not_called()
+        self.assertEqual(self.session.get.call_count, 2)
+        self.assertFalse(am.RobloxAccountManager().accounts["alice"]["cookie_valid"])
+
+    def test_flagged_account_recovers_after_authenticated_response(self):
+        self.manager.accounts["alice"]["cookie_valid"] = False
+        self.manager.save_accounts()
+        self.session.get.return_value = Mock(status_code=200)
+        results = []
+        self.worker(lambda username, status: results.append((username, status)))._run()
+        self.assertEqual(results, [("alice", cookie_validator.VALID)])
+        self.assertTrue(am.RobloxAccountManager().accounts["alice"]["cookie_valid"])
 
     def test_inconclusive_results_preserve_status_without_saving(self):
         for initial in (True, None):
@@ -151,11 +161,12 @@ class CookieValidationPersistenceTests(unittest.TestCase):
         self.assertEqual(results, [("alice", cookie_validator.INVALID)])
         self.assertFalse(am.RobloxAccountManager().accounts["alice"]["cookie_valid"])
 
-    def test_invalid_status_cannot_be_cleared_by_another_validation_result(self):
+    def test_invalid_status_is_cleared_only_by_a_valid_result(self):
         self.manager.accounts["alice"]["cookie_valid"] = False
-        for status in (cookie_validator.VALID, cookie_validator.UNKNOWN):
-            self.assertFalse(cookie_validator._set_status(self.manager, "alice", status))
-            self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
+        self.assertFalse(cookie_validator._set_status(self.manager, "alice", cookie_validator.UNKNOWN))
+        self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
+        self.assertTrue(cookie_validator._set_status(self.manager, "alice", cookie_validator.VALID))
+        self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
 
     def test_stop_after_confirmed_unauthorized_response_still_saves(self):
         worker = self.worker()
@@ -185,13 +196,13 @@ class CookieValidationPersistenceTests(unittest.TestCase):
                 self.assertTrue(self.manager.accounts["alice"]["cookie_valid"])
                 save.assert_not_called()
 
-    def test_legacy_invalid_status_survives_loading_and_is_not_checked(self):
+    def test_legacy_invalid_status_survives_loading_and_unauthorized_checks(self):
         self.manager.accounts["alice"] = {"cookie": "synthetic-cookie", "valid": False}
         self.manager.save_accounts()
         self.manager = am.RobloxAccountManager()
         self.worker()._run()
         self.assertFalse(self.manager.accounts["alice"]["cookie_valid"])
-        self.session.get.assert_not_called()
+        self.assertEqual(self.session.get.call_count, 2)
 
     def test_deleting_and_readding_account_allows_checks_again(self):
         self.manager.accounts["alice"]["cookie_valid"] = False
