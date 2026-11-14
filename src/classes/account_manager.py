@@ -236,7 +236,7 @@ class RobloxAccountManager:
     def _merge_existing_account(self, username, record):
         existing = self.accounts.get(username)
         if isinstance(existing, dict):
-            # The cookie was just verified, so the old invalid flag is not kept.
+            # cookie was just verified, drop the old flag
             if not record.get('note'):
                 record['note'] = existing.get('note', '')
         return record
@@ -1288,7 +1288,7 @@ class RobloxAccountManager:
         if launched:
             with self._accounts_lock:
                 account = self.accounts.get(username)
-                # Launching needs an auth ticket, which proves the cookie is valid.
+                # got an auth ticket so the cookie works
                 if (isinstance(account, dict)
                         and account.get('cookie') == cookie
                         and (account.get('cookie_valid') is not True or 'valid' in account)):

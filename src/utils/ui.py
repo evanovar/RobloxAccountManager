@@ -350,6 +350,7 @@ class _Bridge(QObject):
     roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
     presence_update = Signal(object) # set[str] of online usernames
     cookie_validated = Signal(str, str) # (username, status) from validator worker
+    cookie_check_done = Signal(object) # (usernames, start time) from a manual cookie check
     update_available = Signal(str) # (latest_version) from update check worker
     update_check_finished = Signal(object) # OperationResult from a manual update check
     update_progress = Signal(int) # (pct 0-100) from auto download worker
@@ -1028,6 +1029,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.roblox_download_done.connect(self._on_roblox_download_done)
         self._bridge.presence_update.connect(self._on_presence_update)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
+        self._bridge.cookie_check_done.connect(self._on_cookie_check_done)
         self._bridge.console_wakeup.connect(self._drain_console_queue)
         diagnostics.set_console_wakeup(self._bridge.console_wakeup.emit)
         self._bridge.update_available.connect(self._on_update_available)
@@ -1062,6 +1064,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._cv_mod = cookie_validator_mod
         self._animations_on = motion.animations_enabled(actions.load_ui_settings())
         self._cv_validator = None
+        # last check per account, not saved
+        self._cookie_checks: dict[str, tuple[str, float]] = {}
         self._invalid_badges: dict[str, QLabel] = {}
         self._account_avatar_containers: dict[str, QWidget] = {}
         self._account_name_labels: dict[str, QLabel] = {}
@@ -4728,7 +4732,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
     # Cookie Validator
     def _start_cookie_validator(self) -> None:
-        if self._cv_validator is not None:
+        if self._cv_validator is not None and self._cv_validator.is_alive():
             return
         settings = actions.load_ui_settings()
         if not self._cv_mod.validation_enabled(settings):
@@ -4745,10 +4749,78 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._cv_validator.start()
 
     def _on_cookie_validated(self, username: str, status: str) -> None:
+        self._cookie_checks[username] = (status, time.time())
         self._apply_cookie_status_to_row(
             username,
             self._is_account_invalid(username),
         )
+
+    def _on_check_cookies(self, usernames: list[str]) -> None:
+        if self._cv_validator is not None and self._cv_validator.is_alive():
+            QMessageBox.information(
+                self,
+                "Cookie Check Running",
+                "A cookie check is already running. Try again when it finishes.",
+            )
+            return
+        targets = [u for u in usernames if u in self.manager.accounts]
+        if not targets:
+            return
+        print(f"[INFO] Checking cookies for {len(targets)} account(s)...")
+        settings = actions.load_ui_settings()
+        started = time.time()
+        self._cv_validator = self._cv_mod.CookieValidator(
+            self.manager,
+            on_result=lambda u, status: self._bridge.cookie_validated.emit(u, status),
+            on_done=lambda: self._bridge.cookie_check_done.emit((list(targets), started)),
+            delay_sec=self._cv_mod.get_validation_delay(settings),
+            usernames=targets,
+        )
+        self._cv_validator.start()
+
+    def _cookie_check_status(self, username: str, since: float) -> str:
+        # old results count as unknown
+        status, checked_at = self._cookie_checks.get(username, (self._cv_mod.UNKNOWN, 0.0))
+        return status if checked_at >= since else self._cv_mod.UNKNOWN
+
+    def _on_cookie_check_done(self, payload) -> None:
+        usernames, started = payload
+        if len(usernames) == 1:
+            username = usernames[0]
+            text = {
+                self._cv_mod.VALID: f"The cookie for {username} is valid.",
+                self._cv_mod.INVALID: f"The cookie for {username} was rejected by Roblox.",
+            }.get(
+                self._cookie_check_status(username, started),
+                f"The cookie for {username} could not be verified. Check the console for details.",
+            )
+        else:
+            statuses = [self._cookie_check_status(u, started) for u in usernames]
+            text = (
+                f"Checked {len(usernames)} accounts.\n\n"
+                f"Valid: {statuses.count(self._cv_mod.VALID)}\n"
+                f"Invalid: {statuses.count(self._cv_mod.INVALID)}\n"
+                f"Could not verify: {statuses.count(self._cv_mod.UNKNOWN)}"
+            )
+        QMessageBox.information(self, "Cookie Check", text)
+
+    def _cookie_status_tooltip(self, username: str, flagged: bool) -> str:
+        lines = []
+        if flagged:
+            lines += [
+                "Cookie validation received repeated unauthorized responses.",
+                "You can still try launching this account.",
+            ]
+        check = self._cookie_checks.get(username)
+        if check is not None:
+            status, checked_at = check
+            label = {
+                self._cv_mod.VALID: "valid",
+                self._cv_mod.INVALID: "invalid",
+            }.get(status, "could not verify")
+            stamp = time.strftime("%H:%M:%S", time.localtime(checked_at))
+            lines.append(f"Last cookie check: {stamp}, {label}")
+        return "\n".join(lines)
 
     def _apply_cookie_status_to_row(self, username: str, flagged: bool) -> None:
         badge = self._invalid_badges.get(username)
@@ -4762,11 +4834,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         name_label = self._account_name_labels.get(username)
         if name_label is not None:
             theme_runtime.bind_style(name_label, 'color: @RAM_WARNING@; font-style: italic;' if flagged else '')
-            name_label.setToolTip(
-                "Cookie validation received repeated unauthorized responses.\n"
-                "You can still try launching this account."
-                if flagged else ""
-            )
+            name_label.setToolTip(self._cookie_status_tooltip(username, flagged))
         row = self._account_rows.get(username)
         if row is not None:
             theme_runtime.bind_style(row, 'QWidget { background: rgba(200, 50, 50, 0.06); }' if flagged else '')
@@ -6283,10 +6351,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             name_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             if flagged:
                 theme_runtime.bind_style(name_lbl, 'color: @RAM_WARNING@; font-style: italic;')
-                name_lbl.setToolTip(
-                    "Cookie validation received repeated unauthorized responses.\n"
-                    "You can still try launching this account."
-                )
+            name_lbl.setToolTip(self._cookie_status_tooltip(username, flagged))
             row_lay.addWidget(name_lbl)
             self._account_name_labels[username] = name_lbl
 
@@ -7132,7 +7197,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if not operation_result:
             self._show_operation_error(operation_result)
             return
-        # A successful launch can clear an invalid flag.
+        # launch may have cleared a flag
         for username in list(self._invalid_badges):
             self._apply_cookie_status_to_row(username, self._is_account_invalid(username))
 
@@ -7243,6 +7308,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         act_join = menu.addAction("Join Place ID")
         act_note = menu.addAction("Edit Note")
+        act_check = menu.addAction("Check Cookies" if is_multi else "Check Cookie")
         menu.addSeparator()
 
         # Copy Contents submenu
@@ -7291,6 +7357,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._on_join_place()
         elif chosen == act_note:
             self._on_edit_note()
+        elif chosen == act_check:
+            self._on_check_cookies(multi_sel if is_multi else [username])
         elif chosen == act_remove:
             self._on_remove_account()
         elif chosen in (act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie):

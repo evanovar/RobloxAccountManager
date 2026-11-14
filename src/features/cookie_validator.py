@@ -108,8 +108,11 @@ class CookieValidator:
         on_result: Callable[[str, str], None],
         on_done: Callable[[], None] | None = None,
         delay_sec: float = 1.5,
+        usernames: list[str] | None = None,
     ):
         self._manager = manager
+        # none means all accounts
+        self._usernames = list(usernames) if usernames is not None else None
         self._on_result = on_result
         self._on_done = on_done or (lambda: None)
         self._delay = max(0.5, float(delay_sec))
@@ -125,6 +128,9 @@ class CookieValidator:
         )
         self._thread.start()
 
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
     def stop(self, join_timeout: float = 2.0) -> bool:
         self._stop_evt.set()
         thread = self._thread
@@ -135,7 +141,10 @@ class CookieValidator:
     def _run(self) -> None:
         account_lock = getattr(self._manager, "_accounts_lock", None)
         with account_lock if account_lock is not None else nullcontext():
-            accounts_snapshot = list(self._manager.accounts)
+            if self._usernames is None:
+                accounts_snapshot = list(self._manager.accounts)
+            else:
+                accounts_snapshot = [u for u in self._usernames if u in self._manager.accounts]
         changed = False
         checked = 0
         invalid = 0
@@ -151,7 +160,7 @@ class CookieValidator:
                     data = self._manager.accounts.get(username)
                     if not isinstance(data, dict):
                         continue
-                    # Flagged accounts are checked again so a valid cookie can recover.
+                    # recheck flagged ones too so they can recover
                     was_flagged = is_flagged(data)
                     cookie = data.get("cookie", "")
                 if not cookie:

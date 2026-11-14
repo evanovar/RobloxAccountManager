@@ -47,7 +47,7 @@ def _load_from_disk_locked() -> None:
     except FileNotFoundError:
         pass
     except (ValueError, TypeError):
-        # Keep the bad file so the next save does not overwrite it.
+        # keep bad file so the next save wont overwrite it
         quarantine_corrupt(_SETTINGS_PATH)
     except OSError:
         pass

@@ -368,7 +368,7 @@ class EncryptionConfig:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
             except (ValueError, TypeError):
-                # Keep the bad file aside, it may still hold the password salt.
+                # keep it around, may still have the salt
                 quarantine_corrupt(self.config_file)
                 return {}
             except OSError:
