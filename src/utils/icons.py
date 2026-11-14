@@ -34,10 +34,38 @@ PATHS: dict[str, str] = {
     "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M16 16l5 5"/>',
 }
 
+# filled shapes, (viewBox, path data)
+FILLED: dict[str, tuple[str, str]] = {
+    "roblox_plus": (
+        "0 0 32 32",
+        "M13.8555 2.5606C15.1824 1.81313 16.8176 1.81313 18.1445 2.5606L26.8555 7.46782C28.1824 "
+        "8.21534 28.9999 9.59781 29 11.0928V20.9073C29 22.4024 28.1824 23.7847 26.8555 "
+        "24.5323L18.1445 29.4395L17.8926 29.5704C16.6996 30.143 15.3004 30.143 14.1074 "
+        "29.5704L13.8555 29.4395L11.0176 27.8409C10.3887 27.4864 10 26.8196 10 "
+        "26.0977V12.001C10.0002 10.8967 10.8957 10.0012 12 10.001L20 10.0001C21.1044 10 21.9998 "
+        "10.8957 22 12.0001V19.0001C22 20.1046 21.1046 21.0001 20 21.0001H16C15.4477 21.0001 15 "
+        "20.5523 15 20.0001C15.0002 19.4479 15.4478 19.0001 16 19.0001H20V12.0001L12 "
+        "12.001V26.0987L14.8369 27.6973C15.5545 28.1016 16.4455 28.1016 17.1631 27.6973L25.874 "
+        "22.7891C26.5863 22.3877 27 21.6636 27 20.9073V11.0928C26.9999 10.3366 26.5863 9.61234 "
+        "25.874 9.21099L17.1631 4.30278C16.4456 3.89864 15.5544 3.89864 14.8369 4.30278L6.12598 "
+        "9.21099C5.41372 9.61234 5.00013 10.3366 5 11.0928V20.9073C5 21.6636 5.4137 22.3877 "
+        "6.12598 22.7891L6.49023 22.9942C6.80495 23.1714 7 23.5051 7 23.8663C6.99984 24.6314 "
+        "6.17549 25.1128 5.50879 24.7374L5.14453 24.5323C3.81763 23.7847 3 22.4024 3 "
+        "20.9073V11.0928C3.00012 9.69126 3.71827 8.38846 4.90137 7.61528L5.14453 7.46782L13.8555 "
+        "2.5606Z",
+    ),
+}
+
 _cache: dict[tuple, QPixmap] = {}
 
 
 def _svg(name: str, color: str) -> bytes:
+    if name in FILLED:
+        view_box, path = FILLED[name]
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">'
+            f'<path d="{path}" fill="{color}"/></svg>'
+        ).encode("utf-8")
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
         f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -46,7 +74,7 @@ def _svg(name: str, color: str) -> bytes:
 
 
 def pixmap(name: str, color: str, size: int = ICON_SIZE) -> QPixmap:
-    if name not in PATHS:
+    if name not in PATHS and name not in FILLED:
         raise KeyError(f"Unknown icon: {name}")
     screen = QGuiApplication.primaryScreen()
     ratio = max(1.0, screen.devicePixelRatio()) if screen else 1.0

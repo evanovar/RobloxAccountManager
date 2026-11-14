@@ -70,6 +70,7 @@ import features.headless_manager as headless_manager_mod
 import features.presence as presence_mod
 import features.private_servers as private_servers_mod
 import features.roblox_downloader as roblox_downloader_mod
+import features.roblox_plus as roblox_plus_mod
 import features.roblox_settings as roblox_settings_mod
 import features.updater as updater_mod
 import features.websocket_server as ws_mod
@@ -349,6 +350,7 @@ class _Bridge(QObject):
     roblox_download_progress = Signal(int, str) # (percent 0-100, current operation)
     roblox_download_done = Signal(bool, str, str) # (success, result_type, message)
     presence_update = Signal(object) # set[str] of online usernames
+    plus_status_done = Signal(object) # usernames whose plus status changed
     cookie_validated = Signal(str, str) # (username, status) from validator worker
     cookie_check_done = Signal(object) # (usernames, start time) from a manual cookie check
     update_available = Signal(str) # (latest_version) from update check worker
@@ -1028,6 +1030,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.roblox_download_progress.connect(self._on_roblox_download_progress)
         self._bridge.roblox_download_done.connect(self._on_roblox_download_done)
         self._bridge.presence_update.connect(self._on_presence_update)
+        self._bridge.plus_status_done.connect(self._on_plus_status_done)
         self._bridge.cookie_validated.connect(self._on_cookie_validated)
         self._bridge.cookie_check_done.connect(self._on_cookie_check_done)
         self._bridge.console_wakeup.connect(self._drain_console_queue)
@@ -1069,6 +1072,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._invalid_badges: dict[str, QLabel] = {}
         self._account_avatar_containers: dict[str, QWidget] = {}
         self._account_name_labels: dict[str, QLabel] = {}
+        self._plus_badges: dict[str, QLabel] = {}
         self._account_rows: dict[str, QWidget] = {}
 
         self._avatar_labels: dict[str, QLabel] = {}
@@ -6187,6 +6191,17 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         return theme_runtime.placeholder_pixmap(size)
 
     @staticmethod
+    def _create_plus_badge() -> QLabel:
+        badge = QLabel()
+        badge.setObjectName("plusBadge")
+        badge.setFixedSize(16, 16)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setPixmap(icons.pixmap("roblox_plus", "#FFFFFF", 14))
+        badge.setToolTip("Roblox Plus")
+        theme_runtime.bind_style(badge, 'background: transparent;')
+        return badge
+
+    @staticmethod
     def _create_invalid_badge(container: QWidget) -> QLabel:
         badge_size = 6
         ring = 1
@@ -6267,6 +6282,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._invalid_badges.clear()
         self._account_avatar_containers.clear()
         self._account_name_labels.clear()
+        self._plus_badges.clear()
         self._account_rows.clear()
         account_items = list(self.manager.accounts.items())
         activity_enabled = bool(
@@ -6355,6 +6371,11 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             row_lay.addWidget(name_lbl)
             self._account_name_labels[username] = name_lbl
 
+            plus_lbl = self._create_plus_badge()
+            plus_lbl.setVisible(roblox_plus_mod.has_plus(data))
+            row_lay.addWidget(plus_lbl)
+            self._plus_badges[username] = plus_lbl
+
             if note: # Note display
                 sep = QLabel("|")
                 sep.setObjectName("noteSep")
@@ -6424,6 +6445,7 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 
         self._rebuild_group_bar()
         self._load_avatars_async()
+        self._load_plus_async()
         self._update_activity_rows()
 
 
@@ -6561,6 +6583,18 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             on_avatar_ready=lambda u, b: self._bridge.avatar_ready.emit(u, b),
             on_complete=lambda: self.manager.save_accounts(),
         )
+
+    def _load_plus_async(self):
+        roblox_plus_mod.sync_plus_status(
+            self.manager,
+            on_done=lambda changed: self._bridge.plus_status_done.emit(changed),
+        )
+
+    def _on_plus_status_done(self, changed):
+        for username in changed:
+            badge = self._plus_badges.get(username)
+            if badge is not None and isValid(badge):
+                badge.setVisible(roblox_plus_mod.has_plus(self.manager.accounts.get(username)))
 
     def _on_avatar_ready(self, username: str, img_bytes: object):
         # Convert byte to circular pixmap

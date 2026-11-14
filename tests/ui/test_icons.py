@@ -36,6 +36,12 @@ class IconTests(unittest.TestCase):
             with self.subTest(icon=name):
                 self.assertIn("#FF8800", painted_colors(icons.pixmap(name, "#FF8800")))
 
+    def test_filled_icons_are_valid_and_use_the_requested_color(self):
+        for name in icons.FILLED:
+            with self.subTest(icon=name):
+                self.assertTrue(QSvgRenderer(QByteArray(icons._svg(name, "#FFFFFF"))).isValid())
+                self.assertIn("#FF8800", painted_colors(icons.pixmap(name, "#FF8800")))
+
     def test_every_icon_leaves_room_around_the_edges(self):
         for name in icons.PATHS:
             with self.subTest(icon=name):
