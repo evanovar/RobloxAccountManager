@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from Crypto.Cipher import AES  # nosec B413
 from Crypto.Random import get_random_bytes  # nosec B413
 from Crypto.Protocol.KDF import PBKDF2  # nosec B413
+from utils.atomic_io import quarantine_corrupt
 lazy import pythoncom
 lazy import win32com.client
 
@@ -366,11 +367,17 @@ class EncryptionConfig:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                if isinstance(config, dict):
-                    config.pop('password_hash', None)
-                return config
-            except Exception:
+            except (ValueError, TypeError):
+                # Keep the bad file aside, it may still hold the password salt.
+                quarantine_corrupt(self.config_file)
                 return {}
+            except OSError:
+                return {}
+            if not isinstance(config, dict):
+                quarantine_corrupt(self.config_file)
+                return {}
+            config.pop('password_hash', None)
+            return config
         return {}
     
     def save_config(self):

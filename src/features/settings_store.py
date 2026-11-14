@@ -11,7 +11,7 @@ import threading
 import time
 
 from utils.app_paths import get_data_dir
-from utils.atomic_io import write_json_atomic
+from utils.atomic_io import quarantine_corrupt, write_json_atomic
 
 
 _SETTINGS_PATH = os.path.join(get_data_dir(), "ui_settings.json")
@@ -42,9 +42,14 @@ def _load_from_disk_locked() -> None:
             loaded = json.load(handle)
         if isinstance(loaded, dict):
             data = loaded
+        else:
+            quarantine_corrupt(_SETTINGS_PATH)
     except FileNotFoundError:
         pass
-    except (OSError, ValueError, TypeError):
+    except (ValueError, TypeError):
+        # Keep the bad file so the next save does not overwrite it.
+        quarantine_corrupt(_SETTINGS_PATH)
+    except OSError:
         pass
 
     _CACHE = data

@@ -5,7 +5,7 @@ import time
 import unittest
 from unittest import mock
 
-from features import favorites, groups
+from features import auto_rejoin, favorites, groups, settings_store
 
 
 class FileTestCase(unittest.TestCase):
@@ -95,6 +95,57 @@ class ConcurrentUpdateTests(FileTestCase):
         with mock.patch.object(favorites, "save_favorites", slow_save):
             self.run_threads([lambda n=n: favorites.add_favorite(str(1000 + n), "G") for n in range(8)])
         self.assertEqual(len(favorites.load_favorites()), 8)
+
+
+class CorruptSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.settings_file = os.path.join(self.folder.name, "ui_settings.json")
+        self.rejoin_file = os.path.join(self.folder.name, "auto_rejoin.json")
+        patches = [
+            mock.patch.object(settings_store, "_SETTINGS_PATH", self.settings_file),
+            mock.patch.object(auto_rejoin, "_CONFIG_FILE", self.rejoin_file),
+            mock.patch.object(auto_rejoin, "_CONFIG_CACHE", None),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        settings_store.invalidate()
+        self.addCleanup(settings_store.invalidate)
+
+    def write(self, path, text):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_unreadable_ui_settings_survive_the_next_save(self):
+        self.write(self.settings_file, '{"theme": "dark",')
+        self.assertEqual(settings_store.load(), {})
+        settings_store.save("theme", "light")
+        self.assertEqual(self.read(self.settings_file + ".corrupt"), '{"theme": "dark",')
+        self.assertEqual(settings_store.get("theme"), "light")
+
+    def test_wrong_shape_ui_settings_are_kept_aside(self):
+        self.write(self.settings_file, '["theme"]')
+        self.assertEqual(settings_store.load(), {})
+        self.assertEqual(self.read(self.settings_file + ".corrupt"), '["theme"]')
+
+    def test_unreadable_auto_rejoin_configs_survive_the_next_save(self):
+        self.write(self.rejoin_file, '{"main": {"place_id"')
+        self.assertEqual(auto_rejoin.load_configs(), {})
+        auto_rejoin.save_configs({"alt": {"place_id": "1818"}})
+        self.assertEqual(self.read(self.rejoin_file + ".corrupt"), '{"main": {"place_id"')
+        self.assertIn("alt", self.read(self.rejoin_file))
+
+    def test_good_settings_are_left_alone(self):
+        settings_store.save("theme", "dark")
+        settings_store.invalidate()
+        self.assertEqual(settings_store.get("theme"), "dark")
+        self.assertFalse(os.path.exists(self.settings_file + ".corrupt"))
 
 
 if __name__ == "__main__":

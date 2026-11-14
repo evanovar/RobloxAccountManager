@@ -19,7 +19,7 @@ from classes.roblox_api import RobloxAPI
 import features.presence as presence_mod
 import features.settings_store as settings_store
 from utils.app_paths import get_data_dir
-from utils.atomic_io import write_json_atomic
+from utils.atomic_io import quarantine_corrupt, write_json_atomic
 
 _CONFIG_FILE = os.path.join(get_data_dir(), "auto_rejoin.json")
 _CONFIG_LOCK = threading.RLock()
@@ -43,7 +43,11 @@ def load_configs() -> dict:
                         loaded = json.load(f)
                     if isinstance(loaded, dict):
                         data = loaded
-                except (OSError, ValueError, TypeError):
+                    else:
+                        quarantine_corrupt(_CONFIG_FILE)
+                except (ValueError, TypeError):
+                    quarantine_corrupt(_CONFIG_FILE)
+                except OSError:
                     pass
             _CONFIG_CACHE = data
         return dict(_CONFIG_CACHE)

@@ -62,6 +62,23 @@ class EncryptionConfigPasswordTests(unittest.TestCase):
         self.assertEqual(self.read_config(), {"salt": self.salt})
         self.assertFalse(Path(str(self.path) + ".tmp").exists())
 
+    def test_unreadable_config_is_kept_aside_with_its_salt(self):
+        broken = '{"encryption_method": "password", "salt": "' + self.salt + '",'
+        self.path.write_text(broken, encoding="utf-8")
+        config = EncryptionConfig(str(self.path))
+        self.assertEqual(config.config, {})
+        self.assertFalse(config.is_setup_complete())
+        config.save_config()
+        corrupt = Path(str(self.path) + ".corrupt")
+        self.assertEqual(corrupt.read_text(encoding="utf-8"), broken)
+
+    def test_wrong_shape_config_does_not_crash(self):
+        self.path.write_text('["password"]', encoding="utf-8")
+        config = EncryptionConfig(str(self.path))
+        self.assertEqual(config.config, {})
+        self.assertFalse(config.is_encryption_enabled())
+        self.assertTrue(Path(str(self.path) + ".corrupt").exists())
+
 
 class ExistingPasswordAccountsTests(unittest.TestCase):
     def setUp(self):
