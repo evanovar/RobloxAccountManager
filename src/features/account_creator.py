@@ -101,160 +101,241 @@ def _generate_signup_profile(options: dict | None = None) -> dict:
     }
 
 
-def _build_signup_script(profile: dict) -> str:
-    month = json.dumps(profile["month"])
-    day = json.dumps(profile["day"])
-    year = json.dumps(profile["year"])
-    usernames = json.dumps(profile["usernames"])
-    password = json.dumps(profile["password"])
+# Roblox made changes to the signup layout
+_SIGNUP_SCRIPT = r"""
+(function() {
+    var profile = __PROFILE__;
+    var usernames = profile.usernames;
+    var password = profile.password;
+    var usernameIndex = 0;
+    var submitted = false;
 
-    return f"""
-    (function() {{
-        var usernames = {usernames};
-        var password = {password};
-        var usernameIndex = 0;
-        var submitted = false;
+    function reactChange(element) {
+        for (var key in element) {
+            if (key.indexOf('reactProps') !== -1) {
+                var props = element[key];
+                if (props && props.onChange) {
+                    props.onChange({ target: element });
+                }
+            }
+        }
+    }
 
-        function reactChange(element) {{
-            for (var key in element) {{
-                if (key.indexOf('reactProps') !== -1) {{
-                    var props = element[key];
-                    if (props && props.onChange) {{
-                        props.onChange({{ target: element }});
-                    }}
-                }}
-            }}
-        }}
+    function fire(element) {
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        reactChange(element);
+    }
 
-        function setInput(element, value) {{
-            var descriptor = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype,
-                'value'
-            );
-            if (descriptor && descriptor.set) {{
-                descriptor.set.call(element, value);
-            }} else {{
-                element.value = value;
-            }}
-            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            reactChange(element);
-        }}
-
-        function setSelect(element, value) {{
+    function setInput(element, value) {
+        var descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(element, value);
+        } else {
             element.value = value;
-            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            reactChange(element);
-        }}
+        }
+        fire(element);
+    }
 
-        function chooseUsername() {{
-            var usernameInput = document.getElementById('signup-username');
-            if (!usernameInput || usernameIndex >= usernames.length) {{
-                return false;
-            }}
-            setInput(usernameInput, usernames[usernameIndex]);
-            usernameIndex += 1;
-            return true;
-        }}
+    function setSelect(element, value) {
+        var descriptor = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value');
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(element, value);
+        } else {
+            element.value = value;
+        }
+        fire(element);
+    }
 
-        function getUsernameWarning() {{
-            var warning = document.getElementById(
-                'signup-usernameInputValidation'
-            );
-            return warning
-                ? (warning.textContent || '').trim().toLowerCase()
-                : '';
-        }}
+    function findSelect(id) {
+        var element = document.getElementById(id);
+        if (!element) {
+            return null;
+        }
+        return element.tagName === 'SELECT' ? element : element.querySelector('select');
+    }
 
-        function usernameRejected(warningText) {{
-            return (
-                warningText.indexOf('not appropriate') !== -1
-                || warningText.indexOf('already in use') !== -1
-            );
-        }}
+    function findButton(labels) {
+        var buttons = document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            var text = (buttons[i].textContent || '').trim().toLowerCase();
+            if (labels.indexOf(text) !== -1 && !buttons[i].disabled) {
+                return buttons[i];
+            }
+        }
+        return null;
+    }
 
-        function checkAfterSubmit() {{
-            var warningText = getUsernameWarning();
-            if (usernameRejected(warningText) && usernameIndex < usernames.length) {{
-                submitted = false;
-                chooseUsername();
-                setTimeout(function() {{ checkUsername(40); }}, 900);
-            }}
-        }}
+    function chooseUsername() {
+        var usernameInput = document.getElementById('signup-username');
+        if (!usernameInput || usernameIndex >= usernames.length) {
+            return false;
+        }
+        setInput(usernameInput, usernames[usernameIndex]);
+        usernameIndex += 1;
+        return true;
+    }
 
-        function checkUsername(attemptsLeft) {{
-            if (submitted) {{
-                return;
-            }}
+    function getUsernameWarning() {
+        var warning = document.getElementById('signup-usernameInputValidation');
+        return warning ? (warning.textContent || '').trim().toLowerCase() : '';
+    }
 
-            var signupButton = document.getElementById('signup-button');
-            var warningText = getUsernameWarning();
-            var rejected = usernameRejected(warningText);
+    function usernameRejected() {
+        var warningText = getUsernameWarning();
+        var usernameInput = document.getElementById('signup-username');
+        return (
+            warningText.indexOf('not appropriate') !== -1
+            || warningText.indexOf('already in use') !== -1
+            || !!(usernameInput && usernameInput.getAttribute('aria-invalid') === 'true')
+        );
+    }
 
-            if (rejected && usernameIndex < usernames.length) {{
-                chooseUsername();
-                setTimeout(function() {{ checkUsername(40); }}, 900);
-                return;
-            }}
+    function fillBirthday() {
+        setSelect(findSelect('MonthDropdown'), profile.month);
+        setSelect(findSelect('DayDropdown'), profile.day);
+        setSelect(findSelect('YearDropdown'), profile.year);
+    }
 
-            if (!warningText && signupButton && !signupButton.disabled) {{
-                submitted = true;
-                signupButton.click();
-                setTimeout(checkAfterSubmit, 1500);
-                return;
-            }}
+    function checkAfterSubmit() {
+        if (usernameRejected() && usernameIndex < usernames.length) {
+            submitted = false;
+            chooseUsername();
+            setTimeout(function() { checkUsername(40); }, 900);
+        }
+    }
 
-            if (attemptsLeft > 0) {{
-                setTimeout(
-                    function() {{ checkUsername(attemptsLeft - 1); }},
-                    250
-                );
-            }}
-        }}
+    function checkUsername(attemptsLeft) {
+        if (submitted) {
+            return;
+        }
+        var signupButton = document.getElementById('signup-button');
+        if (usernameRejected() && usernameIndex < usernames.length) {
+            chooseUsername();
+            setTimeout(function() { checkUsername(40); }, 900);
+            return;
+        }
+        if (!getUsernameWarning() && signupButton && !signupButton.disabled) {
+            submitted = true;
+            signupButton.click();
+            setTimeout(checkAfterSubmit, 1500);
+            return;
+        }
+        if (attemptsLeft > 0) {
+            setTimeout(function() { checkUsername(attemptsLeft - 1); }, 250);
+        }
+    }
 
-        function fillSignup(attemptsLeft) {{
-            var monthInput = document.getElementById('MonthDropdown');
-            var dayInput = document.getElementById('DayDropdown');
-            var yearInput = document.getElementById('YearDropdown');
-            var maleButton = document.getElementById('MaleButton');
-            var usernameInput = document.getElementById('signup-username');
-            var passwordInput = document.getElementById('signup-password');
-            var signupButton = document.getElementById('signup-button');
+    function fillOldLayout() {
+        var maleButton = document.getElementById('MaleButton');
+        fillBirthday();
+        if (!maleButton.firstElementChild || !maleButton.firstElementChild.classList.contains('gender-selected')) {
+            maleButton.click();
+        }
+        chooseUsername();
+        setInput(document.getElementById('signup-password'), password);
+        sessionStorage.setItem('_ram_pw', password);
+        setTimeout(function() { checkUsername(40); }, 900);
+    }
 
-            if (
-                monthInput && dayInput && yearInput && maleButton
-                && usernameInput && passwordInput && signupButton
-            ) {{
-                setSelect(monthInput, {month});
-                setSelect(dayInput, {day});
-                setSelect(yearInput, {year});
-                if (
-                    !maleButton.firstElementChild
-                    || !maleButton.firstElementChild.classList.contains(
-                        'gender-selected'
-                    )
-                ) {{
-                    maleButton.click();
-                }}
-                chooseUsername();
-                setInput(passwordInput, password);
-                sessionStorage.setItem('_ram_pw', password);
-                setTimeout(function() {{ checkUsername(40); }}, 900);
-                return;
-            }}
+    function fillPassword(attemptsLeft) {
+        var passwordInput = document.getElementById('signup-v2-password');
+        if (passwordInput) {
+            setInput(passwordInput, password);
+            sessionStorage.setItem('_ram_pw', password);
+            clickAddPassword(40);
+            return;
+        }
+        if (usernameRejected() && usernameIndex < usernames.length) {
+            chooseUsername();
+            setTimeout(function() { clickContinue(40); }, 900);
+            return;
+        }
+        if (attemptsLeft > 0) {
+            setTimeout(function() { fillPassword(attemptsLeft - 1); }, 250);
+        }
+    }
 
-            if (attemptsLeft > 0) {{
-                setTimeout(
-                    function() {{ fillSignup(attemptsLeft - 1); }},
-                    250
-                );
-            }}
-        }}
+    function clickContinue(attemptsLeft) {
+        var continueButton = findButton(['continue', 'next']);
+        if (continueButton && !usernameRejected()) {
+            continueButton.click();
+            setTimeout(function() { fillPassword(40); }, 500);
+            return;
+        }
+        if (usernameRejected() && usernameIndex < usernames.length) {
+            chooseUsername();
+            setTimeout(function() { clickContinue(40); }, 900);
+            return;
+        }
+        if (attemptsLeft > 0) {
+            setTimeout(function() { clickContinue(attemptsLeft - 1); }, 250);
+        }
+    }
 
-        fillSignup(60);
-    }})();
-    """
+    function clickAddPassword(attemptsLeft) {
+        if (submitted) {
+            return;
+        }
+        var addButton = findButton(['add password', 'sign up', 'create account']);
+        if (addButton) {
+            submitted = true;
+            addButton.click();
+            return;
+        }
+        if (attemptsLeft > 0) {
+            setTimeout(function() { clickAddPassword(attemptsLeft - 1); }, 250);
+        }
+    }
+
+    function fillNewLayout() {
+        var maleButton = findButton(['male']);
+        fillBirthday();
+        if (maleButton && maleButton.getAttribute('aria-pressed') !== 'true') {
+            maleButton.click();
+        }
+        chooseUsername();
+        setTimeout(function() { clickContinue(40); }, 900);
+    }
+
+    function fillSignup(attemptsLeft) {
+        var hasBirthday = findSelect('MonthDropdown') && findSelect('DayDropdown') && findSelect('YearDropdown');
+        var hasUsername = !!document.getElementById('signup-username');
+        if (
+            hasBirthday && hasUsername
+            && document.getElementById('MaleButton')
+            && document.getElementById('signup-password')
+            && document.getElementById('signup-button')
+        ) {
+            window.__ramSignupLayout = 'old';
+            fillOldLayout();
+            return;
+        }
+        if (hasBirthday && hasUsername && findButton(['male'])) {
+            window.__ramSignupLayout = 'new';
+            fillNewLayout();
+            return;
+        }
+        if (attemptsLeft > 0) {
+            setTimeout(function() { fillSignup(attemptsLeft - 1); }, 250);
+        }
+    }
+
+    fillSignup(60);
+})();
+"""
+
+
+def _build_signup_script(profile: dict) -> str:
+    data = {
+        "month": profile["month"],
+        "day": profile["day"],
+        "year": profile["year"],
+        "usernames": profile["usernames"],
+        "password": profile["password"],
+    }
+    # json keeps quotes and slashes in the password safe inside the script
+    return _SIGNUP_SCRIPT.replace("__PROFILE__", json.dumps(data))
 
 
 def create_accounts(

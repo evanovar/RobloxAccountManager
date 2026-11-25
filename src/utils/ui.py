@@ -7978,7 +7978,6 @@ class _AccountCreatorDialog(QDialog):
             QTabWidget::pane {{ background: {theme_styles.PANEL}; border: 1px solid {theme_styles.LINE}; border-radius: 0; }}
             QTabBar::tab {{ background: {theme_styles.INPUT}; color: {theme_styles.MUTED}; border: 1px solid {theme_styles.LINE}; border-bottom: none; border-radius: 0; min-width: 80px; min-height: 24px; padding: 2px 10px; }}
             QTabBar::tab:selected {{ background: {theme_styles.SELECT}; color: {theme_styles.TEXT}; }}
-            QSpinBox {{ background: {theme_styles.INPUT}; color: {theme_styles.TEXT}; border: 1px solid {theme_styles.LINE}; border-radius: 0; min-height: 24px; padding: 2px 6px; }}
             """)
 
         lay = QVBoxLayout(self)
