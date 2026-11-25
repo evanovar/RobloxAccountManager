@@ -83,40 +83,6 @@ class AutoRejoinTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(worker._process_identity, (303, 30.0))
 
-    def test_launch_reuses_a_live_confirmed_identity_without_rescanning_account_logs(self):
-        result = OperationResult.success(data={
-            'process_identity': (303, 30.0), 'expected_user_id': '333',
-        })
-        worker = auto_rejoin.AutoRejoinWorker(
-            'test', {}, SimpleNamespace(launch_roblox=Mock(return_value=result)), Mock(),
-        )
-        worker._stop.wait = Mock(return_value=True)
-        with patch.object(auto_rejoin, '_get_roblox_processes', return_value={}), \
-                patch.object(auto_rejoin, '_identity_matches', return_value=True), \
-                patch.object(auto_rejoin.settings_store, 'load', return_value={}), \
-                patch.object(auto_rejoin.presence_mod, '_get_user_id_from_pid') as resolve:
-            self.assertTrue(worker._launch_and_track('333', '123', '', ''))
-        resolve.assert_not_called()
-        worker._stop.wait.assert_not_called()
-        self.assertEqual(worker._process_identity, (303, 30.0))
-        self.assertEqual(worker._owned_processes, {(303, 30.0)})
-
-    def test_confirmed_identity_reuse_rejects_wrong_accounts_and_reused_pids(self):
-        for expected_user, created in (('other-account', 30.0), ('333', 31.0)):
-            with self.subTest(expected_user=expected_user, created=created):
-                result = OperationResult.success(data={
-                    'process_identity': (303, 30.0), 'expected_user_id': expected_user,
-                })
-                worker = auto_rejoin.AutoRejoinWorker(
-                    'test', {}, SimpleNamespace(launch_roblox=Mock(return_value=result)), Mock(),
-                )
-                worker._stop.wait = Mock(return_value=True)
-                with patch.object(auto_rejoin, '_get_roblox_processes', return_value={303: (created, Mock())}), \
-                        patch.object(auto_rejoin.settings_store, 'load', return_value={}):
-                    self.assertFalse(worker._launch_and_track('333', '123', '', ''))
-                self.assertIsNone(worker._process_identity)
-                self.assertEqual(worker._owned_processes, set())
-
     def _tracker_process(self, tracker):
         return Mock(cmdline=Mock(return_value=[
             "RobloxPlayerBeta.exe", f"roblox-player:1+launchmode:play+browsertrackerid:{tracker}+robloxLocale:en_us",

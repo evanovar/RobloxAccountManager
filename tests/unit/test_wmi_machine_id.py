@@ -113,10 +113,14 @@ class MachineIdUsesWmiTests(unittest.TestCase):
         powershell.assert_not_called()
 
         encryption._MACHINE_ID_CACHE.clear()
-        outputs = {0: b"UUID-1\r\n", 1: b"CPU-2\r\n", 2: b"BOARD-3\r\n"}
-        commands = iter(range(3))
+        # commands run in parallel threads, so answer by command not call order
+        outputs = {"ComputerSystemProduct": b"UUID-1\r\n", "Processor": b"CPU-2\r\n", "BaseBoard": b"BOARD-3\r\n"}
+
+        def check_output(args, **_kwargs):
+            return next(value for key, value in outputs.items() if f"Win32_{key})" in args[-1])
+
         with patch.object(encryption, "_read_wmi_identifiers", return_value=None), \
-                patch.object(encryption.subprocess, "check_output", side_effect=lambda *a, **k: outputs[next(commands)]):
+                patch.object(encryption.subprocess, "check_output", side_effect=check_output):
             slow = self.reader._get_machine_id()
         self.assertEqual(fast, slow)
         self.assertEqual(fast, digest("UUID-1-CPU-2-BOARD-3"))

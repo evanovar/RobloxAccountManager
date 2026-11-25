@@ -110,8 +110,6 @@ uv run python src/main.py
 | Launch controls | Optionally confirm UI launch actions and set an additional delay between accounts during bulk launches under Settings > General. |
 | Launcher selection | Use Automatic, Bloxstrap, Fishstrap, Froststrap, Roblox Client, or a custom executable. |
 
-With Multi Roblox active, a game launch is confirmed only when the matching client log reports a join as the selected account. A verification challenge, account mismatch, or unconfirmed launch pauses further launches for that Multi Roblox session, including Auto-Rejoin. Close the affected clients, address any account verification on roblox.com, then restart Multi Roblox before launching again. Roblox Home launches confirm the client window rather than a game join.
-
 ### Multi Roblox and window management
 
 | Feature | Description |

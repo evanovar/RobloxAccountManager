@@ -263,9 +263,7 @@ class SharedCookieProtectionTests(unittest.TestCase):
         with patch.object(actions, "is_roblox_running", return_value=False), \
                 patch.object(actions.ctypes, "WinDLL", return_value=kernel), \
                 patch.object(actions, "_lock_roblox_storage_file", side_effect=acquire), \
-                patch.object(launch_monitor, "wait_for_launch_slot", return_value=OperationResult.success()), \
-                patch.object(launch_monitor, "_snapshot", return_value={}), \
-                patch.object(launch_monitor, "confirm_launch", return_value=OperationResult.success()):
+                patch.object(launch_monitor, "wait_for_launch_slot", return_value=OperationResult.success()):
             try:
                 self.assertEqual(actions.enable_multi_roblox(), (True, ""))
             finally:

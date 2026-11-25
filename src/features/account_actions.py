@@ -140,14 +140,8 @@ def _batch_launch_result(
     total: int,
     success_count: int,
     failures: list[tuple[str, OperationResult]],
-    successful_launches: list[tuple[str, OperationResult]] = (),
 ) -> OperationResult:
     failures = list(failures)
-    for username, launch in successful_launches:
-        checked = launch_monitor.check_launched_client(launch, username)
-        if not checked:
-            success_count -= 1
-            failures.append((username, checked))
     summary = f"{action} {success_count}/{total} accounts."
     if not failures:
         return OperationResult.success(summary)
@@ -232,7 +226,6 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
     def _worker():
         success = 0
         failures: list[tuple[str, OperationResult]] = []
-        successful_launches: list[tuple[str, OperationResult]] = []
         for index, u in enumerate(usernames):
             try:
                 result = ensure_result(manager.launch_roblox(
@@ -243,7 +236,6 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
                 ))
                 if result:
                     success += 1
-                    successful_launches.append((u, result))
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_place_all {u}: {'OK' if result else 'FAIL'}")
@@ -264,7 +256,6 @@ def join_place_all(manager, usernames: list[str], place_id: str, private_server_
             len(usernames),
             success,
             failures,
-            successful_launches,
         )
         print(f"[INFO] join_place_all done: {result.message}")
         on_done(bool(result), result)
@@ -419,7 +410,6 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
 
         success = 0
         failures: list[tuple[str, OperationResult]] = []
-        successful_launches: list[tuple[str, OperationResult]] = []
         for index, account in enumerate(usernames):
             try:
                 result = ensure_result(
@@ -436,7 +426,6 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
                 )
                 if result:
                     success += 1
-                    successful_launches.append((account, result))
                 else:
                     failures.append((account, result))
                 print(
@@ -467,7 +456,6 @@ def launch_home(manager, username: str | list[str], on_done: Callable[[bool, str
             len(usernames),
             success,
             failures,
-            successful_launches,
         )
         print(f"[INFO] launch_home done: {result.message}")
         on_done(bool(result), result)
@@ -544,7 +532,6 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
 
             success = 0
             failures: list[tuple[str, OperationResult]] = []
-            successful_launches: list[tuple[str, OperationResult]] = []
             launch_delay = get_launch_delay_seconds(S)
             for index, u in enumerate(usernames):
                 try:
@@ -556,7 +543,6 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
                     ))
                     if result:
                         success += 1
-                        successful_launches.append((u, result))
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_user {u}: {'OK' if result else 'FAIL'}")
@@ -578,7 +564,6 @@ def join_user(manager, usernames: list[str] | str, target_username: str, on_done
                 len(usernames),
                 success,
                 failures,
-                successful_launches,
             )
             print(f"[INFO] join_user done: {result.message}")
             on_done(bool(result), result)
@@ -602,7 +587,6 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
     def _worker():
         success = 0
         failures: list[tuple[str, OperationResult]] = []
-        successful_launches: list[tuple[str, OperationResult]] = []
         for index, u in enumerate(usernames):
             try:
                 result = ensure_result(manager.launch_roblox(
@@ -613,7 +597,6 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
                 ))
                 if result:
                     success += 1
-                    successful_launches.append((u, result))
                 else:
                     failures.append((u, result))
                 print(f"[{'SUCCESS' if result else 'ERROR'}] join_job_id {u}: {'OK' if result else 'FAIL'}")
@@ -634,7 +617,6 @@ def join_job_id(manager, usernames: list[str] | str, place_id: str, job_id: str,
             len(usernames),
             success,
             failures,
-            successful_launches,
         )
         print(f"[INFO] join_job_id done: {result.message}")
         on_done(bool(result), result)
@@ -679,7 +661,6 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
 
             success = 0
             failures: list[tuple[str, OperationResult]] = []
-            successful_launches: list[tuple[str, OperationResult]] = []
             for index, u in enumerate(usernames):
                 try:
                     result = ensure_result(manager.launch_roblox(
@@ -690,7 +671,6 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
                     ))
                     if result:
                         success += 1
-                        successful_launches.append((u, result))
                     else:
                         failures.append((u, result))
                     print(f"[{'SUCCESS' if result else 'ERROR'}] join_small_server {u}: {'OK' if result else 'FAIL'}")
@@ -712,7 +692,6 @@ def join_small_server(manager, usernames: list[str] | str, place_id: str, on_don
                 len(usernames),
                 success,
                 failures,
-                successful_launches,
             )
             print(f"[INFO] join_small_server done: {result.message}")
             on_done(bool(result), result)
