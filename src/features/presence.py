@@ -39,6 +39,16 @@ class RobloxLogEntry:
     browser_tracker_id: str
 
 
+def get_process_tracker(process: psutil.Process) -> str:
+    # launch tracker from the command line, empty if missing or ambiguous
+    try:
+        command_line = " ".join(str(value) for value in process.cmdline())
+    except (OSError, psutil.Error, TypeError):
+        return ""
+    matches = set(_TRACKER_PATTERN.findall(command_line))
+    return next(iter(matches)) if len(matches) == 1 else ""
+
+
 def _get_user_id_from_pid(
     pid: int,
     used_logs: set[str] | None = None,

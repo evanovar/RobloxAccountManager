@@ -235,13 +235,38 @@ def _get_configured_user_ids(manager) -> set[str]:
     return wanted
 
 
+def _launched_processes_for_user(
+    manager,
+    user_id: str,
+) -> set[RobloxProcessIdentity]:
+    # clients we launched carry their tracker id, no log reading needed
+    get_records = getattr(manager, "get_launch_records", None)
+    if get_records is None:
+        return set()
+    try:
+        trackers = {
+            tracker for tracker, (owner, _launched_at) in get_records().items()
+            if str(owner) == user_id
+        }
+    except Exception:
+        return set()
+    if not trackers:
+        return set()
+    return {
+        (pid, created)
+        for pid, (created, process) in _get_roblox_processes(force=True).items()
+        if presence_mod.get_process_tracker(process) in trackers
+    }
+
+
 def find_running_processes_for_user(
     manager,
     user_id: str,
 ) -> set[RobloxProcessIdentity]:
     normalized_user_id = str(user_id)
     wanted = _get_configured_user_ids(manager) | {normalized_user_id}
-    return scan_pid_uid_map(wanted).get(normalized_user_id, set())
+    found = scan_pid_uid_map(wanted).get(normalized_user_id, set())
+    return set(found) | _launched_processes_for_user(manager, normalized_user_id)
 
 
 def find_running_pid_for_user(manager, user_id: str) -> int | None:
@@ -392,7 +417,9 @@ class AutoRejoinWorker:
                 return False
 
             evidence = getattr(ok, 'data', None)
+            tracker = ""
             if isinstance(evidence, dict) and str(evidence.get('expected_user_id', '')) == str(user_id):
+                tracker = str(evidence.get('browser_tracker_id') or "")
                 identity = evidence.get('process_identity')
                 if (isinstance(identity, (tuple, list)) and len(identity) == 2
                         and isinstance(identity[0], int) and not isinstance(identity[0], bool)
@@ -415,11 +442,7 @@ class AutoRejoinWorker:
                     identity = (pid, process_data[0])
                     if identity in identities_before:
                         continue
-                    resolved_user_id = presence_mod._get_user_id_from_pid(
-                        pid,
-                        set(),
-                    )
-                    if str(resolved_user_id or "") == str(user_id):
+                    if self._owns_new_process(identity, process_data[1], user_id, tracker):
                         candidates.add(identity)
 
                 if candidates:
@@ -446,11 +469,8 @@ class AutoRejoinWorker:
             }
             matching_identities: set[RobloxProcessIdentity] = set()
             for identity in identities_after - identities_before:
-                resolved_user_id = presence_mod._get_user_id_from_pid(
-                    identity[0],
-                    set(),
-                )
-                if str(resolved_user_id or "") == str(user_id):
+                process = processes_after.get(identity[0], (None, None))[1]
+                if self._owns_new_process(identity, process, user_id, tracker):
                     matching_identities.add(identity)
 
             for identity in matching_identities:
@@ -472,6 +492,14 @@ class AutoRejoinWorker:
             return False
         finally:
             _LAUNCH_LOCK.release()
+
+    @staticmethod
+    def _owns_new_process(identity, process, user_id: str, tracker: str) -> bool:
+        # tracker match first, logs can be slow or missing with some launchers
+        if tracker and process is not None and presence_mod.get_process_tracker(process) == tracker:
+            return True
+        resolved_user_id = presence_mod._get_user_id_from_pid(identity[0], set())
+        return str(resolved_user_id or "") == str(user_id)
 
     def _is_in_game(
         self,

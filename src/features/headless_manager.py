@@ -21,6 +21,7 @@ SCAN_INTERVAL_MIN = 3.0
 SCAN_INTERVAL_MAX = 60.0
 SCAN_INTERVAL_DEFAULT = 10.0
 SCAN_INTERVAL_SETTING = "headless_scan_interval_seconds"
+AUTO_HIDE_SETTING = "headless_auto_hide_accounts"
 
 
 def get_scan_interval(settings: dict | None = None) -> float:
@@ -34,8 +35,27 @@ def get_scan_interval(settings: dict | None = None) -> float:
     return max(SCAN_INTERVAL_MIN, min(SCAN_INTERVAL_MAX, value))
 
 
-def _get_roblox_pids() -> set[int]:
-    return set(presence_mod.get_roblox_processes())
+def get_auto_hide(settings: dict | None = None) -> set[str]:
+    settings = settings if isinstance(settings, dict) else {}
+    value = settings.get(AUTO_HIDE_SETTING, [])
+    if not isinstance(value, list):
+        return set()
+    return {str(name) for name in value if isinstance(name, str) and name}
+
+
+def set_auto_hide_value(current: set[str], usernames, enabled: bool) -> list[str]:
+    # returns the new saved list, sorted so the file stays stable
+    updated = set(current)
+    for name in usernames:
+        if enabled:
+            updated.add(str(name))
+        else:
+            updated.discard(str(name))
+    return sorted(updated, key=str.lower)
+
+
+def _get_roblox_processes() -> dict:
+    return presence_mod.get_roblox_processes()
 
 
 def _get_roblox_hwnds_for_pid(pid: int, expected_titles: set[str] | None = None) -> list[int]:
@@ -50,10 +70,16 @@ def _get_roblox_hwnds_for_pid(pid: int, expected_titles: set[str] | None = None)
     return hwnds
 
 
-def hide_roblox_window(pid: int, username: str | None = None) -> bool:
+def _window_titles(username: str | None, extra: set[str] | None = None) -> set[str]:
     titles = {"Roblox"}
     if username:
         titles.add(username)
+    titles.update(extra or set())
+    return titles
+
+
+def hide_roblox_window(pid: int, username: str | None = None, extra_titles: set[str] | None = None) -> bool:
+    titles = _window_titles(username, extra_titles)
     hwnds = _get_roblox_hwnds_for_pid(pid, titles)
     for hwnd in hwnds:
         try:
@@ -64,10 +90,8 @@ def hide_roblox_window(pid: int, username: str | None = None) -> bool:
     return bool(hwnds)
 
 
-def show_roblox_window(pid: int, username: str | None = None) -> bool:
-    titles = {"Roblox"}
-    if username:
-        titles.add(username)
+def show_roblox_window(pid: int, username: str | None = None, extra_titles: set[str] | None = None) -> bool:
+    titles = _window_titles(username, extra_titles)
     hwnds = _get_roblox_hwnds_for_pid(pid, titles)
     for hwnd in hwnds:
         try:
@@ -90,8 +114,15 @@ class HeadlessManager:
         self,
         on_update: Callable[[list[dict]], None],
         scan_interval: float = SCAN_INTERVAL_DEFAULT,
+        manager=None,
+        auto_hide: set[str] | None = None,
     ):
         self._on_update = on_update
+        self._manager = manager
+        # lowercase names, matched against the resolved username
+        self._auto_hide: set[str] = {name.lower() for name in (auto_hide or set())}
+        # pids the user showed by hand, auto hide leaves them alone
+        self._shown_overrides: set[int] = set()
         self._scan_interval = max(SCAN_INTERVAL_MIN, scan_interval)
         self._stop_evt = threading.Event()
         self._scan_thread: threading.Thread | None = None
@@ -101,6 +132,7 @@ class HeadlessManager:
         self._uid_cache: dict[int, str] = {}   # pid -> user_id
         self._name_cache: dict[str, str] = {}  # user_id -> username
         self._pid_username: dict[int, str] = {}  # pid -> username, for window title matching
+        self._pid_titles: dict[int, set[str]] = {}  # pid -> extra titles, like the renamer note
         self._last_results: list[dict] = []
 
     def start(self) -> None:
@@ -131,17 +163,31 @@ class HeadlessManager:
     def set_scan_interval(self, seconds: float) -> None:
         self._scan_interval = max(SCAN_INTERVAL_MIN, min(SCAN_INTERVAL_MAX, float(seconds)))
 
+    def set_auto_hide(self, usernames) -> None:
+        with self._lock:
+            self._auto_hide = {str(name).lower() for name in usernames}
+
+    def is_auto_hide(self, username: str | None) -> bool:
+        with self._lock:
+            return bool(username) and username.lower() in self._auto_hide
+
+    def rescan_now(self) -> None:
+        threading.Thread(target=self._do_scan, daemon=True, name="HeadlessRescan").start()
+
     def set_hidden(self, pid: int, hidden: bool) -> None:
         with self._lock:
             if hidden:
                 self._hidden_pids.add(pid)
+                self._shown_overrides.discard(pid)
             else:
                 self._hidden_pids.discard(pid)
+                self._shown_overrides.add(pid)
             username = self._pid_username.get(pid)
+            extra = set(self._pid_titles.get(pid, set()))
         if hidden:
-            hide_roblox_window(pid, username)
+            hide_roblox_window(pid, username, extra)
         else:
-            show_roblox_window(pid, username)
+            show_roblox_window(pid, username, extra)
 
     def is_hidden(self, pid: int) -> bool:
         with self._lock:
@@ -166,27 +212,27 @@ class HeadlessManager:
         with self._lock:
             self._hidden_pids.add(pid)
             username = self._pid_username.get(pid)
-        hide_roblox_window(pid, username)
+            extra = set(self._pid_titles.get(pid, set()))
+        hide_roblox_window(pid, username, extra)
 
     def restore_all(self) -> None:
         with self._lock:
             pids = list(self._hidden_pids)
             usernames = dict(self._pid_username)
+            extras = {pid: set(titles) for pid, titles in self._pid_titles.items()}
             self._hidden_pids.clear()
         for pid in pids:
-            show_roblox_window(pid, usernames.get(pid))
+            show_roblox_window(pid, usernames.get(pid), extras.get(pid))
 
     def _enforce_loop(self) -> None:
         while not self._stop_evt.is_set():
             with self._lock:
                 pids = list(self._hidden_pids)
                 usernames = dict(self._pid_username)
+                extras = {pid: set(titles) for pid, titles in self._pid_titles.items()}
             windows = presence_mod.get_windows_by_pid(set(pids))
             for pid in pids:
-                titles = {"Roblox"}
-                username = usernames.get(pid)
-                if username:
-                    titles.add(username)
+                titles = _window_titles(usernames.get(pid), extras.get(pid))
                 for hwnd in windows.get(pid, []):
                     try:
                         if win32gui.GetWindowText(hwnd) not in titles:
@@ -210,44 +256,89 @@ class HeadlessManager:
             if self._stop_evt.wait(self._scan_interval):
                 break
 
+    def _launch_records(self) -> dict:
+        get_records = getattr(self._manager, "get_launch_records", None)
+        if get_records is None:
+            return {}
+        try:
+            return get_records()
+        except Exception:
+            return {}
+
+    def _saved_account(self, user_id: str) -> tuple[str | None, str]:
+        accounts = getattr(self._manager, "accounts", None)
+        if not isinstance(accounts, dict):
+            return None, ""
+        for name, data in list(accounts.items()):
+            if isinstance(data, dict) and str(data.get("user_id", "")) == user_id:
+                return name, str(data.get("note", "") or "").strip()
+        return None, ""
+
+    def _resolve_user_id(self, pid: int, process, records: dict, used_logs: set[str]) -> str | None:
+        # our own launches first, then the roblox logs
+        tracker = presence_mod.get_process_tracker(process) if process is not None else ""
+        record = records.get(tracker) if tracker else None
+        if record:
+            return str(record[0])
+        return presence_mod._get_user_id_from_pid(pid, used_logs)
+
     def _do_scan(self) -> None:
         try:
-            pids = _get_roblox_pids()
+            processes = _get_roblox_processes()
+            pids = set(processes)
             with self._lock:
                 self._hidden_pids &= pids
+                self._shown_overrides &= pids
             self._uid_cache = {p: u for p, u in self._uid_cache.items() if p in pids}
 
+            records = self._launch_records()
             used_logs: set[str] = set()
             results: list[dict] = []
             for pid in sorted(pids):
                 user_id = self._uid_cache.get(pid)
                 if user_id is None:
-                    user_id = presence_mod._get_user_id_from_pid(pid, used_logs)
+                    user_id = self._resolve_user_id(pid, processes[pid][1], records, used_logs)
                     if user_id:
-                        self._uid_cache[pid] = user_id
+                        self._uid_cache[pid] = str(user_id)
                 if not user_id:
                     continue
+                user_id = str(user_id)
 
-                username = self._name_cache.get(user_id)
+                saved_name, note = self._saved_account(user_id)
+                username = self._name_cache.get(user_id) or saved_name
                 if not username:
                     username = RobloxAPI.get_username_from_user_id(user_id)
-                    if username:
-                        self._name_cache[user_id] = username
-                if not username:
+                if username:
+                    self._name_cache[user_id] = username
+                else:
                     continue
 
                 with self._lock:
                     self._pid_username[pid] = username
+                    # renamer may title the window with the note instead
+                    self._pid_titles[pid] = {note} if note else set()
+                    auto = (
+                        username.lower() in self._auto_hide
+                        and pid not in self._hidden_pids
+                        and pid not in self._shown_overrides
+                    )
+                    if auto:
+                        self._hidden_pids.add(pid)
+                if auto:
+                    print(f"[INFO] Headless Manager auto-hid {username} (PID {pid}).")
+                    hide_roblox_window(pid, username, {note} if note else None)
 
                 results.append({
                     "pid": pid,
                     "user_id": user_id,
                     "username": username,
                     "hidden": self.is_hidden(pid),
+                    "auto_hide": self.is_auto_hide(username),
                 })
 
             with self._lock:
                 self._pid_username = {p: u for p, u in self._pid_username.items() if p in pids}
+                self._pid_titles = {p: t for p, t in self._pid_titles.items() if p in pids}
 
             if results != self._last_results:
                 self._last_results = [dict(row) for row in results]

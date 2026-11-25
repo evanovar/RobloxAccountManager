@@ -2,7 +2,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import qInstallMessageHandler
+from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from utils import ui
 
@@ -83,3 +84,16 @@ class AutoRejoinEditorTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(window._add_btn.isVisible())
         self.assertTrue(window.rect().contains(window._add_btn.geometry().bottomRight()))
+
+    def test_opening_the_editor_has_no_stylesheet_warnings(self):
+        messages = []
+        previous = qInstallMessageHandler(lambda _mode, _context, message: messages.append(message))
+        try:
+            window = self.window()
+            window._join_mode.setCurrentIndex(1)
+            self.app.processEvents()
+        finally:
+            qInstallMessageHandler(previous)
+        self.assertEqual([m for m in messages if "stylesheet" in m], [])
+        for label in window.findChildren(QLabel):
+            self.assertNotIn("@RAM_", label.styleSheet(), label.text())

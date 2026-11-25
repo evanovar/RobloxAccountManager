@@ -4374,9 +4374,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
     def _start_headless_manager(self) -> None:
         if self._headless_manager is not None:
             return
+        settings = actions.load_ui_settings()
         self._headless_manager = headless_manager_mod.HeadlessManager(
             on_update=lambda rows: self._bridge.headless_update.emit(rows),
-            scan_interval=headless_manager_mod.get_scan_interval(actions.load_ui_settings()),
+            scan_interval=headless_manager_mod.get_scan_interval(settings),
+            manager=getattr(self, "manager", None),
+            auto_hide=headless_manager_mod.get_auto_hide(settings),
         )
         self._headless_manager.start()
         print("[INFO] Headless Manager started.")
@@ -4390,6 +4393,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         if hasattr(self, "_headless_list"):
             self._refresh_headless_list([])
         print("[INFO] Headless Manager stopped, Roblox windows restored.")
+
+    def _set_headless_auto_hide(self, usernames: list[str], enabled: bool) -> None:
+        current = headless_manager_mod.get_auto_hide(actions.load_ui_settings())
+        updated = headless_manager_mod.set_auto_hide_value(current, usernames, enabled)
+        actions.save_ui_setting(headless_manager_mod.AUTO_HIDE_SETTING, updated)
+        names = ", ".join(usernames)
+        print(f"[INFO] Auto Hide {'on' if enabled else 'off'} for {names}.")
+        if self._headless_manager is not None:
+            self._headless_manager.set_auto_hide(updated)
+            if enabled:
+                self._headless_manager.rescan_now()
+            if hasattr(self, "_headless_list"):
+                self._refresh_headless_list(self._headless_latest_rows)
+        elif enabled:
+            QMessageBox.information(
+                self,
+                "Headless Manager Is Off",
+                "Auto Hide is saved, but it only works while the Headless Manager is on.\n\n"
+                "Turn it on under Settings > Roblox.",
+            )
 
     def _headless_selected_pid(self) -> int | None:
         item = self._headless_list.currentItem() if self._headless_list else None
@@ -4466,6 +4489,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             row_lay.addWidget(sep)
 
             status_str = "hidden" if hidden else "shown"
+            if self._headless_is_auto(username):
+                status_str += ", auto"
             status_color = self._HM_HIDDEN_COLOR if hidden else self._HM_SHOWN_COLOR
             status_lbl = QLabel(status_str)
             status_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -4515,11 +4540,16 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         except Exception:
             pass
 
+    def _headless_is_auto(self, username: str | None) -> bool:
+        manager = self._headless_manager
+        return bool(manager is not None and manager.is_auto_hide(username))
+
     def _headless_set_status_label(self, pid: int, hidden: bool) -> None:
         lbl = self._headless_status_labels.get(pid)
         if lbl is None:
             return
-        lbl.setText("hidden" if hidden else "shown")
+        username = self._headless_manager.get_pid_username(pid) if self._headless_manager else None
+        lbl.setText(("hidden" if hidden else "shown") + (", auto" if self._headless_is_auto(username) else ""))
         color = self._HM_HIDDEN_COLOR if hidden else self._HM_SHOWN_COLOR
         theme_runtime.bind_style(lbl, f'color: {color}; font-size: 10px;')
 
@@ -4538,12 +4568,26 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         any_shown = any(not self._headless_manager.is_hidden(p) for p in pids)
         any_hidden = any(self._headless_manager.is_hidden(p) for p in pids)
 
+        usernames = sorted({
+            name for name in (self._headless_manager.get_pid_username(p) for p in pids) if name
+        })
+        auto_on = bool(usernames) and all(self._headless_is_auto(name) for name in usernames)
+
         menu = QMenu(self)
         act_hide = menu.addAction("Hide") if any_shown else None
         act_show = menu.addAction("Show") if any_hidden else None
+        act_auto = None
+        if usernames:
+            menu.addSeparator()
+            act_auto = menu.addAction("Auto Hide")
+            act_auto.setCheckable(True)
+            act_auto.setChecked(auto_on)
+            act_auto.setToolTip("Hide this account's Roblox window every time it opens")
 
         chosen = menu.exec(self._headless_list.mapToGlobal(pos))
-        if act_hide and chosen == act_hide:
+        if act_auto and chosen == act_auto:
+            self._set_headless_auto_hide(usernames, not auto_on)
+        elif act_hide and chosen == act_hide:
             for p in pids:
                 self._headless_manager.set_hidden(p, True)
                 self._headless_set_status_label(p, True)
@@ -7343,6 +7387,12 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         act_join = menu.addAction("Join Place ID")
         act_note = menu.addAction("Edit Note")
         act_check = menu.addAction("Check Cookies" if is_multi else "Check Cookie")
+        auto_targets = multi_sel if is_multi else [username]
+        auto_saved = headless_manager_mod.get_auto_hide(S)
+        auto_on = all(name in auto_saved for name in auto_targets)
+        act_auto_hide = menu.addAction("Auto Hide Window")
+        act_auto_hide.setCheckable(True)
+        act_auto_hide.setChecked(auto_on)
         menu.addSeparator()
 
         # Copy Contents submenu
@@ -7393,6 +7443,8 @@ class AccountManagerUIQt(QMainWindow): # Main Window
             self._on_edit_note()
         elif chosen == act_check:
             self._on_check_cookies(multi_sel if is_multi else [username])
+        elif chosen == act_auto_hide:
+            self._set_headless_auto_hide(auto_targets, not auto_on)
         elif chosen == act_remove:
             self._on_remove_account()
         elif chosen in (act_copy_user, act_copy_pass, act_copy_up, act_copy_cookie):
@@ -8357,6 +8409,13 @@ class _AutoRejoinAddWindow(QDialog):
         right.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         _LBL = f'color: {theme_styles.MUTED}; font-size: 11px;'
+
+        def _muted_label(text: str) -> QLabel:
+            # needs bind_style so the theme tokens get filled in
+            label = QLabel(text)
+            theme_runtime.bind_style(label, _LBL)
+            return label
+
         _INP = (
             f'QLineEdit {{ background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE}; color: {theme_styles.TEXT}; padding: 4px 6px; min-height: 24px; font-size: 11px; }}'
         )
@@ -8390,7 +8449,7 @@ class _AutoRejoinAddWindow(QDialog):
         place_fields = QVBoxLayout(self._place_fields)
         place_fields.setContentsMargins(0, 0, 0, 0)
         place_fields.setSpacing(6)
-        place_label = QLabel("Place ID", styleSheet=_LBL)
+        place_label = _muted_label("Place ID")
         place_fields.addWidget(place_label)
         self._place = QLineEdit()
         self._place.setPlaceholderText("e.g. 8562822414")
@@ -8398,7 +8457,7 @@ class _AutoRejoinAddWindow(QDialog):
         place_label.setBuddy(self._place)
         place_fields.addWidget(self._place)
 
-        private_label = QLabel("Private server link or code (optional)", styleSheet=_LBL)
+        private_label = _muted_label("Private server link or code (optional)")
         place_fields.addWidget(private_label)
         self._ps = QLineEdit()
         self._ps.setPlaceholderText("optional")
@@ -8406,7 +8465,7 @@ class _AutoRejoinAddWindow(QDialog):
         private_label.setBuddy(self._ps)
         place_fields.addWidget(self._ps)
 
-        job_label = QLabel("Job ID (optional)", styleSheet=_LBL)
+        job_label = _muted_label("Job ID (optional)")
         place_fields.addWidget(job_label)
         self._job = QLineEdit()
         self._job.setPlaceholderText("optional")
@@ -8419,7 +8478,7 @@ class _AutoRejoinAddWindow(QDialog):
         user_fields = QVBoxLayout(self._user_fields)
         user_fields.setContentsMargins(0, 0, 0, 0)
         user_fields.setSpacing(6)
-        user_label = QLabel("Roblox username or user ID", styleSheet=_LBL)
+        user_label = _muted_label("Roblox username or user ID")
         user_fields.addWidget(user_label)
         self._target_user = QLineEdit()
         self._target_user.setMaxLength(20)
@@ -8440,7 +8499,7 @@ class _AutoRejoinAddWindow(QDialog):
         row1 = QHBoxLayout()
         row1.setSpacing(12)
         interval_column = QVBoxLayout()
-        interval_label = QLabel("Check every", styleSheet=_LBL)
+        interval_label = _muted_label("Check every")
         interval_column.addWidget(interval_label)
         self._interval = QSpinBox()
         self._interval.setRange(5, 300)
@@ -8454,7 +8513,7 @@ class _AutoRejoinAddWindow(QDialog):
         row1.addLayout(interval_column, 1)
 
         retries_column = QVBoxLayout()
-        retries_label = QLabel("Maximum retries", styleSheet=_LBL)
+        retries_label = _muted_label("Maximum retries")
         retries_column.addWidget(retries_label)
         self._retries = QSpinBox()
         self._retries.setRange(1, 50)

@@ -117,6 +117,67 @@ class AutoRejoinTests(unittest.TestCase):
                 self.assertIsNone(worker._process_identity)
                 self.assertEqual(worker._owned_processes, set())
 
+    def _tracker_process(self, tracker):
+        return Mock(cmdline=Mock(return_value=[
+            "RobloxPlayerBeta.exe", f"roblox-player:1+launchmode:play+browsertrackerid:{tracker}+robloxLocale:en_us",
+        ]))
+
+    def test_launch_tracking_matches_the_launch_tracker_when_logs_have_no_user(self):
+        result = OperationResult.success(data={'expected_user_id': '333', 'browser_tracker_id': '777'})
+        worker = auto_rejoin.AutoRejoinWorker(
+            'test', {}, SimpleNamespace(launch_roblox=Mock(return_value=result)), Mock(),
+        )
+        worker._stop.wait = lambda _: False
+        before = {101: (10.0, self._tracker_process('555'))}
+        after = {**before, 303: (30.0, self._tracker_process('777'))}
+        with patch.object(auto_rejoin, '_get_roblox_processes', side_effect=[before, after]), \
+                patch.object(auto_rejoin.presence_mod, '_get_user_id_from_pid', return_value=None), \
+                patch.object(auto_rejoin.settings_store, 'load', return_value={}), \
+                patch.object(auto_rejoin.time, 'monotonic', side_effect=[0.0, 1.0]):
+            self.assertTrue(worker._launch_and_track('333', '123', '', ''))
+        self.assertEqual(worker._process_identity, (303, 30.0))
+
+    def test_launch_tracking_ignores_other_trackers_without_log_evidence(self):
+        result = OperationResult.success(data={'expected_user_id': '333', 'browser_tracker_id': '777'})
+        worker = auto_rejoin.AutoRejoinWorker(
+            'test', {}, SimpleNamespace(launch_roblox=Mock(return_value=result)), Mock(),
+        )
+        worker._stop.wait = lambda _: False
+        after = {303: (30.0, self._tracker_process('888'))}
+        with patch.object(auto_rejoin, '_get_roblox_processes', side_effect=[{}, after, after]), \
+                patch.object(auto_rejoin.presence_mod, '_get_user_id_from_pid', return_value=None), \
+                patch.object(auto_rejoin.settings_store, 'load', return_value={}), \
+                patch.object(auto_rejoin.time, 'monotonic', side_effect=[0.0, 1.0, 99.0]), \
+                patch.object(auto_rejoin, '_terminate_process') as terminate:
+            self.assertFalse(worker._launch_and_track('333', '123', '', ''))
+        terminate.assert_not_called()
+        self.assertIsNone(worker._process_identity)
+
+    def test_running_client_from_our_launch_is_found_without_logs(self):
+        manager = SimpleNamespace(
+            accounts={},
+            get_launch_records=Mock(return_value={'777': ('333', 1.0), '888': ('444', 2.0)}),
+        )
+        processes = {
+            303: (30.0, self._tracker_process('777')),
+            404: (40.0, self._tracker_process('888')),
+            505: (50.0, Mock(cmdline=Mock(side_effect=auto_rejoin.psutil.AccessDenied(505)))),
+        }
+        with patch.object(auto_rejoin, '_get_roblox_processes', return_value=processes), \
+                patch.object(auto_rejoin.presence_mod, '_get_user_id_from_pid', return_value=None), \
+                patch.object(auto_rejoin, 'load_configs', return_value={}):
+            found = auto_rejoin.find_running_processes_for_user(manager, '333')
+        self.assertEqual(found, {(303, 30.0)})
+
+    def test_process_tracker_needs_one_unambiguous_value(self):
+        get = auto_rejoin.presence_mod.get_process_tracker
+        self.assertEqual(get(self._tracker_process('777')), '777')
+        self.assertEqual(get(Mock(cmdline=Mock(return_value=['RobloxPlayerBeta.exe']))), '')
+        both = Mock(cmdline=Mock(return_value=['browsertrackerid:1', 'browserTrackerId=2']))
+        self.assertEqual(get(both), '')
+        denied = Mock(cmdline=Mock(side_effect=auto_rejoin.psutil.AccessDenied(1)))
+        self.assertEqual(get(denied), '')
+
     def test_stop_cancels_a_queued_launch_without_waiting_for_the_other_account(self):
         gate = threading.Lock()
         waiting = threading.Event()
