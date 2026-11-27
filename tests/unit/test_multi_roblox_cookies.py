@@ -169,13 +169,32 @@ class SharedCookieProtectionTests(unittest.TestCase):
         self.assertIsNone(actions._mr_handle)
         self.thread.assert_not_called()
 
-    def test_handle64_rejects_running_clients_before_protection_or_monitoring(self):
-        with patch.object(actions, "_lock_roblox_storage_file") as protect:
-            self.assertEqual(self.start_handle64(running=True), (False, "ROBLOX_RUNNING"))
-        protect.assert_not_called()
-        self.assertIsNone(actions._mr_handle)
-        self.thread.assert_not_called()
-        self.release_trusted.assert_called()
+    def test_handle64_starts_while_roblox_is_open_and_protects_free_stores(self):
+        self.assertEqual(self.start_handle64(running=True), (True, ""))
+        self.assertTrue(actions._mr_handle["cookie_lock"]["acquired"])
+        self.assertTrue(actions._mr_handle["app_storage_lock"]["acquired"])
+        self.thread.return_value.start.assert_called_once()
+        actions.disable_multi_roblox()
+
+    def test_handle64_protects_a_store_once_the_open_client_lets_go(self):
+        # an open client still holds appStorage.json when multi roblox starts
+        busy = actions._lock_roblox_storage_file("appStorage.json")
+        self.assertEqual(self.start_handle64(running=True), (True, ""))
+        state = actions._mr_handle
+        self.assertTrue(state["cookie_lock"]["acquired"])
+        self.assertIsNone(state["app_storage_lock"])
+        self.assertEqual(actions._try_storage_locks(state), ["appStorage.json"])
+        busy["file"].close()
+        self.assertEqual(actions._try_storage_locks(state), [])
+        app_storage_lock = state["app_storage_lock"]
+        self.assertTrue(app_storage_lock["acquired"])
+        actions.disable_multi_roblox()
+        self.assertTrue(app_storage_lock["file"].closed)
+        self.assertEqual(actions._try_storage_locks(state), [])
+        self.assertTrue(app_storage_lock["file"].closed)
+        for path in (self.path, self.app_storage_path):
+            with open(path, "wb") as handle:
+                handle.write(b"available again")
 
     def test_handle64_releases_first_guard_when_app_storage_cannot_be_protected(self):
         busy = actions._lock_roblox_storage_file("appStorage.json")

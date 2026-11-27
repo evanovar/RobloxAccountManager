@@ -1611,6 +1611,12 @@ def _mr_h64_monitor_worker(
 
     while _mr_h64_session_active(stop_event, session_id):
         try:
+            state = _mr_handle
+            if isinstance(state, dict) and state.get("session_id") == session_id and (
+                not state.get("cookie_lock") or not state.get("app_storage_lock")
+            ):
+                if not _try_storage_locks(state):
+                    print("[Multi Roblox] Shared Roblox login data is now protected.")
             process_snapshot = presence_mod.get_roblox_processes(force=True)
             current = {
                 (pid, process_data[0])
@@ -1974,6 +1980,30 @@ def _lock_roblox_storage_file(filename: str) -> dict:
     return {"file": cookie_file, "acquired": True, "offset": 0, "length": lock_length}
 
 
+_STORAGE_LOCKS = (("cookie_lock", "RobloxCookies.dat"), ("app_storage_lock", "appStorage.json"))
+_mr_storage_lock_guard = threading.Lock()
+
+
+def _try_storage_locks(state: dict) -> list[str]:
+    # lock whatever is free, returns the files still held by an open client
+    missing = []
+    with _mr_storage_lock_guard:
+        # multi roblox was turned off, never lock after cleanup
+        if state.get("released"):
+            return []
+        for key, filename in _STORAGE_LOCKS:
+            if state.get(key):
+                continue
+            try:
+                state[key] = _lock_roblox_storage_file(filename)
+            except OSError:
+                missing.append(filename)
+                continue
+            if key == "cookie_lock":
+                state["file"] = state[key]["file"]
+    return missing
+
+
 def enable_multi_roblox(method: str = "default") -> tuple[bool, str]:
     # Startup changes the native context used by every launch entry point.
     # Do not block the UI while an existing launch is being confirmed.
@@ -2013,21 +2043,18 @@ def _enable_multi_roblox(method: str) -> tuple[bool, str]:
             print(f"[Multi Roblox] {h64} is not signed by Microsoft, so it will not be run with administrator rights.")
             return False, "HANDLE64_UNVERIFIED"
 
-        if is_roblox_running():
-            print("[Multi Roblox] Close Roblox before protecting shared account context.")
-            handle64_trust.release_trusted_copies()
-            return False, "ROBLOX_RUNNING"
-
-        cookie_lock = None
-        try:
-            cookie_lock = _lock_roblox_storage_file("RobloxCookies.dat")
-            app_storage_lock = _lock_roblox_storage_file("appStorage.json")
-        except OSError as exc:
-            if cookie_lock:
-                cookie_lock["file"].close()
-            print(f"[Multi Roblox] Could not protect the shared login data: {exc}")
+        storage_state: dict = {}
+        missing = _try_storage_locks(storage_state)
+        if missing and not is_roblox_running():
+            _release_multi_roblox_resources(storage_state)
+            print(f"[Multi Roblox] Could not protect the shared login data: {', '.join(missing)}")
             handle64_trust.release_trusted_copies()
             return False, "ROBLOX_COOKIES_LOCK_FAILED"
+        if missing:
+            print(
+                f"[Multi Roblox] Roblox is open and using {', '.join(missing)}. "
+                "It will be protected as soon as it is free."
+            )
 
         _mr_h64_path = h64
         _mr_h64_session_id += 1
@@ -2042,9 +2069,9 @@ def _enable_multi_roblox(method: str) -> tuple[bool, str]:
         _mr_handle = {
             "mode": "handle64",
             "mutex": None,
-            "file": cookie_lock["file"],
-            "cookie_lock": cookie_lock,
-            "app_storage_lock": app_storage_lock,
+            "file": storage_state.get("file"),
+            "cookie_lock": storage_state.get("cookie_lock"),
+            "app_storage_lock": storage_state.get("app_storage_lock"),
             "session_id": session_id,
         }
         _mr_h64_thread.start()
@@ -2270,6 +2297,8 @@ def disable_multi_roblox():
 
 
 def _release_multi_roblox_resources(state: dict) -> None:
+    with _mr_storage_lock_guard:
+        state["released"] = True
     for lock_name, fallback_file in (("cookie_lock", state.get("file")), ("app_storage_lock", None)):
         storage_lock = state.get(lock_name) or {}
         f = storage_lock.get("file") or fallback_file
