@@ -178,3 +178,71 @@ def start_load(query, session_id, page_token, on_done, on_thumbnail) -> threadin
 
     threading.Thread(target=work, name="game-search", daemon=True).start()
     return cancel
+
+
+UNIVERSE_URL = "https://apis.roblox.com/universes/v1/places/{place_id}/universe"
+GAMES_URL = "https://games.roblox.com/v1/games"
+
+
+def _universe_for_place(place_id: str) -> str:
+    try:
+        return _id(_get_json(UNIVERSE_URL.format(place_id=place_id), {}).get("universeId"))
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        return ""
+
+
+def _game_names(universe_ids: list[str]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for start in range(0, len(universe_ids), 50):
+        batch = universe_ids[start:start + 50]
+        try:
+            payload = _get_json(GAMES_URL, {"universeIds": ",".join(batch)})
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            continue
+        for entry in payload.get("data", []) if isinstance(payload.get("data"), list) else []:
+            universe_id = _id(entry.get("id"))
+            name = entry.get("name")
+            if universe_id and isinstance(name, str) and name.strip():
+                names[universe_id] = name.strip()
+    return names
+
+
+def resolve_favorites(favorites: list[dict]) -> list[Game]:
+    # turns saved favorites into games, looking up anything roblox has not told us yet
+    universes = {}
+    for entry in favorites:
+        place_id = _id(entry.get("place_id"))
+        if not place_id:
+            continue
+        universe_id = _id(entry.get("universe_id", "")) or universes.get(place_id) or _universe_for_place(place_id)
+        universes[place_id] = universe_id
+    names = _game_names(sorted({u for u in universes.values() if u}))
+    games = []
+    for entry in favorites:
+        place_id = _id(entry.get("place_id"))
+        if not place_id:
+            continue
+        universe_id = universes.get(place_id, "")
+        saved_name = str(entry.get("name") or "")
+        title = names.get(universe_id) or (saved_name if saved_name != place_id else "") or f"Place {place_id}"
+        # games without a universe still need a unique key for their thumbnail slot
+        games.append(Game(universe_id or f"place:{place_id}", place_id, title))
+    with_icons = {
+        game.universe_id: game
+        for game in _with_icons([g for g in games if not g.universe_id.startswith("place:")])
+    }
+    return [with_icons.get(game.universe_id, game) for game in games]
+
+
+def start_favorites(favorites, on_done, on_thumbnail) -> threading.Event:
+    cancel = threading.Event()
+
+    def work():
+        games = resolve_favorites(favorites)
+        if cancel.is_set():
+            return
+        on_done(games)
+        _start_thumbnails([g for g in games if g.thumbnail_url], on_thumbnail, cancel)
+
+    threading.Thread(target=work, name="favorite-games", daemon=True).start()
+    return cancel

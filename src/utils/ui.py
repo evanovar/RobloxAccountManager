@@ -297,18 +297,6 @@ class _DragDropFilter(QObject):
         self.abort()
 
 
-class _ComboRightClickFilter(QObject):
-    # Right-clicking a QComboBox popup normally closes it before a context
-    # menu can show. Consuming the press here keeps the popup open underneath.
-    right_clicked = Signal(QPoint)
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
-            self.right_clicked.emit(event.pos())
-            return True
-        return False
-
-
 class _ActionComboBox(QComboBox):
     action_requested = Signal()
 
@@ -359,7 +347,6 @@ class _Bridge(QObject):
     update_done = Signal(bool, str) # (success, error_msg) from auto download worker
     join_place_resolved = Signal(object) # dict payload from Place ID resolution worker
     recent_game_saved = Signal() # a recent-game entry was written and needs a list refresh
-    favorite_place_resolved = Signal(object) # dict payload from Save Current Game resolution
     headless_update = Signal(object) # list[dict] of running Roblox processes from Headless Manager scan
     headless_avatar_ready = Signal(int, object) # (pid, image_bytes) from Headless Manager avatar worker
     roblox_settings_loaded = Signal(object) # OperationResult from Roblox settings load
@@ -1039,7 +1026,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         self._bridge.update_check_finished.connect(self._on_update_check_finished)
         self._bridge.join_place_resolved.connect(self._on_join_place_resolved)
         self._bridge.recent_game_saved.connect(self._refresh_recent_games)
-        self._bridge.favorite_place_resolved.connect(self._on_favorite_place_resolved)
         self._bridge.headless_update.connect(self._on_headless_update)
         self._bridge.headless_avatar_ready.connect(self._on_headless_avatar_ready)
         self._bridge.roblox_settings_loaded.connect(self._on_roblox_settings_loaded)
@@ -6108,15 +6094,10 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         _arrow_path = theme_styles.ARROW
         theme_runtime.bind_style(self._place_id_edit, f"""
             QComboBox {{ background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE}; color: {theme_styles.TEXT}; padding: 4px 6px; min-height: 24px; }}
-            QComboBox::drop-down {{ border: 0; width: 20px; }}
-            QComboBox::down-arrow {{ image: url({_arrow_path}); width: 10px; height: 10px; }}
+            QComboBox::drop-down {{ border: 0; width: 0; }}
+            QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
             """)
         self._place_id_edit.currentTextChanged.connect(self._on_place_id_changed)
-        self._place_id_edit.activated.connect(self._on_favorite_selected)
-        self._favorite_ctx_filter = _ComboRightClickFilter(self)
-        self._favorite_ctx_filter.right_clicked.connect(self._on_favorite_context_menu)
-        self._place_id_edit.view().viewport().installEventFilter(self._favorite_ctx_filter)
-        self._refresh_favorites_dropdown()
         lay.addWidget(self._place_id_edit)
 
         # Private server
@@ -6144,8 +6125,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         join_menu.addAction("Join User", self._on_join_user)
         join_menu.addAction("Job ID", self._on_join_job_id)
         join_menu.addAction("Small Server", self._on_join_small_server)
-        join_menu.addSeparator()
-        join_menu.addAction("Save Current Game", self._on_save_current_game)
         lay.addWidget(join_btn)
 
         recent_header = QHBoxLayout()
@@ -6663,8 +6642,9 @@ class AccountManagerUIQt(QMainWindow): # Main Window
         dialog = _GamesSelectorDialog(self)
         try:
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_place_id:
+                private_server = getattr(dialog, "selected_private_server", "")
                 self._place_id_edit.setCurrentText(dialog.selected_place_id)
-                self._private_server_edit.setCurrentText("")
+                self._private_server_edit.setCurrentText(private_server if isinstance(private_server, str) else "")
         finally:
             dialog.deleteLater()
 
@@ -6778,90 +6758,6 @@ class AccountManagerUIQt(QMainWindow): # Main Window
                 self._bridge.game_name_ready.emit("")
 
         threading.Thread(target=_resolve_worker, daemon=True, name="resolve-current-place").start()
-
-    def _refresh_favorites_dropdown(self):
-        current = self._place_id_edit.currentText()
-        self._place_id_edit.blockSignals(True)
-        self._place_id_edit.clear()
-        for fav in favorites_mod.load_favorites():
-            place_id = str(fav.get("place_id", ""))
-            name = fav.get("name") or place_id
-            private_server = fav.get("private_server", "")
-            self._place_id_edit.addItem(name, (place_id, private_server))
-        self._place_id_edit.setCurrentText(current)
-        self._place_id_edit.blockSignals(False)
-
-    def _on_favorite_selected(self, index: int):
-        data = self._place_id_edit.itemData(index)
-        if not data:
-            return
-        place_id, private_server = data
-        self._place_id_edit.setCurrentText(str(place_id))
-        self._private_server_edit.setCurrentText(private_server or "")
-
-    def _on_favorite_context_menu(self, pos):
-        view = self._place_id_edit.view()
-        index = view.indexAt(pos)
-        if not index.isValid():
-            return
-        data = self._place_id_edit.itemData(index.row())
-        if not data:
-            return
-        place_id, private_server = data
-
-        menu = QMenu(self)
-        act_remove = menu.addAction("Remove")
-        chosen = menu.exec(view.viewport().mapToGlobal(pos))
-        if chosen == act_remove:
-            favorites_mod.remove_favorite(place_id, private_server)
-            self._refresh_favorites_dropdown()
-            self._place_id_edit.hidePopup()
-
-    def _on_save_current_game(self):
-        place_id = self._place_id_edit.currentText().strip()
-        private = self._private_server_edit.currentText().strip()
-
-        if not place_id and not private:
-            _show_error(self, "Missing Place ID", "Enter a Place ID or a Private Server Link first.")
-            return
-
-        if place_id:
-            self._prompt_save_favorite(place_id, private)
-            return
-
-        usernames = self._get_selected_usernames()
-        cookie = self.manager.accounts.get(usernames[0], {}).get("cookie", "") if usernames else ""
-
-        def _resolve_worker():
-            resolved_pid, _ = RobloxAPI.resolve_share_url(private, cookie=cookie)
-            self._bridge.favorite_place_resolved.emit({
-                "private": private,
-                "effective_place_id": str(resolved_pid) if resolved_pid else "",
-            })
-
-        threading.Thread(target=_resolve_worker, daemon=True, name="resolve-save-favorite").start()
-
-    def _on_favorite_place_resolved(self, payload: dict):
-        effective_place_id = payload.get("effective_place_id", "")
-        if not effective_place_id:
-            _show_error(
-                self, "Invalid Private Server",
-                "Could not resolve a Place ID from the Private Server Link.",
-            )
-            return
-        self._prompt_save_favorite(effective_place_id, payload["private"])
-
-    def _prompt_save_favorite(self, place_id: str, private: str):
-        default_name = self._game_name_label.text().replace("Current: ", "").strip() or place_id
-        name, ok = QInputDialog.getText(
-            self, "Save Current Game", "Name for this favorite:", text=default_name,
-        )
-        if not ok or not name.strip():
-            return
-
-        favorites_mod.add_favorite(place_id, name.strip(), private)
-        self._refresh_favorites_dropdown()
-        print(f"[SUCCESS] Saved favorite: {name.strip()} (Place {place_id})")
 
     def _on_add_account_browser(self):
         actions.add_account_browser(
@@ -7630,15 +7526,21 @@ class AccountManagerUIQt(QMainWindow): # Main Window
 class _GamesSelectorBridge(QObject):
     loaded = Signal(int, object)
     thumbnail = Signal(int, str, object)
+    favorites_loaded = Signal(int, object)
+    favorite_thumbnail = Signal(int, str, object)
+
+
+# item data role for a favorite's private server link
+_PRIVATE_SERVER_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class _GameItemDelegate(QStyledItemDelegate):
-
-
-    def __init__(self, dialog):
-        super().__init__(dialog.games)
+    def __init__(self, dialog, view=None, images_attr="_images"):
+        view = view if view is not None else dialog.games
+        super().__init__(view)
         self._dialog = dialog
-        theme_runtime.bind_paint(dialog.games.viewport())
+        self._images_attr = images_attr
+        theme_runtime.bind_paint(view.viewport())
 
     def paint(self, painter, option, index):
         background = QStyleOptionViewItem(option)
@@ -7647,6 +7549,7 @@ class _GameItemDelegate(QStyledItemDelegate):
         background.icon = QIcon()
         option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, background, painter, option.widget)
         game = index.data(Qt.ItemDataRole.UserRole)
+        private_server = index.data(_PRIVATE_SERVER_ROLE)
         is_list = self._dialog.list_view.isChecked()
         image_rect = option.rect.adjusted(8, 8, -8, -8)
         image_rect.setWidth(72 if is_list else 128)
@@ -7654,14 +7557,24 @@ class _GameItemDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipRect(option.rect)
         painter.fillRect(image_rect, QColor(theme_runtime.color('INPUT')))
-        pixmap = self._dialog._images.get(game.universe_id)
+        pixmap = getattr(self._dialog, self._images_attr).get(game.universe_id)
         if pixmap is not None:
             painter.drawPixmap(image_rect, pixmap, pixmap.rect())
         else:
             placeholder = icons.pixmap("home", theme_runtime.color('MUTED'), 24)
             painter.drawPixmap(image_rect.center() - QPoint(12, 12), placeholder)
-        title_rect = option.rect.adjusted(92, 12, -8, -30) if is_list else option.rect.adjusted(8, 142, -8, -8)
         font = QFont(option.font)
+        if private_server:
+            # private server badge on the thumbnail corner
+            font.setPixelSize(9)
+            font.setBold(True)
+            painter.setFont(font)
+            badge = painter.fontMetrics().boundingRect("PRIVATE").adjusted(-5, -2, 5, 2)
+            badge.moveTopLeft(image_rect.topLeft() + QPoint(4, 4))
+            painter.fillRect(badge, QColor(theme_runtime.color('ACCENT')))
+            painter.setPen(QColor(theme_runtime.color('ON_ACCENT')))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "PRIVATE")
+        title_rect = option.rect.adjusted(92, 12, -8, -30) if is_list else option.rect.adjusted(8, 142, -8, -8)
         font.setPixelSize(12)
         font.setBold(True)
         painter.setFont(font)
@@ -7673,15 +7586,65 @@ class _GameItemDelegate(QStyledItemDelegate):
             font.setBold(False)
             painter.setFont(font)
             painter.setPen(QColor(theme_runtime.color('MUTED')))
+            details = f"Place ID: {game.place_id}" + ("   Private server" if private_server else "")
             painter.drawText(option.rect.adjusted(92, 58, -8, -8), Qt.AlignmentFlag.AlignLeft |
-                             Qt.AlignmentFlag.AlignTop, f"Place ID: {game.place_id}")
+                             Qt.AlignmentFlag.AlignTop, details)
         painter.restore()
+
+
+class _AddFavoriteDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.place_id = ""
+        self.private_server = ""
+        self.setWindowTitle("Add Favorite Game")
+        self.setFixedWidth(380)
+        theme_runtime.bind_style(self, theme_styles.DIALOG)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(8)
+        lay.addWidget(QLabel("Place ID"))
+        self._place = QLineEdit()
+        self._place.setPlaceholderText("e.g. 920587237")
+        self._place.setMaxLength(20)
+        lay.addWidget(self._place)
+        lay.addWidget(QLabel("Private Server Link (Optional)"))
+        self._private = QLineEdit()
+        self._private.setPlaceholderText("VIP Link or Link Code")
+        lay.addWidget(self._private)
+        self._error = QLabel("")
+        theme_runtime.bind_style(self._error, 'color: @RAM_WARNING@; font-size: 11px;')
+        self._error.hide()
+        lay.addWidget(self._error)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        add = QPushButton("Add Favorite")
+        add.setDefault(True)
+        add.clicked.connect(self._accept)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(add)
+        buttons.addWidget(cancel)
+        lay.addLayout(buttons)
+        self._place.setFocus()
+
+    def _accept(self):
+        place_id = self._place.text().strip()
+        if not favorites_mod.is_valid_place_id(place_id):
+            self._error.setText("Enter a numeric Place ID.")
+            self._error.show()
+            self._place.setFocus()
+            return
+        self.place_id = place_id
+        self.private_server = self._private.text().strip()
+        self.accept()
 
 
 class _GamesSelectorDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.selected_place_id = ""
+        self.selected_private_server = ""
         self._generation = 0
         self._requests = []
         self._pages = []
@@ -7692,15 +7655,21 @@ class _GamesSelectorDialog(QDialog):
         self._closed = False
         self._items = {}
         self._images = {}
+        self._fav_generation = 0
+        self._fav_request = None
+        self._fav_images = {}
+        self._fav_games = []
         self._session_id = str(uuid.uuid4())
         self._bridge = _GamesSelectorBridge()
         self._bridge.loaded.connect(self._on_loaded, Qt.ConnectionType.QueuedConnection)
         self._bridge.thumbnail.connect(self._on_thumbnail, Qt.ConnectionType.QueuedConnection)
+        self._bridge.favorites_loaded.connect(self._on_favorites_loaded, Qt.ConnectionType.QueuedConnection)
+        self._bridge.favorite_thumbnail.connect(self._on_favorite_thumbnail, Qt.ConnectionType.QueuedConnection)
         self.setWindowTitle("Games Selector")
         if parent is not None:
             self.setWindowIcon(parent.windowIcon())
-        self.resize(660, 560)
-        self.setMinimumSize(440, 360)
+        self.resize(660, 580)
+        self.setMinimumSize(440, 380)
         theme_runtime.bind_style(self, theme_styles.DIALOG + f"""
             QListWidget {{ background: {theme_styles.PANEL}; border: 1px solid {theme_styles.LINE}; color: {theme_styles.TEXT}; }}
             QListWidget::item {{ border: 1px solid transparent; }}
@@ -7708,11 +7677,22 @@ class _GamesSelectorDialog(QDialog):
             QListWidget::item:selected {{ background: {theme_styles.SELECT}; border-color: {theme_styles.FG_ACCENT}; }}
             QPushButton:disabled {{ color: {theme_styles.MUTED}; }}
             QPushButton:focus, QLineEdit:focus {{ border-color: {theme_styles.FG_ACCENT}; }}
+            QTabWidget::pane {{ border: 0; }}
+            QTabBar::tab {{ background: {theme_styles.INPUT}; color: {theme_styles.MUTED}; border: 1px solid {theme_styles.LINE}; border-bottom: none; min-width: 80px; min-height: 24px; padding: 2px 10px; }}
+            QTabBar::tab:selected {{ background: {theme_styles.SELECT}; color: {theme_styles.TEXT}; }}
             """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
-        layout.addWidget(QLabel("Search games"))
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        # browse tab
+        browse = QWidget()
+        browse_lay = QVBoxLayout(browse)
+        browse_lay.setContentsMargins(0, 10, 0, 0)
+        browse_lay.setSpacing(10)
+        browse_lay.addWidget(QLabel("Search games"))
         search_row = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Roblox games...")
@@ -7720,33 +7700,62 @@ class _GamesSelectorDialog(QDialog):
         self.search.setMaxLength(100)
         self.search.setClearButtonEnabled(True)
         self.search_button = QPushButton("Search")
-        self.list_view = QCheckBox("List View")
         search_row.addWidget(self.search, 1)
-        search_row.addWidget(self.list_view)
         search_row.addWidget(self.search_button)
-        layout.addLayout(search_row)
+        browse_lay.addLayout(search_row)
         self.status = QLabel("Loading popular games...")
         self.status.setWordWrap(True)
         theme_runtime.bind_style(self.status, f'color: {theme_styles.MUTED};')
-        layout.addWidget(self.status)
-        self.games = QListWidget()
-        self.games.setAccessibleName("Game search results")
-        self.games.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.games.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.games.setSpacing(4)
-        self.games.setMovement(QListWidget.Movement.Static)
-        self.games.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.games.setUniformItemSizes(True)
-        self.games.setItemDelegate(_GameItemDelegate(self))
-        layout.addWidget(self.games, 1)
-        buttons = QHBoxLayout()
+        browse_lay.addWidget(self.status)
+        self.games = self._make_game_list("Game search results")
+        self.games.setItemDelegate(_GameItemDelegate(self, self.games, "_images"))
+        browse_lay.addWidget(self.games, 1)
+        nav = QHBoxLayout()
         self.previous = QPushButton("Previous")
         self.next = QPushButton("Next")
         self.page_label = QLabel("Page 1")
         theme_runtime.bind_style(self.page_label, f'color: {theme_styles.MUTED};')
-        buttons.addWidget(self.previous)
-        buttons.addWidget(self.page_label)
-        buttons.addWidget(self.next)
+        nav.addWidget(self.previous)
+        nav.addWidget(self.page_label)
+        nav.addWidget(self.next)
+        nav.addStretch(1)
+        browse_lay.addLayout(nav)
+        self.tabs.addTab(browse, "Browse")
+
+        # favorites tab
+        favorites_page = QWidget()
+        fav_lay = QVBoxLayout(favorites_page)
+        fav_lay.setContentsMargins(0, 10, 0, 0)
+        fav_lay.setSpacing(10)
+        fav_header = QHBoxLayout()
+        self.favorites_status = QLabel("")
+        self.favorites_status.setWordWrap(True)
+        theme_runtime.bind_style(self.favorites_status, f'color: {theme_styles.MUTED};')
+        fav_header.addWidget(self.favorites_status, 1)
+        # same look as Add Account, a tool button so a mouse click does not leave a focus outline
+        self.add_favorite_button = QToolButton()
+        self.add_favorite_button.setText("Add Favorite Game")
+        theme_runtime.bind_icon(self.add_favorite_button, "plus")
+        self.add_favorite_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        theme_runtime.bind_style(self.add_favorite_button, f"""
+            QToolButton {{
+                background: {theme_styles.INPUT}; border: 1px solid {theme_styles.LINE};
+                min-height: 28px; font-size: 12px; font-weight: 400; padding: 3px 8px;
+                color: {theme_styles.TEXT};
+            }}
+            QToolButton:hover {{ background: {theme_styles.SELECT}; }}
+            QToolButton:pressed {{ background: {theme_styles.SELECT}; }}
+            """)
+        fav_header.addWidget(self.add_favorite_button)
+        fav_lay.addLayout(fav_header)
+        self.favorites = self._make_game_list("Favorite games")
+        self.favorites.setItemDelegate(_GameItemDelegate(self, self.favorites, "_fav_images"))
+        fav_lay.addWidget(self.favorites, 1)
+        self.tabs.addTab(favorites_page, "Favorites")
+
+        buttons = QHBoxLayout()
+        self.list_view = QCheckBox("List View")
+        buttons.addWidget(self.list_view)
         buttons.addStretch(1)
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
@@ -7756,6 +7765,7 @@ class _GamesSelectorDialog(QDialog):
         theme_runtime.bind_style(self.apply, f'QPushButton {{ background: {theme_styles.SELECT}; font-weight: 600; }}')
         buttons.addWidget(self.apply)
         layout.addLayout(buttons)
+
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(350)
@@ -7766,16 +7776,44 @@ class _GamesSelectorDialog(QDialog):
         self.previous.clicked.connect(lambda: self._go_to_page(self._page_index - 1))
         self.next.clicked.connect(lambda: self._go_to_page(self._page_index + 1))
         self.list_view.toggled.connect(self._render_page)
-        self.games.itemSelectionChanged.connect(self._selection_changed)
-        self.games.itemDoubleClicked.connect(self._apply_item)
+        self.list_view.toggled.connect(self._render_favorites)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.add_favorite_button.clicked.connect(self._on_add_favorite)
+        for game_list in (self.games, self.favorites):
+            game_list.itemSelectionChanged.connect(self._selection_changed)
+            game_list.itemDoubleClicked.connect(self._apply_item)
+            game_list.customContextMenuRequested.connect(
+                lambda pos, view=game_list: self._on_game_context_menu(view, pos))
         self.apply.clicked.connect(self._apply)
         # Enter in the search box always searches rather than accepting a game.
         for button in (self.search_button, self.previous, self.next, close, self.apply):
             button.setAutoDefault(False)
         self._render_page()
+        self._render_favorites_from_saved()
         self._update_navigation()
         self.search.setFocus()
         QTimer.singleShot(0, self, self._load_games)
+        QTimer.singleShot(0, self, self._load_favorites)
+
+    def _make_game_list(self, name):
+        game_list = QListWidget()
+        game_list.setAccessibleName(name)
+        game_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        game_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        game_list.setSpacing(4)
+        game_list.setMovement(QListWidget.Movement.Static)
+        game_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        game_list.setUniformItemSizes(True)
+        game_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        return game_list
+
+    def _current_list(self):
+        return self.favorites if self.tabs.currentIndex() == 1 else self.games
+
+    def _on_tab_changed(self, index):
+        # qt hands focus to the next widget when a tab hides it, which outlined the add button
+        (self.favorites if index == 1 else self.search).setFocus()
+        self._selection_changed()
 
     def _cancel_requests(self):
         self._generation += 1
@@ -7790,7 +7828,7 @@ class _GamesSelectorDialog(QDialog):
         self._page_index = 0
         self.games.clear()
         self._items.clear()
-        self.apply.setEnabled(False)
+        self._selection_changed()
 
     def _search_changed(self):
         self._clear_results()
@@ -7840,7 +7878,7 @@ class _GamesSelectorDialog(QDialog):
         self._loading = True
         self.search_button.setEnabled(False)
         self.games.setEnabled(False)
-        self.apply.setEnabled(False)
+        self._selection_changed()
         self._update_navigation()
         self.status.setText(f"Loading page {index + 1}..." if self._query else "Loading popular games...")
         generation = self._generation
@@ -7871,25 +7909,35 @@ class _GamesSelectorDialog(QDialog):
         self._update_navigation()
         self._show_result_status()
 
+    def _apply_view_mode(self, game_list):
+        is_list = self.list_view.isChecked()
+        game_list.setViewMode(QListWidget.ViewMode.ListMode if is_list else QListWidget.ViewMode.IconMode)
+        game_list.setWrapping(not is_list)
+        game_list.setGridSize(QSize() if is_list else QSize(146, 190))
+        game_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        game_list.verticalScrollBar().setSingleStep(40)
+        return QSize(0, 88) if is_list else QSize(146, 190)
+
+    def _add_game_item(self, game_list, game, private_server=""):
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, game)
+        item.setData(_PRIVATE_SERVER_ROLE, private_server)
+        label = f"{game.title}, Place ID {game.place_id}" + (", private server" if private_server else "")
+        item.setData(Qt.ItemDataRole.AccessibleTextRole, label)
+        item.setToolTip(f"{game.title}\nPlace ID: {game.place_id}" + ("\nPrivate server" if private_server else ""))
+        game_list.addItem(item)
+        return item
+
     def _render_page(self):
         selected = self.games.selectedItems()
         selected_id = selected[0].data(Qt.ItemDataRole.UserRole).universe_id if selected else ""
         self.games.clear()
         self._items.clear()
-        is_list = self.list_view.isChecked()
-        self.games.setViewMode(QListWidget.ViewMode.ListMode if is_list else QListWidget.ViewMode.IconMode)
-        self.games.setWrapping(not is_list)
-        self.games.setGridSize(QSize() if is_list else QSize(146, 190))
-        self.games.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.games.verticalScrollBar().setSingleStep(40)
+        size = self._apply_view_mode(self.games)
         games = self._pages[self._page_index]["games"] if self._pages else []
         for game in games:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, game)
-            item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{game.title}, Place ID {game.place_id}")
-            item.setSizeHint(QSize(0, 88) if is_list else QSize(146, 190))
-            item.setToolTip(f"{game.title}\nPlace ID: {game.place_id}")
-            self.games.addItem(item)
+            item = self._add_game_item(self.games, game)
+            item.setSizeHint(size)
             self._items[game.universe_id] = item
             if game.universe_id == selected_id:
                 self.games.setCurrentItem(item)
@@ -7911,23 +7959,144 @@ class _GamesSelectorDialog(QDialog):
             self._images[universe_id] = pixmap
             self.games.viewport().update(self.games.visualItemRect(item))
 
-    def _selection_changed(self):
-        self.apply.setEnabled(not self._loading and bool(self.games.selectedItems()))
+    # favorites
+
+    def _render_favorites_from_saved(self):
+        # show saved names straight away, roblox details fill in after
+        self._fav_games = [
+            (game_selector_mod.Game(
+                str(entry.get("universe_id") or "") or f"place:{entry['place_id']}",
+                str(entry["place_id"]), str(entry.get("name") or f"Place {entry['place_id']}"),
+            ), str(entry.get("private_server", "") or ""))
+            for entry in favorites_mod.load_favorites()
+        ]
+        self._render_favorites()
+
+    def _render_favorites(self, select=None):
+        selected = self.favorites.selectedItems()
+        if select is None and selected:
+            select = (selected[0].data(Qt.ItemDataRole.UserRole).place_id, selected[0].data(_PRIVATE_SERVER_ROLE))
+        self.favorites.clear()
+        size = self._apply_view_mode(self.favorites)
+        for game, private_server in self._fav_games:
+            item = self._add_game_item(self.favorites, game, private_server)
+            item.setSizeHint(size)
+            if select == (game.place_id, private_server):
+                self.favorites.setCurrentItem(item)
+        count = len(self._fav_games)
+        self.favorites_status.setText(
+            f"{count} favorite game{'s' if count != 1 else ''}." if count else
+            "No favorites yet. Use Add Favorite Game, or right-click a game in Browse."
+        )
+        self._selection_changed()
+
+    def _load_favorites(self, select=None):
+        if self._closed:
+            return
+        self._render_favorites_from_saved()
+        if select is not None:
+            self._render_favorites(select)
+        if self._fav_request is not None:
+            self._fav_request.set()
+        self._fav_generation += 1
+        generation, bridge = self._fav_generation, self._bridge
+        entries = favorites_mod.load_favorites()
+        if not entries:
+            self._fav_request = None
+            return
+        self._fav_request = game_selector_mod.start_favorites(
+            entries,
+            lambda games: bridge.favorites_loaded.emit(generation, (entries, games)),
+            lambda universe, image: bridge.favorite_thumbnail.emit(generation, universe, image),
+        )
+
+    def _on_favorites_loaded(self, generation, payload):
+        if self._closed or generation != self._fav_generation:
+            return
+        entries, games = payload
+        resolved = []
+        for entry, game in zip(entries, games):
+            private_server = str(entry.get("private_server", "") or "")
+            resolved.append((game, private_server))
+            if not game.universe_id.startswith("place:"):
+                favorites_mod.update_favorite_details(game.place_id, private_server, game.title, game.universe_id)
+        self._fav_games = resolved
+        self._render_favorites()
+
+    def _on_favorite_thumbnail(self, generation, universe_id, image):
+        if self._closed or generation != self._fav_generation:
+            return
+        pixmap = QPixmap()
+        if pixmap.loadFromData(image):
+            self._fav_images[universe_id] = pixmap
+            self.favorites.viewport().update()
+
+    def _on_add_favorite(self):
+        dialog = _AddFavoriteDialog(self)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            favorites_mod.add_favorite(dialog.place_id, "", dialog.private_server)
+            print(f"[SUCCESS] Added favorite Place {dialog.place_id}")
+            self.tabs.setCurrentIndex(1)
+            self._load_favorites(select=(dialog.place_id, dialog.private_server))
+        finally:
+            dialog.deleteLater()
+
+    def _on_game_context_menu(self, game_list, pos):
+        item = game_list.itemAt(pos)
+        if item is None:
+            return
+        game_list.setCurrentItem(item)
+        game = item.data(Qt.ItemDataRole.UserRole)
+        private_server = item.data(_PRIVATE_SERVER_ROLE) or ""
+        menu = QMenu(self)
+        act_copy = menu.addAction("Copy PlaceID")
+        act_add = act_remove = None
+        if game_list is self.favorites:
+            act_remove = menu.addAction("Remove from Favorites")
+        else:
+            act_add = menu.addAction("Add to Favorites")
+        chosen = self._exec_menu(menu, game_list.viewport().mapToGlobal(pos))
+        if chosen is act_copy:
+            QApplication.clipboard().setText(game.place_id)
+        elif act_add is not None and chosen is act_add:
+            favorites_mod.add_favorite(game.place_id, game.title, "", game.universe_id)
+            if game.universe_id in self._images:
+                self._fav_images[game.universe_id] = self._images[game.universe_id]
+            print(f"[SUCCESS] Added favorite: {game.title} (Place {game.place_id})")
+            self._load_favorites()
+        elif act_remove is not None and chosen is act_remove:
+            favorites_mod.remove_favorite(game.place_id, private_server)
+            self._load_favorites()
+
+    def _exec_menu(self, menu, global_pos):
+        # separate so tests can pick an action without a blocking menu
+        return menu.exec(global_pos)
+
+    def _selection_changed(self, *_):
+        game_list = self._current_list()
+        busy = self._loading and game_list is self.games
+        self.apply.setEnabled(not busy and bool(game_list.selectedItems()))
 
     def _apply(self):
-        selected = self.games.selectedItems()
+        selected = self._current_list().selectedItems()
         if selected:
             self._apply_item(selected[0])
 
     def _apply_item(self, item):
-        if not self._loading and not self._closed:
-            self.selected_place_id = item.data(Qt.ItemDataRole.UserRole).place_id
-            self.accept()
+        if self._closed or (self._loading and item.listWidget() is self.games):
+            return
+        self.selected_place_id = item.data(Qt.ItemDataRole.UserRole).place_id
+        self.selected_private_server = item.data(_PRIVATE_SERVER_ROLE) or ""
+        self.accept()
 
     def done(self, result):
         self._closed = True
         self._search_timer.stop()
         self._cancel_requests()
+        if self._fav_request is not None:
+            self._fav_request.set()
         super().done(result)
 
 

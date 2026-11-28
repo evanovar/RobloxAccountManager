@@ -99,13 +99,13 @@ uv run python src/main.py
 | :--- | :--- |
 | Place launch | Launch one or multiple selected accounts into a Place ID. |
 | Roblox Home | Launch the Roblox application for one or multiple selected accounts without specifying a game. |
-| Games Selector | Use the search icon beside Place ID to browse popular games or search by name. Switch between thumbnail grid and list views, page through results, and apply a game's Place ID to the launch field. |
+| Games Selector | Use the search icon beside Place ID to open it. The Browse tab shows popular games or searches by name, with thumbnail grid and list views and paging. Right-click any game to copy its Place ID or add it to favorites. Apply a game to fill the Place ID field. |
 | Private servers | Resolve current and legacy private server links. A Place ID inside the link is used when the Place ID field is empty. |
 | Private Server Manager | Open it from the Private Server Link dropdown to list a saved account's owned private servers, optionally filtered by Place ID. View active/inactive status, copy a join link, or apply it to the launch fields. If a link is missing, the app can request a new join code after confirmation, this replaces the current code on Roblox. |
 | Join User | Enter a Roblox username and join the user's current game when Roblox returns joinable game information. |
 | Job ID | Join a specific running server by Place ID and Job ID. |
 | Small Server | Find and join a server with a low player count. |
-| Game favorites | Save a Place ID with its optional private server link, select it from the Place ID list, or remove it from the context menu. |
+| Game favorites | The Favorites tab in the Games Selector lists saved games with their thumbnails, and marks favorites that use a private server. Use Add Favorite Game with a Place ID and an optional private server link. Applying a favorite fills both fields, and right-click copies the Place ID or removes it. |
 | Recent games | Keep recent public and private server launches, marked with `[P]` for private entries. Double-click to fill the launch fields or remove an entry from the context menu. The history limit is configurable under Settings > General. |
 | Launch controls | Optionally confirm UI launch actions and set an additional delay between accounts during bulk launches under Settings > General. |
 | Launcher selection | Use Automatic, Bloxstrap, Fishstrap, Froststrap, Roblox Client, or a custom executable. |
